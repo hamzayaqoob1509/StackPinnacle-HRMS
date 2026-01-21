@@ -20,11 +20,11 @@
     <meta name="theme-color" content="orangered">
     <link rel="manifest" href="{% static 'build/manifest.json' %}">
     <link rel="apple-touch-icon" sizes="180x180"
-        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'favicons/apple-touch-icon.png' %}{% endif %}">
+        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}">
     <link rel="icon" type="image/png" sizes="32x32"
-        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'favicons/favicon-32x32.png' %}{% endif %}">
+        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}">
     <link rel="icon" type="image/png" sizes="16x16"
-        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'favicons/favicon-16x16.png' %}{% endif %}">
+        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}">
 
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
@@ -279,12 +279,12 @@
             }
             // accessing initial worked hours from the user
             $(".time-runner").not("title").html(secondsToDuration(at_work_seconds));
-            $("title.time-runner").html("{{white_label_company_name}} | " + secondsToDuration(at_work_seconds));
+            $("title.time-runner").html("{{white_label_company_name}}");
             setInterval(() => {
                 if (run) {
                     at_work_seconds = at_work_seconds + 1
                     $("div.time-runner").html(secondsToDuration(at_work_seconds));
-                    $("title").html("{{white_label_company_name}} | " + secondsToDuration(at_work_seconds));
+                    $("title").html("{{white_label_company_name}}");
                 }
             }, 1000);
 
