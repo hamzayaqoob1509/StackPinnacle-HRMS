@@ -196,9 +196,9 @@
           </td>
           <td class="logo-cell">
             {% if employee.employee_work_info.company_id.icon %}
-              <img src="{{ protocol }}://{{ host }}{{ employee.employee_work_info.company_id.icon.url }}" alt="Logo" />
+              <img src="{{ employee.employee_work_info.company_id.icon.url }}" alt="Logo" />
             {% elif company.icon %}
-              <img src="{{ protocol }}://{{ host }}{{ company.icon.url }}" alt="Logo" />
+              <img src="{{ company.icon.url }}" alt="Logo" />
             {% endif %}
           </td>
         </tr>
