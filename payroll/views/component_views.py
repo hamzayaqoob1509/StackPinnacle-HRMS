@@ -62,6 +62,7 @@ from payroll.methods.methods import (
     calculate_employer_contribution,
     compute_net_pay,
     compute_salary_on_period,
+    get_previous_period_leave_adjustment,
     paginator_qry,
     save_payslip,
 )
@@ -761,6 +762,21 @@ def generate_payslip(request):
                 if start_date < contract.contract_start_date:
                     start_date = contract.contract_start_date
                 payslip = payroll_calculation(employee, start_date, end_date)
+
+                adjustment = get_previous_period_leave_adjustment(employee, start_date)
+                if adjustment:
+                    pay_data = json.loads(payslip["json_data"])
+                    pay_data["post_tax_deductions"].append(adjustment)
+                    pay_data["total_deductions"] = (
+                        pay_data.get("total_deductions", 0) or 0
+                    ) + adjustment["amount"]
+                    pay_data["net_pay"] = (
+                        pay_data.get("net_pay", 0) or 0
+                    ) - adjustment["amount"]
+                    payslip["json_data"] = json.dumps(pay_data)
+                    payslip["total_deductions"] = pay_data["total_deductions"]
+                    payslip["net_pay"] = pay_data["net_pay"]
+
                 payslips.append(payslip)
                 json_data.append(payslip["json_data"])
 
@@ -891,6 +907,21 @@ def create_payslip(request, new_post_data=None):
                 start_date = form.cleaned_data["start_date"]
                 end_date = form.cleaned_data["end_date"]
                 payslip_data = payroll_calculation(employee, start_date, end_date)
+
+                adjustment = get_previous_period_leave_adjustment(employee, start_date)
+                if adjustment:
+                    pay_data = json.loads(payslip_data["json_data"])
+                    pay_data["post_tax_deductions"].append(adjustment)
+                    pay_data["total_deductions"] = (
+                        pay_data.get("total_deductions", 0) or 0
+                    ) + adjustment["amount"]
+                    pay_data["net_pay"] = (
+                        pay_data.get("net_pay", 0) or 0
+                    ) - adjustment["amount"]
+                    payslip_data["json_data"] = json.dumps(pay_data)
+                    payslip_data["total_deductions"] = pay_data["total_deductions"]
+                    payslip_data["net_pay"] = pay_data["net_pay"]
+
                 payslip_data["payslip"] = payslip
                 data = {}
                 data["employee"] = employee

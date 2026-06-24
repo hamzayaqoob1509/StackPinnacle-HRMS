@@ -527,6 +527,48 @@ def compute_salary_on_period(employee, start_date, end_date, wage=None):
     return data
 
 
+def get_previous_period_leave_adjustment(employee, current_start_date):
+    """
+    Detects unpaid leaves from the previous payslip period that were approved
+    after that payslip was generated and returns a carry-forward deduction dict,
+    or None if no adjustment is needed.
+    """
+    prev_payslip = (
+        Payslip.objects.filter(
+            employee_id=employee,
+            end_date__lt=current_start_date,
+        )
+        .order_by("-end_date")
+        .first()
+    )
+
+    if not prev_payslip or not prev_payslip.pay_head_data:
+        return None
+
+    stored_loss_of_pay = prev_payslip.pay_head_data.get("loss_of_pay", 0) or 0
+    stored_unpaid_days = prev_payslip.pay_head_data.get("unpaid_days", 0) or 0
+
+    current_data = compute_salary_on_period(
+        employee, prev_payslip.start_date, prev_payslip.end_date
+    )
+    if not current_data:
+        return None
+
+    current_loss_of_pay = current_data.get("loss_of_pay", 0) or 0
+    current_unpaid_days = current_data.get("unpaid_days", 0) or 0
+
+    adjustment = round(current_loss_of_pay - stored_loss_of_pay, 2)
+    if adjustment <= 0:
+        return None
+
+    extra_days = round(current_unpaid_days - stored_unpaid_days, 1)
+    month_label = prev_payslip.start_date.strftime("%b %Y")
+    days_text = f" - {extra_days} day(s)" if extra_days > 0 else ""
+    label = f"Leave Adjustment ({month_label}){days_text}"
+
+    return {"title": label, "amount": adjustment}
+
+
 def paginator_qry(qryset, page_number):
     """
     This method is used to paginate queryset
