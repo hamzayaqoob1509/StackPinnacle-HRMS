@@ -433,21 +433,11 @@ class GeneratePayslipForm(HorillaForm):
         start_date = cleaned_data.get("start_date")
         end_date = cleaned_data.get("end_date")
 
-        today = datetime.date.today()
         if end_date < start_date:
             raise forms.ValidationError(
                 {
                     "end_date": "The end date must be greater than or equal to the start date."
                 }
-            )
-        if start_date > today:
-            raise forms.ValidationError(
-                {"end_date": "The start date cannot be in the future."}
-            )
-
-        if end_date > today:
-            raise forms.ValidationError(
-                {"end_date": "The end date cannot be in the future."}
             )
         return cleaned_data
 
