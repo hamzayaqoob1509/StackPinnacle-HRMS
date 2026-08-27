@@ -1022,6 +1022,7 @@ def leave_request_approve(request, id, emp_id=None):
                 leave_request.approved_carryforward_days = leave_request.requested_days
             leave_request.status = "approved"
             if not leave_request.multiple_approvals():
+                leave_request.set_approved_by(request.user.employee_get)
                 leave_request.save()
                 available_leave.save()
                 send_notification = True
@@ -1030,6 +1031,7 @@ def leave_request_approve(request, id, emp_id=None):
                     LeaveRequestConditionApproval.objects.filter(
                         leave_request_id=leave_request
                     ).update(is_approved=True)
+                    leave_request.set_approved_by(request.user.employee_get)
                     leave_request.save()
                     available_leave.save()
                     send_notification = True
@@ -1066,6 +1068,7 @@ def leave_request_approve(request, id, emp_id=None):
 
                     condition_approval.save()
                     if approver == conditional_requests["managers"][-1]:
+                        leave_request.set_approved_by(request.user.employee_get)
                         leave_request.save()
                         available_leave.save()
                         send_notification = True
