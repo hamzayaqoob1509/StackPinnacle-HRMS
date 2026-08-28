@@ -681,6 +681,7 @@ class LeaveRequestApproveAPIView(APIView):
             ).update(is_approved=True)
             self.leave_approve_calculation(leave_request, available_leave)
             leave_request.status = "approved"
+            leave_request.set_approved_by(request.user.employee_get)
             leave_request.save()
         else:
             conditional_requests = leave_request.multiple_approvals()
@@ -697,6 +698,7 @@ class LeaveRequestApproveAPIView(APIView):
             if approver[0] == conditional_requests["managers"][-1]:
                 self.leave_approve_calculation(leave_request, available_leave)
                 leave_request.status = "approved"
+                leave_request.set_approved_by(request.user.employee_get)
                 leave_request.save()
 
     @manager_permission_required("leave.change_leaverequest")
@@ -708,6 +710,7 @@ class LeaveRequestApproveAPIView(APIView):
             if not leave_request.multiple_approvals():
                 self.leave_approve_calculation(leave_request, available_leave)
                 leave_request.status = "approved"
+                leave_request.set_approved_by(request.user.employee_get)
                 leave_request.save()
             else:
                 self.leave_multiple_approve(request, leave_request, available_leave)

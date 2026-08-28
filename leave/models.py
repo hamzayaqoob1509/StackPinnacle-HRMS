@@ -683,6 +683,18 @@ class LeaveRequest(HorillaModel):
         related_name="leave_request_created",
         verbose_name=_("Created By"),
     )
+    approved_by = models.ForeignKey(
+        Employee,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        editable=False,
+        related_name="leave_request_approved",
+        verbose_name=_("Approved By"),
+    )
+    approved_at = models.DateTimeField(
+        blank=True, null=True, editable=False, verbose_name=_("Approved At")
+    )
     objects = HorillaCompanyManager(
         related_company_field="employee_id__employee_work_info__company_id"
     )
@@ -1099,6 +1111,13 @@ class LeaveRequest(HorillaModel):
             self.approved_available_days = self.requested_days
         self.status = "approved"
         available_leave.save()
+
+    def set_approved_by(self, employee):
+        """
+        Record which employee granted the (final) approval for this leave request.
+        """
+        self.approved_by = employee
+        self.approved_at = timezone.now()
 
     def multiple_approvals(self, *args, **kwargs):
         approvals = LeaveRequestConditionApproval.objects.filter(leave_request_id=self)
