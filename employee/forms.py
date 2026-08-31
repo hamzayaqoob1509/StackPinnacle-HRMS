@@ -357,6 +357,11 @@ class EmployeeWorkInformationForm(ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["email"].widget.attrs["autocomplete"] = "email"
 
+        # Probation/internship end is opt-in - don't default it to today.
+        if "probation_end_date" in self.fields and not self.instance.pk:
+            self.fields["probation_end_date"].initial = None
+            self.initial.pop("probation_end_date", None)
+
         self.fields["job_position_id"].widget.attrs.update(
             {
                 "onchange": "jobChange($(this))",
@@ -434,6 +439,13 @@ class EmployeeWorkInformationUpdateForm(ModelForm):
         model = EmployeeWorkInformation
         fields = "__all__"
         exclude = ("employee_id",)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Probation/internship end is opt-in - don't default it to today.
+        if "probation_end_date" in self.fields and not self.instance.pk:
+            self.fields["probation_end_date"].initial = None
+            self.initial.pop("probation_end_date", None)
 
     def as_p(self, *args, **kwargs):
         context = {"form": self}
