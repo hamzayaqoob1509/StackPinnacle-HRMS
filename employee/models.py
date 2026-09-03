@@ -5,6 +5,7 @@ This module is used to register models for employee app
 
 """
 
+import io
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 
@@ -243,6 +244,30 @@ class Employee(models.Model):
         return getattr(
             getattr(self, "employee_work_info", None), "reporting_manager_id", None
         )
+
+    def get_probation_end_date(self):
+        """
+        Return the employee's probation / internship end date.
+
+        Prefers the value set on the work information; falls back to the
+        recruitment record for employees hired through onboarding.
+        """
+        work_info = getattr(self, "employee_work_info", None)
+        if work_info and work_info.probation_end_date:
+            return work_info.probation_end_date
+        candidate = None
+        if hasattr(self, "candidate_get"):
+            candidate = self.candidate_get.first()
+        return getattr(candidate, "probation_end", None)
+
+    def is_intern(self):
+        """
+        Best-effort check of whether this employee is an intern / trainee,
+        based on the free-text employee type name.
+        """
+        employee_type = self.get_employee_type()
+        name = (getattr(employee_type, "employee_type", "") or "").lower()
+        return any(word in name for word in ("intern", "trainee", "apprentice"))
 
     def get_avatar(self):
         if self.employee_profile and default_storage.exists(self.employee_profile.name):
@@ -516,39 +541,55 @@ class Employee(models.Model):
         )
         return subordinates
 
-    def clean(self):
-        super().clean()
+    def validate_employee_profile(self):
+        """
+        Ensure a newly uploaded profile picture is a real raster image or an SVG.
 
+        Only freshly uploaded files are inspected. Empty values and files that
+        are already stored in the database (``_committed``) are skipped, so an
+        unrelated ``save()`` is never blocked by a picture that is missing from
+        the media storage.
+        """
         file = self.employee_profile
-        if not file:
+        if not file or getattr(file, "_committed", True):
             return
 
         try:
             file.seek(0)
             content = file.read()
+            file.seek(0)
         except Exception:
-            raise ValidationError({"employee_profile": "Unable to read uploaded file."})
+            raise ValidationError(
+                {"employee_profile": _("Unable to read the uploaded image file.")}
+            )
 
-        is_svg = False
+        # Accept SVG (text/XML document with an <svg> root element).
         try:
-            text = content.decode("utf-8", errors="strict")
-            root = ET.fromstring(text)
+            root = ET.fromstring(content.decode("utf-8", errors="strict"))
             if root.tag.endswith("svg"):
-                is_svg = True
+                return
         except Exception:
             pass
 
-        if not is_svg:
-            try:
-                file.seek(0)
-                Image.open(file).verify()
-            except Exception:
-                raise ValidationError(
-                    {"employee_profile": "Invalid image or SVG file."}
-                )
+        # Validate raster images from an in-memory copy so the upload stream
+        # stays intact for the storage backend to write afterwards.
+        try:
+            Image.open(io.BytesIO(content)).verify()
+        except Exception:
+            raise ValidationError(
+                {
+                    "employee_profile": _(
+                        "Upload a valid image file (PNG, JPG, JPEG, GIF, WEBP or SVG)."
+                    )
+                }
+            )
+
+    def clean(self):
+        super().clean()
+        self.validate_employee_profile()
 
     def save(self, *args, **kwargs):
-        self.full_clean()
+        self.validate_employee_profile()
         super().save(*args, **kwargs)
 
         request = getattr(horilla_middlewares._thread_locals, "request", None)
@@ -687,6 +728,11 @@ class EmployeeWorkInformation(models.Model):
     )
     contract_end_date = models.DateField(
         blank=True, null=True, verbose_name=_("Contract End Date")
+    )
+    probation_end_date = models.DateField(
+        blank=True,
+        null=True,
+        verbose_name=_("Probation / Internship End Date"),
     )
     basic_salary = models.IntegerField(
         null=True, blank=True, default=0, verbose_name=_("Basic Salary")
@@ -992,6 +1038,38 @@ class ProfileEditFeature(HorillaModel):
 
     is_enabled = models.BooleanField(default=False)
     objects = models.Manager()
+
+
+class ProbationNotification(models.Model):
+    """
+    Ledger of probation / internship completion notifications that have already
+    been sent, so the scheduled job never notifies the same milestone twice.
+
+    The probation end date is part of the key: if HR extends the probation, the
+    new date starts a fresh notification cycle.
+    """
+
+    MILESTONES = (
+        ("t-10", _("10 days before")),
+        ("t-3", _("3 days before")),
+        ("t-0", _("On completion")),
+        ("t+3", _("Overdue")),
+    )
+
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="probation_notifications"
+    )
+    probation_end_date = models.DateField()
+    milestone = models.CharField(max_length=10, choices=MILESTONES)
+    notified_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("employee_id", "probation_end_date", "milestone")
+        verbose_name = _("Probation Notification")
+        verbose_name_plural = _("Probation Notifications")
+
+    def __str__(self):
+        return f"{self.employee_id} | {self.probation_end_date} | {self.milestone}"
 
 
 ACCESSBILITY_FEATURE.append(("gender_chart", "Can view Gender Chart"))

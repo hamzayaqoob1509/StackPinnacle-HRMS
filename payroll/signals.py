@@ -35,6 +35,22 @@ def employeeworkinformation_pre_save(sender, instance, **_kwargs):
             contract.save()
 
 
+@receiver(post_save, sender=Contract)
+def grant_prorata_leave_on_active_contract(sender, instance, **_kwargs):
+    """
+    When a contract becomes active, allocate any pro-rated leave the employee
+    is now entitled to. The leave app's ledger keeps this idempotent.
+    """
+    if instance.contract_status != "active" or not apps.is_installed("leave"):
+        return
+    try:
+        from leave.prorata import grant_prorata_leaves
+
+        grant_prorata_leaves(instance.employee_id)
+    except Exception:
+        pass
+
+
 @receiver(post_save, sender=LoanAccount)
 def create_installments(sender, instance, created, **kwargs):
     """

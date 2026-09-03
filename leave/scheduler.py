@@ -46,6 +46,16 @@ def leave_reset():
             leave_type.save()
 
 
+def prorata_leave_grant():
+    """
+    Allocate pro-rated leave balances for employees who have just completed
+    probation / had their contract activated.
+    """
+    from leave.prorata import grant_all_prorata_leaves
+
+    grant_all_prorata_leaves()
+
+
 if not any(
     cmd in sys.argv
     for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
@@ -55,5 +65,14 @@ if not any(
     """
     scheduler = BackgroundScheduler()
     scheduler.add_job(leave_reset, "interval", seconds=20)
+    scheduler.add_job(
+        prorata_leave_grant,
+        "cron",
+        hour=6,
+        minute=30,
+        misfire_grace_time=3600 * 12,
+        id="prorata_leave_grant",
+        replace_existing=True,
+    )
 
     scheduler.start()

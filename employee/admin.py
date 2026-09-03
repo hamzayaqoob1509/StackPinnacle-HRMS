@@ -18,6 +18,7 @@ from employee.models import (
     EmployeeWorkInformation,
     Policy,
     PolicyMultipleFile,
+    ProbationNotification,
 )
 
 # Register your models here.
@@ -26,6 +27,13 @@ from employee.models import (
 admin.site.register(EmployeeBankDetails)
 admin.site.register([EmployeeNote, EmployeeTag, PolicyMultipleFile, Policy, BonusPoint])
 admin.site.register([DisciplinaryAction, Actiontype])
+
+
+@admin.register(ProbationNotification)
+class ProbationNotificationAdmin(admin.ModelAdmin):
+    list_display = ("employee_id", "probation_end_date", "milestone", "notified_at")
+    list_filter = ("milestone",)
+    search_fields = ("employee_id__employee_first_name", "employee_id__employee_last_name")
 
 
 class EmployeeWorkInformationAdmin(SimpleHistoryAdmin):

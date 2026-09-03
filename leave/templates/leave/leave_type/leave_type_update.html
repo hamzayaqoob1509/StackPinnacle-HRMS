@@ -237,6 +237,18 @@
                             </div>
                         </div>
                     </div>
+                    <div class="col-sm-12 col-md-12 col-lg-6">
+                        <div class="oh-input-group oh-label__info justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <label for="" class="oh-label">{{ form.is_prorated.label }}</label>
+                                <span class=" oh-info me-3" title="{% trans 'Grant a pro-rated balance for the remaining months of the year when an employee completes probation or their contract becomes active. Requires a yearly reset.' %}"></span>
+                            </div>
+                            <div class="oh-switch p-3 ">
+                                {{ form.is_prorated }}
+                                {{ form.is_prorated.errors }}
+                            </div>
+                        </div>
+                    </div>
                     <div hidden>{{ form.require_approval }}</div>
                     <div hidden>{{ form.require_attachment }}</div>
                     <div hidden>{{ form.exclude_company_leave }}</div>
