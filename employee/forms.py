@@ -367,6 +367,11 @@ class EmployeeWorkInformationForm(ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["email"].widget.attrs["autocomplete"] = "email"
 
+        # Probation/internship end is opt-in - don't default it to today.
+        if "probation_end_date" in self.fields and not self.instance.pk:
+            self.fields["probation_end_date"].initial = None
+            self.initial.pop("probation_end_date", None)
+
         self.fields["job_position_id"].widget.attrs.update(
             {
                 "onchange": "jobChange($(this))",
@@ -466,10 +471,15 @@ class EmployeeWorkInformationUpdateForm(ModelForm):
         widgets = {
             "date_joining": DateInput(attrs={"type": "date"}),
             "contract_end_date": DateInput(attrs={"type": "date"}),
+            "probation_end_date": DateInput(attrs={"type": "date"}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Probation/internship end is opt-in - don't default it to today.
+        if "probation_end_date" in self.fields and not self.instance.pk:
+            self.fields["probation_end_date"].initial = None
+            self.initial.pop("probation_end_date", None)
         self.fields["department_id"].widget.attrs.update(
             {
                 "hx-target": "#id_job_position_id_parent_div",

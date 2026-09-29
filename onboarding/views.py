@@ -1958,6 +1958,15 @@ def update_probation_end(request):
 
     candidate.probation_end = probation_end
     candidate.save()
+
+    # Keep the converted employee's work information in sync so the probation
+    # completion notifications and the profile use the same date.
+    employee = candidate.converted_employee_id
+    work_info = getattr(employee, "employee_work_info", None) if employee else None
+    if work_info is not None:
+        work_info.probation_end_date = probation_end
+        work_info.save()
+
     messages.success(request, _("Probation end date updated"))
     return JsonResponse({"type": "success"})
 

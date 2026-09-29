@@ -142,6 +142,11 @@
                         {{ work_form.contract_end_date.errors }}
                     </div>
                     <div>
+                        <label class="block text-xs font-medium text-color-600 mb-1" for="id_probation_end_date">{% trans "Probation / Internship End Date" %}</label>
+                        {{ work_form.probation_end_date|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
+                        {{ work_form.probation_end_date.errors }}
+                    </div>
+                    <div>
                         <label class="block text-xs font-medium text-color-600 mb-1" for="id_basic_salary">{% trans "Basic Salary" %}</label>
                         {{ work_form.basic_salary|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
                         {{ work_form.basic_salary.errors }}

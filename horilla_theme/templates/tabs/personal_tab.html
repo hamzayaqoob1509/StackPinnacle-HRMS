@@ -274,6 +274,14 @@
                                     {{ work_info.contract_end_date|default:_("Not set") }}
                                 </dd>
                             </div>
+                            {% with probation_end=employee.get_probation_end_date %}
+                                <div class="flex items-baseline justify-between gap-3 py-2">
+                                    <dt class="text-xs font-medium text-color-600">{% trans "Probation / Internship End" %}</dt>
+                                    <dd class="text-right text-sm dateformat_changer {% if probation_end %}font-medium text-dark-500{% else %}italic text-dark-100{% endif %}">
+                                        {{ probation_end|default:_("Not set") }}
+                                    </dd>
+                                </div>
+                            {% endwith %}
                         </dl>
                         <dl>
                             <div class="flex items-baseline justify-between gap-3 py-2">

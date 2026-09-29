@@ -299,6 +299,30 @@ class Employee(models.Model):
             getattr(self, "employee_work_info", None), "reporting_manager_id", None
         )
 
+    def get_probation_end_date(self):
+        """
+        Return the employee's probation / internship end date.
+
+        Prefers the value set on the work information; falls back to the
+        recruitment record for employees hired through onboarding.
+        """
+        work_info = getattr(self, "employee_work_info", None)
+        if work_info and work_info.probation_end_date:
+            return work_info.probation_end_date
+        candidate = None
+        if hasattr(self, "candidate_get"):
+            candidate = self.candidate_get.first()
+        return getattr(candidate, "probation_end", None)
+
+    def is_intern(self):
+        """
+        Best-effort check of whether this employee is an intern / trainee,
+        based on the free-text employee type name.
+        """
+        employee_type = self.get_employee_type()
+        name = (getattr(employee_type, "employee_type", "") or "").lower()
+        return any(word in name for word in ("intern", "trainee", "apprentice"))
+
     def get_avatar(self):
         if self.employee_profile and default_storage.exists(self.employee_profile.name):
             return self.employee_profile.url
@@ -940,6 +964,11 @@ class EmployeeWorkInformation(models.Model):
     contract_end_date = models.DateField(
         blank=True, null=True, verbose_name=_("Contract End Date")
     )
+    probation_end_date = models.DateField(
+        blank=True,
+        null=True,
+        verbose_name=_("Probation / Internship End Date"),
+    )
     basic_salary = models.IntegerField(
         null=True, blank=True, default=0, verbose_name=_("Basic Salary")
     )
@@ -1464,6 +1493,38 @@ class ProfileEditFeature(HorillaModel):
 
     is_enabled = models.BooleanField(default=False)
     objects = models.Manager()
+
+
+class ProbationNotification(models.Model):
+    """
+    Ledger of probation / internship completion notifications that have already
+    been sent, so the scheduled job never notifies the same milestone twice.
+
+    The probation end date is part of the key: if HR extends the probation, the
+    new date starts a fresh notification cycle.
+    """
+
+    MILESTONES = (
+        ("t-10", _("10 days before")),
+        ("t-3", _("3 days before")),
+        ("t-0", _("On completion")),
+        ("t+3", _("Overdue")),
+    )
+
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="probation_notifications"
+    )
+    probation_end_date = models.DateField()
+    milestone = models.CharField(max_length=10, choices=MILESTONES)
+    notified_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("employee_id", "probation_end_date", "milestone")
+        verbose_name = _("Probation Notification")
+        verbose_name_plural = _("Probation Notifications")
+
+    def __str__(self):
+        return f"{self.employee_id} | {self.probation_end_date} | {self.milestone}"
 
 
 ACCESSBILITY_FEATURE.append(("gender_chart", _("Can view Gender Chart")))
