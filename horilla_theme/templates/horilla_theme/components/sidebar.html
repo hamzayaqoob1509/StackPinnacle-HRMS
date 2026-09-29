@@ -572,6 +572,7 @@
                     <img
                         src="{{ request.session.selected_company_instance.icon }}"
                         class="oh-sidebar-label w-7 h-7 rounded-full flex-shrink-0"
+                        onerror="this.onerror=null;this.src='{% static 'images/ui/sp-logo.png' %}';"
                         title="{{ request.session.selected_company_instance.company }}"
                         alt="{{ request.session.selected_company_instance.company }}"
                     >
@@ -586,8 +587,9 @@
                     </div>
                 {% else %}
                     <img
-                        src="{% if request.user.employee_get.employee_work_info.company_id.icon %}{{ request.user.employee_get.employee_work_info.company_id.icon.url }}{% else %}/static/horilla_theme/assets/img/horilla-logo.png{% endif %}"
+                        src="{% if request.user.employee_get.employee_work_info.company_id.icon %}{{ request.user.employee_get.employee_work_info.company_id.icon.url }}{% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}"
                         alt="{% trans 'Company logo' %}"
+                        onerror="this.onerror=null;this.src='{% static 'images/ui/sp-logo.png' %}';"
                         class="oh-sidebar-label w-7 h-7 rounded-full flex-shrink-0"
                     >
                     <div class="oh-sidebar__company-details oh-sidebar-label min-w-0">
