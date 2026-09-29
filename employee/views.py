@@ -27,7 +27,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.core.cache import cache
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.db.models import F, ProtectedError, Q
 from django.db.models.query import QuerySet
@@ -1795,14 +1795,29 @@ def update_profile_image(request, obj_id):
     """
     This method is used to upload a profile image
     """
-    try:
-        employee = Employee.objects.get(id=obj_id)
-        img = request.FILES["employee_profile"]
-        employee.employee_profile = img
-        employee.save()
-        messages.success(request, _("Profile image updated."))
-    except Exception:
-        messages.error(request, _("Upload a valid image."))
+    employee = Employee.objects.filter(id=obj_id).first()
+    img = request.FILES.get("employee_profile")
+    if employee is None:
+        messages.error(request, _("Employee not found."))
+    elif img is None:
+        messages.error(
+            request, _("No image selected. Please choose a file to upload.")
+        )
+    else:
+        try:
+            employee.employee_profile = img
+            employee.save()
+            messages.success(request, _("Profile image updated."))
+        except ValidationError as error:
+            messages.error(
+                request,
+                error.messages[0] if error.messages else _("Upload a valid image."),
+            )
+        except Exception:
+            logger.exception("Failed to update profile image for employee %s", obj_id)
+            messages.error(
+                request, _("Could not update the profile image. Please try again.")
+            )
     response = render(
         request,
         "employee/profile/profile_modal.html",
@@ -1818,14 +1833,30 @@ def update_own_profile_image(request):
     """
     This method is used to update own profile image from profile view form
     """
-    try:
-        employee = request.user.employee_get
-        img = request.FILES.get("employee_profile")
-        employee.employee_profile = img
-        employee.save()
-        messages.success(request, _("Profile image updated."))
-    except Exception:
-        messages.error(request, _("Upload a valid image."))
+    employee = request.user.employee_get
+    img = request.FILES.get("employee_profile")
+    if img is None:
+        messages.error(
+            request, _("No image selected. Please choose a file to upload.")
+        )
+    else:
+        try:
+            employee.employee_profile = img
+            employee.save()
+            messages.success(request, _("Profile image updated."))
+        except ValidationError as error:
+            messages.error(
+                request,
+                error.messages[0] if error.messages else _("Upload a valid image."),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to update own profile image for employee %s",
+                getattr(employee, "id", None),
+            )
+            messages.error(
+                request, _("Could not update the profile image. Please try again.")
+            )
     response = render(
         request,
         "employee/profile/profile_modal.html",

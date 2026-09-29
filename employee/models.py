@@ -5,6 +5,7 @@ This module is used to register models for employee app
 
 """
 
+import io
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 
@@ -730,37 +731,43 @@ class Employee(models.Model):
         if not file:
             return
 
-        # Committed = already saved to storage; unreadable path → don't block saves.
-        committed = getattr(file, "committed", False)
-        same_as_db = self._employee_profile_path_matches_db(file)
+        # Only a freshly uploaded file is inspected. One already in storage
+        # (FieldFile._committed) must not block an unrelated save, even when
+        # it is missing from the media folder.
+        if getattr(file, "_committed", True) or self._employee_profile_path_matches_db(
+            file
+        ):
+            return
 
         try:
             file.seek(0)
             content = file.read()
+            file.seek(0)
         except Exception:
-            if committed or same_as_db:
-                return
-            raise ValidationError({"employee_profile": "Unable to read uploaded file."})
+            raise ValidationError(
+                {"employee_profile": _("Unable to read the uploaded image file.")}
+            )
 
-        is_svg = False
+        # Accept SVG (text/XML document with an <svg> root element).
         try:
-            text = content.decode("utf-8", errors="strict")
-            root = ET.fromstring(text)
+            root = ET.fromstring(content.decode("utf-8", errors="strict"))
             if root.tag.endswith("svg"):
-                is_svg = True
+                return
         except Exception:
             pass
 
-        if not is_svg:
-            try:
-                file.seek(0)
-                Image.open(file).verify()
-            except Exception:
-                if committed or same_as_db:
-                    return
-                raise ValidationError(
-                    {"employee_profile": "Invalid image or SVG file."}
-                )
+        # Validate raster images from an in-memory copy so the upload stream
+        # stays intact for the storage backend to write afterwards.
+        try:
+            Image.open(io.BytesIO(content)).verify()
+        except Exception:
+            raise ValidationError(
+                {
+                    "employee_profile": _(
+                        "Upload a valid image file (PNG, JPG, JPEG, GIF, WEBP or SVG)."
+                    )
+                }
+            )
 
     def save(self, *args, **kwargs):
         self.full_clean()
