@@ -68,6 +68,7 @@ from payroll.filters import (
 from payroll.forms import component_forms as forms
 from payroll.methods.deductions import create_deductions, update_compensation_deduction
 from payroll.methods.methods import (
+    apply_previous_period_leave_adjustment,
     calculate_employer_contribution,
     compute_net_pay,
     compute_salary_on_period,
@@ -344,6 +345,9 @@ def payroll_calculation(employee, start_date, end_date, month_summary=None):
     data_to_json["employee"] = employee.id
     data_to_json["start_date"] = start_date.strftime("%Y-%m-%d")
     data_to_json["end_date"] = end_date.strftime("%Y-%m-%d")
+    # Read by get_previous_period_leave_adjustment() to recompute this period
+    # the same way.
+    data_to_json["attendance_summary_used"] = bool(month_summary)
     json_data = json.dumps(data_to_json)
 
     payslip_data["json_data"] = json_data
@@ -1057,6 +1061,7 @@ def generate_payslip(request):
                     end_date,
                     month_summary=att_summary.get(employee.pk, dict({})),
                 )
+                apply_previous_period_leave_adjustment(employee, start_date, payslip)
                 payslips.append(payslip)
                 json_data.append(payslip["json_data"])
 
@@ -1188,6 +1193,9 @@ def create_payslip(request, new_post_data=None):
                 start_date = form.cleaned_data["start_date"]
                 end_date = form.cleaned_data["end_date"]
                 payslip_data = payroll_calculation(employee, start_date, end_date)
+                apply_previous_period_leave_adjustment(
+                    employee, start_date, payslip_data
+                )
                 payslip_data["payslip"] = payslip
                 data = {}
                 data["employee"] = employee
@@ -1282,11 +1290,6 @@ def validate_start_date(request):
             _("The end date must be greater than or equal to the start date.")
         )
         valid = False
-
-    if end_datetime is not None:
-        if end_datetime > datetime.today().date():
-            errors.append(_("The end date cannot be in the future."))
-            valid = False
 
     return JsonResponse(
         {

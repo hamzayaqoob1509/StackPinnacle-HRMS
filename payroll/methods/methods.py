@@ -5,6 +5,7 @@ Payroll related module to write custom calculation methods
 """
 
 import calendar
+import json
 from datetime import date, datetime, timedelta
 
 from dateutil.relativedelta import relativedelta
@@ -833,6 +834,94 @@ def compute_salary_on_period(
     data["contract_wage"] = wage
     data["contract"] = contract
     return data
+
+
+def get_previous_period_leave_adjustment(employee, current_start_date):
+    """
+    Detects unpaid leaves from the previous payslip period that were approved
+    after that payslip was generated and returns a carry-forward deduction dict,
+    or None if no adjustment is needed.
+    """
+    prev_payslip = (
+        Payslip.objects.filter(
+            employee_id=employee,
+            end_date__lt=current_start_date,
+        )
+        .order_by("-end_date")
+        .first()
+    )
+
+    if not prev_payslip or not prev_payslip.pay_head_data:
+        return None
+
+    pay_head_data = prev_payslip.pay_head_data
+    if "attendance_summary_used" not in pay_head_data:
+        # Generated before the v2 upgrade. v1 computed salary differently, so
+        # recomputing it here would report that difference as unpaid leave.
+        return None
+
+    # Recompute the way the stored payslip was computed: bulk generation uses
+    # the attendance summary (which also counts absent days), single payslip
+    # creation does not. Mixing the two would produce a false adjustment.
+    month_summary = None
+    if pay_head_data["attendance_summary_used"]:
+        from attendance.views.summary import build_monthly_summary
+        from employee.models import Employee
+
+        rows, _total_working, _summary_totals = build_monthly_summary(
+            prev_payslip.start_date,
+            prev_payslip.end_date,
+            Employee.objects.filter(pk=employee.pk),
+        )
+        month_summary = next(
+            (row for row in rows if row["employee"].pk == employee.pk), None
+        )
+
+    stored_loss_of_pay = pay_head_data.get("loss_of_pay", 0) or 0
+    stored_unpaid_days = pay_head_data.get("unpaid_days", 0) or 0
+
+    current_data = compute_salary_on_period(
+        employee,
+        prev_payslip.start_date,
+        prev_payslip.end_date,
+        month_summary=month_summary,
+    )
+    if not current_data:
+        return None
+
+    current_loss_of_pay = current_data.get("loss_of_pay", 0) or 0
+    current_unpaid_days = current_data.get("unpaid_days", 0) or 0
+
+    adjustment = round(current_loss_of_pay - stored_loss_of_pay, 2)
+    if adjustment <= 0:
+        return None
+
+    extra_days = round(current_unpaid_days - stored_unpaid_days, 1)
+    month_label = prev_payslip.start_date.strftime("%b %Y")
+    days_text = f" - {extra_days} day(s)" if extra_days > 0 else ""
+    label = f"Leave Adjustment ({month_label}){days_text}"
+
+    return {"title": label, "amount": adjustment}
+
+
+def apply_previous_period_leave_adjustment(employee, start_date, payslip):
+    """
+    Adds the previous period's leave adjustment, if any, to a payslip dict
+    returned by payroll_calculation(), as a post-tax deduction.
+    """
+    adjustment = get_previous_period_leave_adjustment(employee, start_date)
+    if not adjustment:
+        return
+    pay_data = json.loads(payslip["json_data"])
+    pay_data["post_tax_deductions"].append(adjustment)
+    pay_data["total_deductions"] = (
+        pay_data.get("total_deductions", 0) or 0
+    ) + adjustment["amount"]
+    pay_data["net_pay"] = (pay_data.get("net_pay", 0) or 0) - adjustment["amount"]
+    payslip["json_data"] = json.dumps(pay_data)
+    payslip["post_tax_deductions"] = pay_data["post_tax_deductions"]
+    payslip["total_deductions"] = pay_data["total_deductions"]
+    payslip["net_pay"] = pay_data["net_pay"]
 
 
 def paginator_qry(qryset, page_number):
