@@ -94,6 +94,7 @@ INSTALLED_APPS = [
     "offboarding",
     "horilla_backup",
     "project",
+    "employee_handbook",
     "horilla_meet",
     "report",
     "whatsapp",
@@ -462,6 +463,7 @@ SIDEBARS = [
     "pms",
     "project",
     "asset",
+    "employee_handbook",
     "helpdesk",
     "report",
 ]
