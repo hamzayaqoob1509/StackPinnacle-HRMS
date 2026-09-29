@@ -109,13 +109,29 @@
                 <span class="oh-timeoff-modal__stat-count">{{ leave_request.created_by }}</span>
             </div>
         </div>
+        {% if leave_request.status == "approved" and leave_request.approved_by %}
+        <div class="oh-timeoff-modal__stats-container mt-3">
+            <div class="oh-timeoff-modal__stat">
+                <span class="oh-timeoff-modal__stat-title">{% trans "Approved By" %}</span>
+                <span class="oh-timeoff-modal__stat-count">
+                    {{leave_request.approved_by}}{% if leave_request.approved_by.get_job_position %} &mdash; {{leave_request.approved_by.get_job_position.job_position}}{% endif %}
+                </span>
+            </div>
+            {% if leave_request.approved_at %}
+            <div class="oh-timeoff-modal__stat">
+                <span class="oh-timeoff-modal__stat-title">{% trans "Approved On" %}</span>
+                <span class="oh-timeoff-modal__stat-count dateformat_changer">{{leave_request.approved_at|date:"Y-m-d"}}</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
         {% if leave_request.multiple_approvals %}
             <div class="oh-timeoff-modal__stats w-100 mt-3">
                 <div class="oh-timeoff-modal__stat">
                     <span class="oh-timeoff-modal__stat-title">{% trans "Multiple Approvals" %}</span>
                     {% for approval in  leave_request.multiple_approvals.approvals %}
                         <div class="oh-timeoff-modal__stat-description">
-                            {{ forloop.counter }}.{{ approval.manager_id }} :
+                            {{ forloop.counter }}.{{ approval.manager_id }}{% if approval.manager_id.get_job_position %} ({{ approval.manager_id.get_job_position.job_position }}){% endif %} :
                             {% if approval.is_approved %}{% trans "Approved" %}
                             {% else %}
                                 {% if approval.is_rejected %}

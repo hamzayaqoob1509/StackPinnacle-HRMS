@@ -423,6 +423,11 @@ class LeaveRequestsDetailView(HorillaDetailedView):
             )
             self.cols["rejected_action"] = 12
 
+        if self.instance.status == "approved" and self.instance.approved_by:
+            body.append((_("Approved By"), "approved_by_display"))
+            if self.instance.approved_at:
+                body.append((_("Approved On"), "approved_at"))
+
         context["body"] = body
         return context
 

@@ -316,10 +316,22 @@ class AvailableLeaveUpdateSerializer(serializers.ModelSerializer):
         fields = ["available_days", "carryforward_days"]
 
 
+def serialize_approved_by(obj):
+    """Return the approver's identity (name, badge, designation) for a leave request."""
+    approver = obj.approved_by
+    if not approver:
+        return None
+    data = EmployeeGetSerializer(approver).data
+    job_position = approver.get_job_position()
+    data["job_position"] = job_position.job_position if job_position else None
+    return data
+
+
 class LeaveRequestGetAllSerilaizer(serializers.ModelSerializer):
     employee_id = serializers.SerializerMethodField()
     leave_type_id = serializers.SerializerMethodField()
     multiple_approve = serializers.SerializerMethodField()
+    approved_by = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -345,6 +357,9 @@ class LeaveRequestGetAllSerilaizer(serializers.ModelSerializer):
             return LeaveTypeAllGetSerializer(obj.leave_type_id).data
         return None
 
+    def get_approved_by(self, obj):
+        return serialize_approved_by(obj)
+
     def get_multiple_approve(self, obj):
         approvals = LeaveRequestConditionApproval.objects.filter(leave_request_id=obj)
         employee = self.context["request"].user.employee_get
@@ -362,6 +377,7 @@ class LeaveRequestGetSerilaizer(serializers.ModelSerializer):
     employee_id = serializers.SerializerMethodField()
     leave_type_id = serializers.SerializerMethodField()
     multiple_approve = serializers.SerializerMethodField()
+    approved_by = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -384,6 +400,9 @@ class LeaveRequestGetSerilaizer(serializers.ModelSerializer):
         if obj.leave_type_id:
             return LeaveTypeAllGetSerializer(obj.leave_type_id).data
         return None
+
+    def get_approved_by(self, obj):
+        return serialize_approved_by(obj)
 
     def get_multiple_approve(self, obj):
         approvals = LeaveRequestConditionApproval.objects.filter(leave_request_id=obj)
