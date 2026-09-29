@@ -4,14 +4,15 @@ views.py
 This module is used to define the method for the path in the urls
 """
 
+import io
 import json
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from itertools import groupby
 from urllib.parse import parse_qs
 
 import pandas as pd
-import pdfkit
 from django.conf import settings as pay_settings
 from django.contrib import messages
 from django.db.models import ProtectedError, Q
@@ -23,6 +24,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
+from xhtml2pdf import pisa
 
 from base.methods import (
     closest_numbers,
@@ -1452,9 +1454,31 @@ def equalize_lists_length(allowances, deductions):
     return deductions, allowances
 
 
+def _pdf_link_callback(uri, rel):
+    """
+    Resolve URIs for xhtml2pdf: convert /media/ and /static/ URLs to
+    absolute filesystem paths so the PDF engine never needs HTTP.
+    """
+    if uri.startswith(pay_settings.MEDIA_URL):
+        path = os.path.join(
+            pay_settings.MEDIA_ROOT, uri[len(pay_settings.MEDIA_URL) :]
+        )
+    elif uri.startswith(pay_settings.STATIC_URL):
+        path = os.path.join(
+            pay_settings.STATIC_ROOT, uri[len(pay_settings.STATIC_URL) :]
+        )
+    else:
+        return uri
+
+    return path if os.path.isfile(path) else uri
+
+
 def generate_payslip_pdf(template_path, context, html=False):
     """
     Generate a PDF file from an HTML template and context data.
+
+    Uses xhtml2pdf rather than pdfkit: pdfkit needs the wkhtmltopdf binary,
+    which the Docker image does not ship.
 
     Args:
         template_path (str): The path to the HTML template.
@@ -1464,54 +1488,25 @@ def generate_payslip_pdf(template_path, context, html=False):
     Returns:
         HttpResponse: A response with the generated PDF file or raw HTML.
     """
+    html_content = render_to_string(template_path, context)
 
-    from horilla.horilla_middlewares import _thread_locals
+    if html:
+        return HttpResponse(html_content, content_type="text/html")
 
     try:
-        # Render the HTML content from the template and context
-        html_content = render_to_string(template_path, context)
-        request = getattr(_thread_locals, "request")
-        cookies = None
-        if request:
-            cookies = request.META.get("HTTP_COOKIE", "")
-
-        # Return raw HTML if requested
-        if html:
-            return HttpResponse(html_content, content_type="text/html")
-
-        # PDF options for pdfkit
-        pdf_options = {
-            "page-size": "A4",
-            "margin-top": "10mm",
-            "margin-bottom": "10mm",
-            "margin-left": "10mm",
-            "margin-right": "10mm",
-            "encoding": "UTF-8",
-            "enable-local-file-access": None,  # Required to load local CSS/images
-            "dpi": 300,
-            "zoom": 1.3,
-            "footer-center": "[page]/[topage]",  # Required to load local CSS/images
-        }
-
-        if cookies:
-            pdf_options.update(
-                {
-                    "custom-header": [
-                        ("Cookie", cookies),
-                    ],
-                    "custom-header-propagation": None,
-                }
-            )
-
-        # Generate the PDF as binary content
-        pdf = pdfkit.from_string(html_content, False, options=pdf_options)
-
-        # Return an HttpResponse containing the PDF content
-        response = HttpResponse(pdf, content_type="application/pdf")
+        buffer = io.BytesIO()
+        pisa.pisaDocument(
+            io.BytesIO(html_content.encode("utf-8")),
+            buffer,
+            link_callback=_pdf_link_callback,
+        )
+        pdf_content = buffer.getvalue()
+        if not pdf_content:
+            return HttpResponse("Error generating PDF: empty output", status=500)
+        response = HttpResponse(pdf_content, content_type="application/pdf")
         response["Content-Disposition"] = "inline; filename=payslip.pdf"
         return response
     except Exception as e:
-        # Handle errors gracefully
         return HttpResponse(f"Error generating PDF: {str(e)}", status=500)
 
 
@@ -1537,10 +1532,9 @@ def payslip_pdf(request, id):
             request.user.has_perm("payroll.view_payslip")
             or payslip.employee_id.employee_user_id == request.user
         ):
-            user = request.user
-            employee = user.employee_get
+            employee = payslip.employee_id
 
-            # Taking the company_name of the user
+            # Taking the company_name of the payslip employee
             info = EmployeeWorkInformation.objects.filter(employee_id=employee)
             date_format = "MMM. D, YYYY"
             if info.exists():
@@ -1565,6 +1559,8 @@ def payslip_pdf(request, id):
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
             # Format the start and end dates
+            formatted_start_date = start_date.strftime("%b. %-d, %Y")
+            formatted_end_date = end_date.strftime("%b. %-d, %Y")
             for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_start_date = start_date.strftime(format_string)
