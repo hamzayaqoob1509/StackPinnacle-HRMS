@@ -182,13 +182,13 @@
         }
 
         $(".time-runner").not("title").html(secondsToDuration(at_work_seconds));
-        $("title.time-runner").html(` ${whiteLabelCompany} | ` + secondsToDuration(at_work_seconds));
+        $("title.time-runner").html(whiteLabelCompany);
 
         if (run) {
             window.timeRunnerInterval = setInterval(() => {
                 at_work_seconds = parseInt(at_work_seconds) + 1;
                 $("div.time-runner").html(secondsToDuration(at_work_seconds));
-                $("title").html(` ${whiteLabelCompany} | ` + secondsToDuration(at_work_seconds));
+                $("title").html(whiteLabelCompany);
             }, 1000);
         }
     </script>

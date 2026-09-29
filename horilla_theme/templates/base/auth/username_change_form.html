@@ -9,10 +9,10 @@
 <div class="h-screen w-full flex items-center justify-center">
     <div class="bg-[white] p-[50px] rounded-md [box-shadow:0px_0px_20px_#ebebeb] w-[450px]">
         <img
-            src="{% if white_label_company.icon %}{{white_label_company.icon.url}}{% else %}{% static 'horilla_theme/assets/img/logo.svg' %}{% endif %}"
-            alt=""
+            src="{% if white_label_company.icon %}{{white_label_company.icon.url}}{% else %}{% static 'images/ui/stack-pinnacle-logo-no-background.webp' %}{% endif %}"
+            alt="{{ white_label_company_name }}"
             class="m-auto mb-4"
-            width="80"
+            width="240"
         >
         <h1 class="text-3xl font-bold my-3 text-center">
             {% trans "Change Username" %}

@@ -20,11 +20,11 @@ function secondsToDuration(seconds) {
 }
 // accessing initial worked hours from the user
 $(".time-runner").not("title").html(secondsToDuration(at_work_seconds));
-$("title.time-runner").html(` ${whiteLabelCompany} | ` + secondsToDuration(at_work_seconds));
+$("title.time-runner").html(whiteLabelCompany);
 if (run) {
     setInterval(() => {
         at_work_seconds = parseInt(at_work_seconds) + 1
         $("div.time-runner").html(secondsToDuration(at_work_seconds));
-        $("title").html(` ${whiteLabelCompany} | ` + secondsToDuration(at_work_seconds));
+        $("title").html(whiteLabelCompany);
     }, 1000);
 }
