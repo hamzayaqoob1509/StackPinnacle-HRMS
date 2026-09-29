@@ -243,6 +243,15 @@ class LeaveType(HorillaModel):
     limit_leave = models.BooleanField(default=True, verbose_name=_("Limit Leave Days"))
     total_days = models.FloatField(null=True, default=1)
     reset = models.BooleanField(default=False, verbose_name=_("Reset"))
+    is_prorated = models.BooleanField(
+        default=False,
+        verbose_name=_("Pro-rate on confirmation"),
+        help_text=_(
+            "Allocate a pro-rated balance for the remaining months of the year "
+            "when an employee completes probation or their contract becomes "
+            "active. Requires a yearly reset."
+        ),
+    )
     is_encashable = models.BooleanField(default=False, verbose_name=_("Is Encashable"))
     reset_based = models.CharField(
         max_length=30,
@@ -2677,6 +2686,41 @@ class EmployeePastLeaveRestrict(HorillaModel):
         Company, null=True, blank=True, on_delete=models.CASCADE
     )
     objects = HorillaCompanyManager(related_company_field="company_id")
+
+
+class ProRataLeaveAllocation(models.Model):
+    """
+    Ledger of pro-rated leave grants made when an employee is confirmed
+    (probation completed / contract activated). One row per employee, leave
+    type and reset-cycle year guarantees the grant happens exactly once per
+    cycle.
+    """
+
+    SOURCE_CHOICES = (
+        ("probation", _("Probation completed")),
+        ("contract", _("Contract activated")),
+        ("joining", _("Joining date")),
+    )
+
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="prorata_allocations"
+    )
+    leave_type_id = models.ForeignKey(LeaveType, on_delete=models.CASCADE)
+    cycle_year = models.IntegerField(
+        help_text=_("Calendar year the reset cycle ends in.")
+    )
+    effective_date = models.DateField()
+    allocated_days = models.FloatField(default=0)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("employee_id", "leave_type_id", "cycle_year")
+        verbose_name = _("Pro-rata Leave Allocation")
+        verbose_name_plural = _("Pro-rata Leave Allocations")
+
+    def __str__(self):
+        return f"{self.employee_id} | {self.leave_type_id} | {self.cycle_year}"
 
 
 if apps.is_installed("attendance"):

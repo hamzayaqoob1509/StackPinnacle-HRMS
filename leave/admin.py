@@ -18,6 +18,7 @@ from .models import (
     LeaverequestComment,
     LeaveRequestConditionApproval,
     LeaveType,
+    ProRataLeaveAllocation,
     RestrictLeave,
 )
 
@@ -36,6 +37,24 @@ admin.site.register(LeaverequestComment)
 admin.site.register(LeaveallocationrequestComment)
 admin.site.register(RestrictLeave)
 admin.site.register(LeaveGeneralSetting)
+
+
+@admin.register(ProRataLeaveAllocation)
+class ProRataLeaveAllocationAdmin(admin.ModelAdmin):
+    list_display = (
+        "employee_id",
+        "leave_type_id",
+        "cycle_year",
+        "effective_date",
+        "allocated_days",
+        "source",
+        "created_at",
+    )
+    list_filter = ("cycle_year", "source", "leave_type_id")
+    search_fields = (
+        "employee_id__employee_first_name",
+        "employee_id__employee_last_name",
+    )
 if apps.is_installed("attendance"):
     from .models import CompensatoryLeaveRequest
 

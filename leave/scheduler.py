@@ -60,4 +60,17 @@ def leave_reset():
     )
 
 
+def prorata_leave_grant():
+    """
+    Allocate pro-rated leave balances for employees who have just completed
+    probation / had their contract activated.
+    """
+    from leave.prorata import grant_all_prorata_leaves
+
+    grant_all_prorata_leaves()
+
+
 register_job(leave_reset, "interval", hours=4)
+register_job(
+    prorata_leave_grant, "cron", hour=6, minute=30, misfire_grace_time=3600 * 12
+)

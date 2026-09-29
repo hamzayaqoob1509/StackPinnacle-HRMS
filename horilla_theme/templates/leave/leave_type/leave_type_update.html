@@ -383,6 +383,17 @@
                             </div>
                             {{ form.is_encashable.errors }}
                         </div>
+
+                        <div class="flex items-center justify-between mb-2 resetContainer form-input-items">
+                            <div class="flex items-center gap-1 pb-2 overflow-visible relative" style="display: ruby">
+                                <label class="text-xs font-medium" for="id_is_prorated">{{ form.is_prorated.label }}</label>
+                                <span class="oh-info" title="{% trans 'Grant a pro-rated balance for the remaining months of the year when an employee completes probation or their contract becomes active. Requires a yearly reset.' %}"></span>
+                            </div>
+                            <div class="oh-switch">
+                                {{ form.is_prorated }}
+                            </div>
+                            {{ form.is_prorated.errors }}
+                        </div>
                     </div>
                 </div>
             </div>
