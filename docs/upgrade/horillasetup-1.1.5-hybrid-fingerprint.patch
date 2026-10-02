@@ -1,0 +1,19 @@
+--- a/horillasetup/migration/fingerprint.py	2026-10-02 12:45:56.906979133 -0400
++++ b/horillasetup/migration/fingerprint.py	2026-10-02 12:45:57.243721416 -0400
+@@ -145,6 +145,16 @@
+     has_post15 = bool(POST_15_COLUMNS & columns)
+     has_pre15 = bool(PRE_15_COLUMNS & columns)
+ 
++    # REHEARSAL-ONLY override (not upstream): accept a hybrid schema as 1.5+.
++    # Used to test an untagged build on a throwaway copy while Horilla confirms.
++    import os as _os
++    if (
++        has_post15
++        and has_pre15
++        and _os.environ.get("HORILLASETUP_REHEARSAL_ASSUME_15_PLUS") == "1"
++    ):
++        has_pre15 = False
++
+     if has_post15 and not has_pre15:
+         variant = VARIANT_15_PLUS
+     elif has_pre15 and not has_post15:
