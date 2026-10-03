@@ -34,6 +34,20 @@ branch in every table, column, constraint and index, except that columns
 referencing a user are `integer` rather than `bigint` (the tool renames v1's
 `auth_user`, keeping its id type).
 
+## Horilla's response
+
+Horilla confirmed both tool gaps (they are adding the payslip constraint to
+the pre-flight list and looking at accepting the hybrid schema). For this
+database they consider the override safe, provided a final rehearsal on a
+fresh restore passes and the Google Drive backup table ends up with the
+OAuth columns and without `service_account_file`. `rehearse.sh` checks both.
+
+## Scripts
+
+- `rehearse.sh <backup.dump>`: the whole migration on a fresh restore in
+  Docker, with every check below. Ends with `REHEARSAL PASSED` or `FAILED`.
+- `check_v2_uniqueness.py`: v1 rows that any v2 uniqueness rule would reject.
+
 ## Order on the day
 
 1. Take Horilla offline; snapshot the server and `pg_dump` the database.

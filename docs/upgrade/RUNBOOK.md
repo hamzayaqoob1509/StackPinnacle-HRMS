@@ -165,6 +165,27 @@ df -h / && free -h && ls /opt/horilla-v2/venv/bin/horillasetup /etc/horilla-v2.e
 Expect free disk, swap present, both files present, and both services
 `disabled`.
 
+### A11. Final rehearsal on a fresh backup (go / no-go)
+
+Requested by Horilla before production: rehearse once more on a fresh restore
+of a recent backup.
+
+1. On the server, take a backup as in the earlier transfer (no downtime):
+   ```bash
+   sudo bash -c 'umask 077; set -a; . /etc/horilla.env; set +a; PGPASSWORD="$DB_PASSWORD" pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" --format=custom --no-owner --no-privileges -f /home/ec2-user/v1-backup.dump' && sudo chown ec2-user: ~/v1-backup.dump && sha256sum ~/v1-backup.dump
+   ```
+2. On the developer machine, download it and check the checksum matches:
+   ```bash
+   scp -i ~/.ssh/horilla-ec2 ec2-user@SERVER:~/v1-backup.dump ~/horilla-backups/v1-backup.dump && sha256sum ~/horilla-backups/v1-backup.dump
+   ```
+3. Run the rehearsal:
+   ```bash
+   docs/upgrade/rehearse.sh ~/horilla-backups/v1-backup.dump
+   ```
+
+Go ahead with part B only if it ends with `REHEARSAL PASSED`. If it reports
+duplicates other than payslips 127/128, resolve them first and add them to B4.
+
 ---
 
 ## Part B — the maintenance window (about 60 minutes)
