@@ -348,8 +348,9 @@ Done:
       which keeps both histories and v2's files, and merged with a merge
       commit. The server checkout tracks `main`.
 - [x] v1 removed from the server (2026-10-07): `/opt/horilla`, the
-      `horilla-gunicorn` service, the old `/etc/horilla.env`, and the backups
-      in `~/upgrade`. The pre-upgrade dump is kept off the server.
+      `horilla-gunicorn` service, the old `/etc/horilla.env`, the backups in
+      `~/upgrade`, and the `pre-v2-upgrade` EBS snapshot. The pre-upgrade dump
+      is kept off the server.
 - [x] v2 renamed to the plain `horilla` names (see the table at the top).
 - [x] Temporary SSH key for the backup transfer removed.
 - [x] Amazon Linux updated to the latest 2023 release and rebooted
@@ -359,8 +360,8 @@ Done:
 
 Still open:
 
-- [ ] Delete the `pre-v2-upgrade` and `pre-os-update` EBS snapshots, and
-      `~/pre-os-update.dump` on the server, once they are no longer needed.
+- [ ] Delete the `pre-os-update` EBS snapshot and `~/pre-os-update.dump` on
+      the server, once the updated server has proven stable.
 - [ ] Scheduled backups (nightly `pg_dump` off the server, and EBS snapshots).
       Nothing backs up the database automatically yet.
 - [ ] A lock file with exact package versions. `requirements.txt` allows
