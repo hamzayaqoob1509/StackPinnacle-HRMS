@@ -52,8 +52,8 @@ from base.methods import (
     build_safe_template_request,
     eval_validate,
     export_data,
-    generate_pdf,
     get_key_instances,
+    pdf_attachment,
     sanitize_mail_template_body,
     sortby,
 )
@@ -2548,13 +2548,9 @@ def send_acknowledgement(request):
                 }
             )
             render_bdy = template_bdy.render(context)
-            attachments.append(
-                (
-                    "Document",
-                    generate_pdf(render_bdy, {}, path=False, title="Document").content,
-                    "application/pdf",
-                )
-            )
+            attachment = pdf_attachment(render_bdy)
+            if attachment:
+                attachments.append(attachment)
 
         template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(

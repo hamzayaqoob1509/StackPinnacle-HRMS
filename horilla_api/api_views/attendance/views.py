@@ -31,7 +31,7 @@ from attendance.views.dashboard import (
 )
 from attendance.views.views import *
 from base.backends import ConfiguredEmailBackend
-from base.methods import generate_pdf, sanitize_mail_template_body
+from base.methods import pdf_attachment, sanitize_mail_template_body
 from base.models import HorillaMailTemplate
 from base.views import is_reportingmanger
 from employee.filters import EmployeeFilter
@@ -1138,13 +1138,9 @@ class OfflineEmployeeMailsend(APIView):
                 {"instance": employee, "self": request.user.employee_get}
             )
             render_bdy = template_bdy.render(context)
-            attachments.append(
-                (
-                    "Document",
-                    generate_pdf(render_bdy, {}, path=False, title="Document").content,
-                    "application/pdf",
-                )
-            )
+            attachment = pdf_attachment(render_bdy)
+            if attachment:
+                attachments.append(attachment)
 
         template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(

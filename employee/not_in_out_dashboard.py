@@ -21,7 +21,7 @@ from base.forms import MailTemplateForm
 from base.methods import (
     build_safe_template_request,
     export_data,
-    generate_pdf,
+    pdf_attachment,
     sanitize_mail_template_body,
     sanitize_mail_template_placeholders,
 )
@@ -294,13 +294,9 @@ def send_mail_to_employee(request):
                 {"instance": employee, "self": request.user.employee_get}
             )
             render_bdy = template_bdy.render(context)
-            attachments.append(
-                (
-                    "Document",
-                    generate_pdf(render_bdy, {}, path=False, title="Document").content,
-                    "application/pdf",
-                )
-            )
+            attachment = pdf_attachment(render_bdy)
+            if attachment:
+                attachments.append(attachment)
 
         template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(

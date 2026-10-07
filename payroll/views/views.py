@@ -4,9 +4,7 @@ views.py
 This module is used to define the method for the path in the urls
 """
 
-import io
 import json
-import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from itertools import groupby
@@ -24,7 +22,6 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
-from xhtml2pdf import pisa
 
 from base.methods import (
     closest_numbers,
@@ -35,6 +32,7 @@ from base.methods import (
     generate_pdf,
     get_key_instances,
     get_session_company,
+    html_to_pdf,
     sortby,
 )
 from base.models import Company
@@ -1454,25 +1452,6 @@ def equalize_lists_length(allowances, deductions):
     return deductions, allowances
 
 
-def _pdf_link_callback(uri, rel):
-    """
-    Resolve URIs for xhtml2pdf: convert /media/ and /static/ URLs to
-    absolute filesystem paths so the PDF engine never needs HTTP.
-    """
-    if uri.startswith(pay_settings.MEDIA_URL):
-        path = os.path.join(
-            pay_settings.MEDIA_ROOT, uri[len(pay_settings.MEDIA_URL) :]
-        )
-    elif uri.startswith(pay_settings.STATIC_URL):
-        path = os.path.join(
-            pay_settings.STATIC_ROOT, uri[len(pay_settings.STATIC_URL) :]
-        )
-    else:
-        return uri
-
-    return path if os.path.isfile(path) else uri
-
-
 def generate_payslip_pdf(template_path, context, html=False):
     """
     Generate a PDF file from an HTML template and context data.
@@ -1494,16 +1473,9 @@ def generate_payslip_pdf(template_path, context, html=False):
         return HttpResponse(html_content, content_type="text/html")
 
     try:
-        buffer = io.BytesIO()
-        pisa.pisaDocument(
-            io.BytesIO(html_content.encode("utf-8")),
-            buffer,
-            link_callback=_pdf_link_callback,
+        response = HttpResponse(
+            html_to_pdf(html_content), content_type="application/pdf"
         )
-        pdf_content = buffer.getvalue()
-        if not pdf_content:
-            return HttpResponse("Error generating PDF: empty output", status=500)
-        response = HttpResponse(pdf_content, content_type="application/pdf")
         response["Content-Disposition"] = "inline; filename=payslip.pdf"
         return response
     except Exception as e:
