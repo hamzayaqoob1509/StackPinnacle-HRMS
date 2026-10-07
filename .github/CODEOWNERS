@@ -1,0 +1,8 @@
+# Code owners for StackPinnacle-HRMS.
+#
+# The owners below are requested automatically as reviewers on every pull
+# request. This file only requests reviews; it does not block a merge unless
+# "Require review from Code Owners" is turned on in the branch protection
+# settings for main.
+
+*       @hamzayaqoob1509 @yousamaa
