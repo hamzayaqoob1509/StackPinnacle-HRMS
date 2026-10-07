@@ -1,8 +1,25 @@
 # Upgrading production from Horilla v1 to v2
 
-Files used for the v1 → v2 database migration, and what the rehearsal on a
-restored copy of production found. The rehearsal ran `horillasetup` 1.1.5
-against this branch on PostgreSQL 15.
+**Completed on 2026-10-05.** Production runs Horilla 2.1.8; for the current
+server layout and how to deploy, see [../DEPLOY.md](../DEPLOY.md).
+
+This folder is the record of the migration: the files used for the v1 → v2
+database migration, and what the rehearsals on restored copies of production
+found. They ran `horillasetup` 1.1.5 against this code on PostgreSQL 15.
+
+## Outcome
+
+The production migration matched the final rehearsal: all six
+`horillasetup` stages passed, every row count was as expected (40 users, 41
+employees, 64 leave requests, 1,027 attendance rows, 38 contracts, 134
+payslips after removing one duplicate), `migrate --check` was clean, and the
+Google Drive backup table had the OAuth columns. The site was offline for
+about 17 minutes.
+
+The upgrade also closed two exposures in the v1 setup: the unauthenticated
+remote code execution fixed in 2.1.8, and a server running with `DEBUG=True`
+and Horilla's public default `SECRET_KEY`, because its settings file used
+`DJANGO_SECRET_KEY` / `DJANGO_DEBUG`, names Horilla does not read.
 
 ## Findings
 
@@ -48,13 +65,15 @@ OAuth columns and without `service_account_file`. `rehearse.sh` checks both.
   Docker, with every check below. Ends with `REHEARSAL PASSED` or `FAILED`.
 - `check_v2_uniqueness.py`: v1 rows that any v2 uniqueness rule would reject.
 
-## Order on the day
+## What was done on the day
+
+The full steps are in [RUNBOOK.md](RUNBOOK.md).
 
 1. Take Horilla offline; snapshot the server and `pg_dump` the database.
 2. Delete payslip 128.
 3. Install `horillasetup==1.1.5` and apply the patch.
 4. `HORILLASETUP_REHEARSAL_ASSUME_15_PLUS=1 horillasetup migrate hrms-v2 --from-v1`
-   from this branch's directory, before any v2 process starts. v2's Docker
+   from the v2 directory, before any v2 process starts. v2's Docker
    entrypoint runs `migrate` by itself, which the migration guide warns
    destroys holiday data on a v1 database.
 5. `psql -v ON_ERROR_STOP=1 -f docs/upgrade/post_migrate_align.sql`

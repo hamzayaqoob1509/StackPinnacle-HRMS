@@ -1,5 +1,25 @@
 # Production upgrade runbook: Horilla v1 → v2
 
+> **Completed on 2026-10-05.** This is the record of a one-time procedure; it
+> is not how to deploy. For the current server layout and deploy steps, see
+> [../DEPLOY.md](../DEPLOY.md).
+>
+> The steps below use the names v2 had while it ran beside v1. v1 held
+> `/opt/horilla`, `/etc/horilla.env` and the `horilla-gunicorn` service at the
+> time, so v2 needed its own. After v1 was removed on 2026-10-07, v2 was
+> renamed:
+>
+> | During the upgrade | Now |
+> |---|---|
+> | `/opt/horilla-v2/app`, `/opt/horilla-v2/venv` | `/opt/horilla/app`, `/opt/horilla/venv` |
+> | `/etc/horilla-v2.env` | `/etc/horilla.env` |
+> | `horilla-v2-web` | `horilla-web` |
+> | `horilla-v2-scheduler` | `horilla-scheduler` |
+> | branch `upgrade/v2` | `main` |
+>
+> A virtualenv cannot be moved, so the rename built a new one at
+> `/opt/horilla/venv` and pinned it to the versions the old one had.
+
 Server: Amazon Linux 2023, t3.small class (2 vCPU, 1.9 GB RAM), PostgreSQL 15
 on the same host, nginx in front of gunicorn, service `horilla-gunicorn`
 running v1 from `/opt/horilla/app`, settings in `/etc/horilla.env`.
@@ -320,13 +340,29 @@ snapshot instead.
 
 ## Part D — after the upgrade
 
-- [ ] Make `main` the v2 code, so the usual `git pull` deploys v2. v1 and v2
-      have unrelated histories; record the switch with
+Done:
+
+- [x] `main` is the v2 code (2026-10-07, PR #8). v1 and v2 have unrelated
+      histories; they were joined with
       `git merge --allow-unrelated-histories -s ours main` on `upgrade/v2`,
-      then fast-forward `main`, so both histories are kept.
-- [ ] After two weeks without problems: remove `/opt/horilla`, the
-      `horilla-gunicorn` service, `/etc/horilla.env`, and the backups in
-      `~/upgrade` (keep a copy off the server first). Delete the old snapshot.
-- [ ] Remove the temporary SSH key added for the backup transfer from `~/.ssh/authorized_keys`.
-- [ ] Set up scheduled backups (nightly `pg_dump` to S3 and EBS snapshots).
+      which keeps both histories and v2's files, and merged with a merge
+      commit. The server checkout tracks `main`.
+- [x] v1 removed from the server (2026-10-07): `/opt/horilla`, the
+      `horilla-gunicorn` service, the old `/etc/horilla.env`, and the backups
+      in `~/upgrade`. The pre-upgrade dump is kept off the server.
+- [x] v2 renamed to the plain `horilla` names (see the table at the top).
+- [x] Temporary SSH key for the backup transfer removed.
+- [x] Amazon Linux updated to the latest 2023 release and rebooted
+      (kernel 6.1.188, PostgreSQL 15.19, Python 3.12.14). The first attempt
+      was cut off by a dropped session; see "Server maintenance" in
+      [../DEPLOY.md](../DEPLOY.md).
+
+Still open:
+
+- [ ] Delete the `pre-v2-upgrade` and `pre-os-update` EBS snapshots, and
+      `~/pre-os-update.dump` on the server, once they are no longer needed.
+- [ ] Scheduled backups (nightly `pg_dump` off the server, and EBS snapshots).
+      Nothing backs up the database automatically yet.
+- [ ] A lock file with exact package versions. `requirements.txt` allows
+      ranges, so two installs days apart differed (Django 5.2.17 and 5.2.18).
 - [ ] Decide on hosting (EC2 only, or EC2 + RDS).
