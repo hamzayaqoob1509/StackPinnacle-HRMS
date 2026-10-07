@@ -68,10 +68,52 @@ class EmployeeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Employee
         fields = "__all__"
+        read_only_fields = ("employee_user_id",)
 
     def create(self, validated_data):
         validated_data["badge_id"] = get_next_badge_id()
         return super().create(validated_data)
+
+
+class EmployeeSelfSerializer(serializers.ModelSerializer):
+    """
+    The fields a person may change on their own record.
+
+    ``EmployeeSerializer`` is ``fields = "__all__"``, which is right for an HR
+    user editing anyone and wrong for everyone else: routed through it, an
+    employee updating their own profile could also set ``is_active``,
+    ``badge_id`` or ``additional_info``, and rename themselves.
+
+    This is an allowlist rather than an exclude list on purpose -- a field
+    added to Employee later is then non-editable by default, which is the
+    direction an accident should fail in.
+
+    Deliberately absent, and HR-owned: ``email`` (unique, and what
+    notifications key off), ``employee_first_name``/``employee_last_name``
+    (identity), ``badge_id``, ``is_active``, ``additional_info``, and the
+    onboarding provenance flags.
+    """
+
+    class Meta:
+        model = Employee
+        fields = (
+            "employee_profile",
+            "phone",
+            "address",
+            "country",
+            "state",
+            "city",
+            "zip",
+            "dob",
+            "gender",
+            "qualification",
+            "experience",
+            "marital_status",
+            "children",
+            "emergency_contact",
+            "emergency_contact_name",
+            "emergency_contact_relation",
+        )
 
 
 class EmployeeWorkInformationSerializer(serializers.ModelSerializer):

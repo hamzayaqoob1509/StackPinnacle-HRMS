@@ -1,5 +1,6 @@
-{% load horillafilters %} {% load basefilters %} {% load static %}
-{% load i18n %} {% include 'filter_tags.html' %}
+{% load horillafilters basefilters static i18n %}
+
+{% include 'filter_tags.html' %}
 {% if messages %}
 <div class="oh-alert-container">
   {% for message in messages %}
@@ -107,7 +108,7 @@
                               <img
                               src="{{emp.get_avatar}}"
                               class="oh-profile__image"
-                                alt="Username"
+                                alt="{{ emp }}"
                               />
                             </div>
                             <span class="oh-profile__name oh-text--dark">{{emp}}</span>
@@ -207,7 +208,7 @@
                               {% csrf_token %}
                               <button
                                 type="submit"
-                                class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                class="oh-btn oh-btn--danger w-100"
                                 title="{% trans 'Archive' %}"
                                 >
                                 <ion-icon name="archive"></ion-icon>
@@ -222,7 +223,7 @@
                               {% csrf_token %}
                               <button
                                 type="submit"
-                                class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                class="oh-btn oh-btn--danger w-100"
                                 title="{% trans 'Un-Archive' %}"
                               >
                                 <ion-icon name="archive"></ion-icon>
@@ -231,12 +232,12 @@
                           {% endif %} {% endif %} {% if perms.employee.delete_employee %}
                           <form
                             action="{% url 'employee-delete' emp.id %}?view=list"
-                            onsubmit="return confirm('{% trans "Are you sure want to delete this employee?" %}')"
+                            onsubmit="return confirm('{% trans "Are you sure want to delete this employee?"|escapejs %}')"
                             method="post" style = "width:100%"
                           > {% csrf_token %}
                             <button
                               type="submit"
-                              class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                              class="oh-btn oh-btn--danger w-100"
                               title="{% trans 'Remove' %}"
                             >
                               <ion-icon name="trash-outline"></ion-icon>
@@ -378,7 +379,7 @@
       {% else %}
         <div class="oh-wrapper">
           <div class="oh-404">
-              <img style="    width: 150px;height: 150px;" src="{% static 'images/ui/employees_empty.png' %}" class="oh-404__image mb-4" alt="Page not found. 404."/>
+              <img style="    width: 150px;height: 150px;" src="{% static 'images/ui/employees_empty.png' %}" class="oh-404__image mb-4" alt="{% trans 'Page not found. 404.' %}"/>
               <h5 class="oh-404__subtitle">{% trans "No group result found!" %}</h5>
           </div>
         </div>

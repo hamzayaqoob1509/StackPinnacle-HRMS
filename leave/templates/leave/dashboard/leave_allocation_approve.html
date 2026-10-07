@@ -34,7 +34,7 @@
                                 <a type="submit" href="{% url 'leave-allocation-request-approve' leave_allocation_request.id %}"
                                     title="{% trans 'Approve' %}"
                                     class="oh-btn oh-btn--success w-100"
-                                    onclick="event.stopPropagation();return confirm('{% trans "Do you want to Approve this leave allocation request?" %}')">
+                                    onclick="event.stopPropagation();return confirm('{% trans "Do you want to Approve this leave allocation request?"|escapejs %}')">
                                     <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
                                 </a>
                             {% endif %}
@@ -75,7 +75,7 @@
                 hx-target="#leaveAllocationApproveBody"
                 hx-get="{% url 'leave-allocation-approve' %}?{{pd}}&page={{ allocation_reqests.previous_page_number }}"
                 hx-trigger="click delay:0.3s">
-                <ion-icon name="caret-back-outline" role="img" class="md hydrated" aria-label="caret back outline"></ion-icon>
+                <ion-icon name="caret-back-outline" role="img" class="md hydrated" aria-label="{% trans 'caret back outline' %}"></ion-icon>
             </span>
         {% endif %}
 
@@ -85,7 +85,7 @@
                 hx-get="{% url 'leave-allocation-approve' %}?{{pd}}&page={{ allocation_reqests.next_page_number }}"
                 hx-trigger="click delay:0.3s">
                 <ion-icon name="caret-forward-outline" role="img" class="md hydrated"
-                    aria-label="caret back outline"></ion-icon>
+                    aria-label="{% trans 'caret back outline' %}"></ion-icon>
             </span>
         {% endif %}
         {% if allocation_reqests.has_next or allocation_reqests.has_previous %}

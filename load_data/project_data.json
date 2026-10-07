@@ -3,15 +3,16 @@
     "model": "project.project",
     "pk": 1,
     "fields": {
-      "title": "Horilla OpenSource HRMS",
+      "title": "Enterprise HR Platform",
       "status": "new",
       "start_date": "2025-07-01",
       "end_date": "2025-12-31",
       "document": "",
       "is_active": true,
-      "description": "Horilla stands as a complete Human Resource Management System (HRMS) software solution, offering a sophisticated and versatile platform designed to address the diverse and intricate needs of workforce management. Its holistic approach, coupled with a modular architecture, sets it apart in the realm of HR technology.",
-      "managers": [1],
-      "members": [12, 22, 28, 30, 27]
+      "description": "Internal platform initiative to modernize HR workflows across payroll, attendance, leave, and employee self-service.",
+      "managers": [
+        1
+      ]
     }
   },
   {
@@ -78,7 +79,9 @@
       "is_active": true,
       "description": "",
       "sequence": 0,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -96,7 +99,9 @@
       "is_active": true,
       "description": "",
       "sequence": 1,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -114,7 +119,9 @@
       "is_active": true,
       "description": "",
       "sequence": 0,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -132,7 +139,9 @@
       "is_active": true,
       "description": "",
       "sequence": 2,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -150,7 +159,9 @@
       "is_active": true,
       "description": "",
       "sequence": 3,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -168,7 +179,9 @@
       "is_active": true,
       "description": "",
       "sequence": 2,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -186,7 +199,9 @@
       "is_active": true,
       "description": "",
       "sequence": 3,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -204,8 +219,12 @@
       "is_active": true,
       "description": "Module",
       "sequence": 3,
-      "task_managers": [12],
-      "task_members": [13]
+      "task_managers": [
+        12
+      ],
+      "task_members": [
+        13
+      ]
     }
   },
   {
@@ -222,7 +241,9 @@
       "is_active": true,
       "description": "",
       "sequence": 2,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -240,7 +261,9 @@
       "is_active": true,
       "description": "",
       "sequence": 3,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   },
@@ -258,7 +281,9 @@
       "is_active": true,
       "description": "",
       "sequence": 3,
-      "task_managers": [12],
+      "task_managers": [
+        12
+      ],
       "task_members": []
     }
   }

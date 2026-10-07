@@ -1,15 +1,9 @@
 {% load i18n %}
 {% comment %} # 875 {% endcomment %}
-<button hidden id="previewHxButton"
-        hx-post="{% url 'get-employee-mail-preview' %}?{% if employee %}emp_id={{ employee.id }}&{% endif %}"
-        hx-target="#preview"
-        hx-include="#ack-form-{{ employee.id }}"
-        hx-on-htmx-before-request="if (!$('#template').val()) { event.preventDefault(); }">
-</button>
 
 <div id="ack-message-{{ employee.id }}"></div>
 
-<form id="ack-form-{{ employee.id }}" class="oh-general__tab-target oh-profile-section"
+<form id="ack-form-{{ employee.id }}"
       hx-post="{% url 'send-mail-to-employee' %}" hx-target="#ack-message-{{ employee.id }}"
       hx-encoding="multipart/form-data" onsubmit="return handleFormSubmit(event, {{ employee.id }})">
     <input type="hidden" name="id" value="{{ employee.id }}">
@@ -20,17 +14,20 @@
             <div class="oh-timeoff-modal__profile-content">
                 <div class="oh-profile mb-2">
                     <div class="oh-profile__avatar">
-                        <img src="{{ employee.get_avatar }}" class="oh-profile__image me-2" alt="Employee Avatar">
+                        <img src="{{ employee.get_avatar }}" class="oh-profile__image me-2" alt="{% trans 'Employee Avatar' %}">
                     </div>
                     <div class="oh-timeoff-modal__profile-info">
                         <span class="oh-timeoff-modal__user fw-bold">{{ employee.get_full_name }}</span>
-                        <span class="oh-timeoff-modal__user m-0" style="font-size: 18px; color: #4d4a4a">
+                        <span class="oh-timeoff-modal__user m-0" style="font-size: 15px; color: #4d4a4a">
                             {{ employee.get_job_position }} / {{ employee.get_department }}
                         </span>
                     </div>
                 </div>
             </div>
         {% endif %}
+
+      <div class="oh-general__tab-target oh-profile-section bg-[white] rounded-md border border-dark-50 w-full">
+        <div class="oh-profile-section__card">
 
         <!-- Also Send To -->
         <div class="form-group mt-2">
@@ -45,7 +42,7 @@
         <!-- Subject -->
         <div class="form-group mt-2">
             <label for="subject"><h6>{% trans "Subject" %}</h6></label>
-            <input required type="text" name="subject" class="oh-input w-100" id="subject" placeholder="Important Reminder">
+            <input required type="text" name="subject" class="oh-input w-100" id="subject" placeholder="{% trans 'Important Reminder' %}">
         </div>
 
         <!-- Template -->
@@ -63,16 +60,19 @@
         <div class="form-group mt-2">
             <label for="body"><h6>{% trans "Message Body" %}</h6></label>
             <div class="oh-input__group">
-                <div class="oh-tabs__view-buttons mt-2">
-                    <span class="tab-btn active" data-tab="write"><span>{% trans "Write" %}</span></span>
-                    <span class="tab-btn" data-tab="preview" hx-on:click="$('#previewHxButton').click();"><span>{% trans "Preview" %}</span></span>
+                <div class="oh-tabs__view-buttons mt-2 d-flex gap-1">
+                    <button type="button" class="oh-btn oh-btn--secondary oh-btn--small px-3 tab-btn" data-tab="write" id="writeTabBtn">
+                        <ion-icon name="create-outline" class="me-1"></ion-icon>
+                        {% trans "Write" %}
+                    </button>
+                    <button type="button" class="oh-btn oh-btn--secondary oh-btn--small px-3 tab-btn" data-tab="preview" id="previewTabBtn">
+                        <ion-icon name="eye-outline" class="me-1"></ion-icon>
+                        {% trans "Preview" %}
+                    </button>
                 </div>
                 <div id="write" class="oh-tabs__view active">
                     <textarea id="writeField" data-summernote name="body" required
-                              class="oh-input oh-input--textarea" placeholder="Type something here..."></textarea>
-                </div>
-                <div id="preview" class="oh-tabs__view">
-                    <div id="previewField" class="oh-input oh-input--textarea" placeholder="preview..."></div>
+                              class="oh-input oh-input--textarea" placeholder="{% trans 'Type something here...' %}"></textarea>
                 </div>
             </div>
         </div>
@@ -102,6 +102,8 @@
         <div class="modal-footer d-flex flex-row-reverse mt-3">
             <button type="submit" class="oh-btn oh-btn--secondary submit-send">{% trans "Send Mail" %}</button>
         </div>
+        </div>
+      </div>
     </div>
 </form>
 
@@ -111,6 +113,21 @@
         $("#messages").html(`<div class="oh-alert oh-alert--animated oh-alert--danger" role="alert">${message}</div>`);
     }
     function clearErrors() { $("#messages").empty(); }
+
+    function getCsrfToken() {
+        var t = $('input[name=csrfmiddlewaretoken]').val();
+        if (t) return t;
+        var m = document.cookie.match(/csrftoken=([^;]+)/);
+        return m ? m[1] : '';
+    }
+
+    function setWriteFieldHtml(html) {
+        if ($('#writeField').next('.note-editor').length) {
+            $('#writeField').summernote('code', html);
+        } else {
+            $('#writeField').val(html);
+        }
+    }
 
     // ---------- VALIDATION ----------
     function validateForm(formId, hasEmployee) {
@@ -139,8 +156,8 @@
         if (!validateForm(empId, hasEmployee)) return false;
 
         Swal.fire({
-            title: "Processing",
-            text: "Mail will be sent in the background",
+            title: "{% trans 'Processing'|escapejs %}",
+            text: "{% trans 'Mail will be sent in the background'|escapejs %}",
             icon: "info",
             timer: 1500,
             showConfirmButton: false
@@ -148,7 +165,7 @@
         return true;
     }
 
-    // ---------- TEMPLATE LOAD ----------
+    // ---------- TEMPLATE LOAD (on select change) ----------
     function loadTemplate(select) {
         const id = $(select).val();
         if (!id) return;
@@ -162,29 +179,104 @@
         });
     }
 
-    // ---------- INIT ----------
-    $(document).ready(function() {
-        // Load preselected employees if any
-        let selectedIds = JSON.parse($("#selectedInstances").attr("data-ids") || "[]");
-        $("#employees").val(selectedIds).change();
-
-        // Initialize Summernote conditionally
-        {% if employee %}
-            initializeSummernote({{ employee.id }}, {{ searchWords|safe }});
-        {% else %}
-            if (selectedIds.length > 0) {
-                initializeSummernote(selectedIds[0], {{ searchWords|safe }});
-            }
-        {% endif %}
-
-        // Tab switching
-        document.querySelectorAll(".tab-btn").forEach((btn) => {
-            btn.addEventListener("click", () => {
-                document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-                btn.classList.add("active");
-                document.querySelectorAll(".oh-tabs__view").forEach(c => c.classList.remove("active"));
-                document.getElementById(btn.dataset.tab).classList.add("active");
-            });
+    function loadTemplateIntoWriteField() {
+        var id = $("#template").val();
+        if (!id) {
+            showError("Select a template first, or type in the editor.");
+            return;
+        }
+        $.ajax({
+            type: "get",
+            url: "/employee/get-template/" + id + "/",
+            dataType: "json",
+            beforeSend: function () { if ($('#writeField').next('.note-editor').length) $('#writeField').summernote('disable'); },
+            success: function (response) { setWriteFieldHtml(response.body || ''); },
+            complete: function () { if ($('#writeField').next('.note-editor').length) $('#writeField').summernote('enable'); }
         });
+    }
+
+    function loadPreviewIntoWriteField() {
+        var body = '';
+        if ($('#writeField').next('.note-editor').length) {
+            try {
+                body = $('#writeField').summernote('code') || '';
+            } catch (err) { body = $('#writeField').val() || ''; }
+        } else {
+            body = $('#writeField').val() || '';
+        }
+        var stripped = body.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+        if (!stripped && (!body || body === '<p><br></p>')) {
+            showError("Add some message body before preview.");
+            return;
+        }
+        var form = document.getElementById('ack-form-{{ employee.id }}');
+        var fd = new FormData(form);
+        fd.set('body', body);
+        fetch("{% url 'get-employee-mail-preview' %}{% if employee %}?emp_id={{ employee.id }}{% endif %}", {
+            method: 'POST',
+            headers: { 'X-CSRFToken': getCsrfToken() },
+            body: fd,
+            credentials: 'same-origin'
+        }).then(function (r) {
+            if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
+            return r.text();
+        }).then(function (html) {
+            setWriteFieldHtml(html);
+        }).catch(function () { /* keep workflow */ });
+    }
+
+    function initSendMailForm() {
+        var dataIds = $("#selectedInstances").attr("data-ids");
+        let selectedIds = [];
+        try {
+            selectedIds = JSON.parse(dataIds || "[]");
+        } catch (e) { selectedIds = []; }
+        var $employees = $("#employees");
+        if ($employees.length) $employees.val(selectedIds).change();
+
+        {% if employee %}
+        if ($('#writeField').length && typeof initializeSummernote === 'function') {
+            initializeSummernote({{ employee.id }}, {{ searchWords|safe }});
+        }
+        {% else %}
+        // Bulk Mail (nav dropdown) opens with nothing pre-selected -- recipients
+        // are chosen via the "Also send to" field, not row checkboxes -- so the
+        // hint must initialize even when selectedIds is empty. candId is only
+        // used later, if a mention is actually inserted, to preload preview
+        // data; get-template-hint already handles a missing candidate_id
+        // gracefully, so null here doesn't break the hint dropdown itself.
+        if ($('#writeField').length && typeof initializeSummernote === 'function') {
+            initializeSummernote(selectedIds[0] || null, {{ searchWords|safe }});
+        }
+        {% endif %}
+    }
+
+    // Delegated handlers so clicks work when this fragment is loaded via HTMX after DOM ready
+    $(document).off('click.sendMailWrite', '#writeTabBtn').on('click.sendMailWrite', '#writeTabBtn', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        loadTemplateIntoWriteField();
+    });
+    $(document).off('click.sendMailPreview', '#previewTabBtn').on('click.sendMailPreview', '#previewTabBtn', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        loadPreviewIntoWriteField();
+    });
+
+    // This view requires @hx_request_required, so this fragment can only
+    // ever arrive via an htmx swap -- $(document).ready() is not a real
+    // fallback for it, and calling it unconditionally guaranteed a SECOND
+    // initSendMailForm() call on every open (jQuery's ready() fires
+    // immediately when the document is already loaded, which it always is
+    // by the time this fragment swaps in). That double call to
+    // initializeSummernote() per open was corrupting Summernote's re-init
+    // on the 2nd+ open, leaving the raw textarea visible alongside the rich
+    // editor. Namespaced + re-bound (not raw addEventListener) so reopening
+    // this modal replaces the previous listener instead of stacking a new
+    // one on top of it.
+    $(document.body).off('htmx:afterSwap.sendMailInit').on('htmx:afterSwap.sendMailInit', function (ev) {
+        if (ev.detail.target.querySelector && ev.detail.target.querySelector('#writeTabBtn')) {
+            initSendMailForm();
+        }
     });
 </script>

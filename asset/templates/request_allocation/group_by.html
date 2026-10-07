@@ -37,7 +37,7 @@
                             <div class="oh-sticky-table__td">
                                 <button href="#" class="oh-btn oh-btn--secondary" role="button"
                                     data-toggle="oh-modal-toggle" data-target="#objectCreateModal"
-                                    hx-get="{%url 'asset-allocate-return'  asset_id=asset.asset_id.id %}"
+                                    hx-get="{%url 'asset-allocate-return'  assignment_id=asset.id %}"
                                     hx-target="#objectCreateModalTarget"><ion-icon
                                         name="return-down-back-sharp"></ion-icon>{% trans "Return" %}</button>
                             </div>
@@ -206,7 +206,7 @@
                                                 <div class="oh-modal__dialog oh-modal__dialog--timeoff oh-timeoff-modal">
                                                     <div class="oh-modal__dialog-header">
 
-                                                        <button class="oh-modal__close" aria-label="Close">
+                                                        <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
                                                             <ion-icon name="close-outline"></ion-icon>
                                                         </button>
                                                     </div>
@@ -343,7 +343,7 @@
                                     <div class="oh-profile oh-profile--md">
                                         <div class="oh-profile__avatar mr-1">
                                             <img src="{{asset_request.requested_employee_id.get_avatar}}"
-                                                class="oh-profile__image" alt="Mary Magdalene" />
+                                                class="oh-profile__image" alt="{{ asset_request.requested_employee_id }}" />
                                         </div>
                                         <span class="oh-profile__name oh-text--dark">{{asset_request.requested_employee_id}}
                                         </span>
@@ -404,7 +404,7 @@
                             <div class="oh-modal" id="requestStatus{{asset_request.id}}" role="dialog" aria-labelledby="tableTimeOffModal" aria-hidden="true">
                                 <div class="oh-modal__dialog oh-modal__dialog--timeoff oh-timeoff-modal">
                                     <div class="oh-modal__dialog-header">
-                                        <button class="oh-modal__close" aria-label="Close">
+                                        <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
                                             <ion-icon name="close-outline"></ion-icon>
                                         </button>
                                     </div>
@@ -577,7 +577,7 @@
                                                 <div class="oh-sticky-table__td">
                                                     <button href="#" class="oh-btn oh-btn--secondary" role="button"
                                                         data-toggle="oh-modal-toggle" data-target="#objectCreateModal"
-                                                        hx-get="{%url 'asset-allocate-return'  asset_id=asset_allocation.asset_id.id %}"
+                                                        hx-get="{%url 'asset-allocate-return'  assignment_id=asset_allocation.id %}"
                                                         hx-target="#objectCreateModalTarget"><ion-icon
                                                             name="return-down-back-sharp"></ion-icon>{% trans "Return" %}
                                                     </button>
@@ -599,7 +599,7 @@
                                         <div class="oh-modal" id="returnStatus{{asset_allocation.id}}" role="dialog" aria-labelledby="tableTimeOffModal" aria-hidden="true">
                                             <div class="oh-modal__dialog oh-modal__dialog--timeoff oh-timeoff-modal">
                                                 <div class="oh-modal__dialog-header">
-                                                    <button class="oh-modal__close" aria-label="Close">
+                                                    <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
                                                         <ion-icon name="close-outline"></ion-icon>
                                                     </button>
                                                 </div>
@@ -659,7 +659,7 @@
                                                     {% if not asset_allocation.return_status %}
                                                     <button class="oh-btn oh-btn--secondary w-100" role="button"
                                                         data-toggle="oh-modal-toggle" data-target="#objectCreateModal"
-                                                        hx-get="{%url 'asset-allocate-return'  asset_id=asset_allocation.asset_id.id %}"
+                                                        hx-get="{%url 'asset-allocate-return'  assignment_id=asset_allocation.id %}"
                                                         hx-target="#objectCreateModalTarget">
                                                         <ion-icon name="return-down-back-sharp"></ion-icon>
                                                         {% trans "Return" %}
@@ -765,7 +765,7 @@
                                     data-target="#returnStatus{{asset_allocation.id}}">
                                     <span class="oh-dot oh-dot--small  me-1 oh-dot--color oh-dot--warning"></span>
                                     <span class="link-warning">
-                                        In use
+                                        {% trans "In use" %}
                                     </span>
                                 </div>
                                 {% endif %}
@@ -773,7 +773,7 @@
                                 <div class="oh-sticky-table__td">
                                     <button href="#" class="oh-btn oh-btn--secondary" role="button"
                                         data-toggle="oh-modal-toggle" data-target="#objectCreateModal"
-                                        hx-get="{%url 'asset-allocate-return'  asset_id=asset_allocation.asset_id.id %}"
+                                        hx-get="{%url 'asset-allocate-return'  assignment_id=asset_allocation.id %}"
                                         hx-target="#objectCreateModalTarget"><ion-icon
                                             name="return-down-back-sharp"></ion-icon>{% trans "Return" %}</button>
                                 </div>
@@ -795,7 +795,7 @@
                                 <div class="oh-modal__dialog oh-modal__dialog--timeoff oh-timeoff-modal">
                                     <div class="oh-modal__dialog-header">
 
-                                        <button class="oh-modal__close" aria-label="Close">
+                                        <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
                                             <ion-icon name="close-outline"></ion-icon>
                                         </button>
                                     </div>
@@ -858,7 +858,7 @@
                                         {% if not asset_allocation.return_status %}
                                         <button class="oh-btn oh-btn--secondary w-100" role="button"
                                             data-toggle="oh-modal-toggle" data-target="#objectCreateModal"
-                                            hx-get="{%url 'asset-allocate-return'  asset_id=asset_allocation.asset_id.id %}"
+                                            hx-get="{%url 'asset-allocate-return'  assignment_id=asset_allocation.id %}"
                                             hx-target="#objectCreateModalTarget">
                                             <ion-icon name="return-down-back-sharp"></ion-icon>{% trans "Return" %}</button>
                                         {%endif %}

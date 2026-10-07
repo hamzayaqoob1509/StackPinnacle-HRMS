@@ -20,10 +20,11 @@ from django.contrib.auth.models import Permission
 from django.core import serializers
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from base.backends import ConfiguredEmailBackend
@@ -31,6 +32,7 @@ from base.methods import sortby
 from employee.models import Employee
 from horilla import settings
 from horilla.decorators import hx_request_required, login_required, permission_required
+from horilla.http import HorillaRedirect
 from notifications.signals import notify
 from recruitment.decorators import manager_can_enter, recruitment_manager_can_enter
 from recruitment.filters import CandidateFilter, RecruitmentFilter, StageFilter
@@ -136,20 +138,14 @@ def recruitment(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb="You are chosen as one of recruitment manager",
-                    verb_ar="تم اختيارك كأحد مديري التوظيف",
-                    verb_de="Sie wurden als einer der Personalvermittler ausgewählt",
-                    verb_es="Has sido elegido/a como uno de los gerentes de contratación",
-                    verb_fr="Vous êtes choisi(e) comme l'un des responsables du recrutement",
+                    verb=gettext_noop("You are chosen as one of recruitment manager"),
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
             response = render(
                 request, "recruitment/recruitment_form.html", {"form": form}
             )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(request, "recruitment/recruitment_form.html", {"form": form})
 
 
@@ -173,12 +169,10 @@ def remove_recruitment_manager(request, mid, rid):
     notify.send(
         request.user.employee_get,
         recipient=manager.employee_user_id,
-        verb=f"You are removed from recruitment manager from {recruitment_obj}",
-        verb_ar=f"تمت إزالتك من وظيفة مدير التوظيف في {recruitment_obj}",
-        verb_de=f"Sie wurden als Personalvermittler von {recruitment_obj} entfernt",
-        verb_es=f"Has sido eliminado/a como gerente de contratación de {recruitment_obj}",
-        verb_fr=f"Vous avez été supprimé(e) en tant que responsable\
-                du recrutement de {recruitment_obj}",
+        verb=gettext_noop(
+            "You are removed from recruitment manager from %(recruitment_obj)s"
+        ),
+        verb_params={"recruitment_obj": str(recruitment_obj)},
         icon="person-remove",
         redirect="",
     )
@@ -262,15 +256,12 @@ def recruitment_update(request, rec_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"{recruitment_obj} is updated, You are chosen as one of the managers",
-                    verb_ar=f"{recruitment_obj} تم تحديثه، تم اختيارك كأحد المديرين",
-                    verb_de=f"{recruitment_obj} wurde aktualisiert. Sie wurden als\
-                            einer der Manager ausgewählt",
-                    verb_es=f"{recruitment_obj} ha sido actualizado/a. Has sido elegido\
-                            a como uno de los gerentes",
-                    verb_fr=f"{recruitment_obj} a été mis(e) à jour. Vous êtes choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "%(recruitment_obj)s is updated. You are chosen as one of the managers."
+                    ),
+                    verb_params={"recruitment_obj": str(recruitment_obj)},
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
             return HttpResponse(
@@ -312,7 +303,7 @@ def recruitment_delete(request, rec_id):
         messages.error(request, error)
         messages.error(request, _("You cannot delete this recruitment"))
     recruitment_obj = Recruitment.objects.all()
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -332,7 +323,7 @@ def recruitment_pipeline(request):
     if request.method == "POST":
         if request.POST.get(
             "recruitment_managers"
-        ) is not None and request.user.has_perm("add_recruitment"):
+        ) is not None and request.user.has_perm("recruitment.add_recruitment"):
             recruitment_form = RecruitmentDropDownForm(request.POST)
             if recruitment_form.is_valid():
                 recruitment_obj = recruitment_form.save()
@@ -346,20 +337,17 @@ def recruitment_pipeline(request):
                     notify.send(
                         request.user.employee_get,
                         recipient=users,
-                        verb=f"You are chosen as recruitment manager for\
-                                the recruitment {recruitment_obj}",
-                        verb_ar=f"تم اختيارك كمدير توظيف للتوظيف {recruitment_obj}",
-                        verb_de=f"Sie wurden als Personalvermittler für die Rekrutierung\
-                                {recruitment_obj} ausgewählt",
-                        verb_es=f"Has sido elegido/a como gerente de contratación para la contratación {recruitment_obj}",
-                        verb_fr=f"Vous êtes choisi(e) comme responsable du recrutement pour le recrutement {recruitment_obj}",
+                        verb=gettext_noop(
+                            "You are chosen as recruitment manager for the recruitment %(recruitment_obj)s"
+                        ),
+                        verb_params={"recruitment_obj": str(recruitment_obj)},
                         icon="people-circle",
-                        redirect=reverse("pipeline"),
+                        redirect=reverse("cbv-pipeline"),
                     )
 
-                return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+                return HorillaRedirect(request)
         elif request.FILES.get("resume") is not None:
-            if request.user.has_perm("add_candidate") or is_stagemanager(
+            if request.user.has_perm("recruitment.add_candidate") or is_stagemanager(
                 request,
             ):
                 candidate_form = CandidateDropDownForm(request.POST, request.FILES)
@@ -374,18 +362,19 @@ def recruitment_pipeline(request):
                         notify.send(
                             request.user.employee_get,
                             recipient=users,
-                            verb=f"New candidate arrived on stage {candidate_obj.stage_id.stage}",
-                            verb_ar=f"وصل مرشح جديد إلى المرحلة {candidate_obj.stage_id.stage}",
-                            verb_de=f"Neuer Kandidat ist auf der Stufe {candidate_obj.stage_id.stage} angekommen",
-                            verb_es=f"Nuevo candidato llegó a la etapa {candidate_obj.stage_id.stage}",
-                            verb_fr=f"Nouveau candidat arrivé à l'étape {candidate_obj.stage_id.stage}",
+                            verb=gettext_noop(
+                                "New candidate arrived on stage %(stage)s"
+                            ),
+                            verb_params={"stage": str(candidate_obj.stage_id.stage)},
                             icon="person-add",
-                            redirect=reverse("pipeline"),
+                            redirect=reverse("cbv-pipeline"),
                         )
 
                     messages.success(request, _("Candidate added."))
-                    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
-        elif request.POST.get("stage_managers") and request.user.has_perm("add_stage"):
+                    return HorillaRedirect(request)
+        elif request.POST.get("stage_managers") and request.user.has_perm(
+            "recruitment.add_stage"
+        ):
             stage_form = StageDropDownForm(request.POST)
             if stage_form.is_valid():
                 if recruitment_manages(
@@ -402,17 +391,19 @@ def recruitment_pipeline(request):
                         notify.send(
                             request.user.employee_get,
                             recipient=users,
-                            verb=f"You are chosen as a stage manager on the stage {stage_obj.stage} in recruitment {stage_obj.recruitment_id}",
-                            verb_ar=f"لقد تم اختيارك كمدير مرحلة في المرحلة {stage_obj.stage} في التوظيف {stage_obj.recruitment_id}",
-                            verb_de=f"Sie wurden als Bühnenmanager für die Stufe {stage_obj.stage} in der Rekrutierung {stage_obj.recruitment_id} ausgewählt",
-                            verb_es=f"Has sido elegido/a como gerente de etapa en la etapa {stage_obj.stage} en la contratación {stage_obj.recruitment_id}",
-                            verb_fr=f"Vous avez été choisi(e) comme responsable de l'étape {stage_obj.stage} dans le recrutement {stage_obj.recruitment_id}",
+                            verb=gettext_noop(
+                                "You are chosen as a stage manager on the stage %(stage)s in recruitment %(recruitment_id)s"
+                            ),
+                            verb_params={
+                                "stage": str(stage_obj.stage),
+                                "recruitment_id": str(stage_obj.recruitment_id),
+                            },
                             icon="people-circle",
-                            redirect=reverse("pipeline"),
+                            redirect=reverse("cbv-pipeline"),
                         )
 
-                    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
-                messages.info(request, _("You dont have access"))
+                    return HorillaRedirect(request)
+                messages.info(request, _("You don't have access"))
     return render(
         request,
         template,
@@ -462,21 +453,18 @@ def stage_update_pipeline(request, stage_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"{stage_obj.stage} stage in recruitment {stage_obj.recruitment_id}\
-                            is updated, You are chosen as one of the managers",
-                    verb_ar=f"تم تحديث مرحلة {stage_obj.stage} في التوظيف {stage_obj.recruitment_id}\
-                            ، تم اختيارك كأحد المديرين",
-                    verb_de=f"Die Stufe {stage_obj.stage} in der Rekrutierung {stage_obj.recruitment_id}\
-                            wurde aktualisiert. Sie wurden als einer der Manager ausgewählt",
-                    verb_es=f"Se ha actualizado la etapa {stage_obj.stage} en la contratación {stage_obj.recruitment_id}.\
-                            Has sido elegido/a como uno de los gerentes",
-                    verb_fr=f"L'étape {stage_obj.stage} dans le recrutement {stage_obj.recruitment_id} a été mise à jour.\
-                            Vous avez été choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "%(stage)s stage in recruitment %(recruitment_id)s is updated. You are chosen as one of the managers."
+                    ),
+                    verb_params={
+                        "stage": str(stage_obj.stage),
+                        "recruitment_id": str(stage_obj.recruitment_id),
+                    },
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
-            return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+            return HorillaRedirect(request)
 
     return render(request, "pipeline/form/stage_update.html", {"form": form})
 
@@ -502,23 +490,15 @@ def recruitment_update_pipeline(request, rec_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"{recruitment_obj} is updated, You are chosen as one of the managers",
-                    verb_ar=f"تم تحديث {recruitment_obj}، تم اختيارك كأحد المديرين",
-                    verb_de=f"{recruitment_obj} wurde aktualisiert. Sie wurden als einer der Manager ausgewählt",
-                    verb_es=f"{recruitment_obj} ha sido actualizado/a. Has sido elegido\
-                            a como uno de los gerentes",
-                    verb_fr=f"{recruitment_obj} a été mis(e) à jour. Vous avez été\
-                            choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "%(recruitment_obj)s is updated. You are chosen as one of the managers."
+                    ),
+                    verb_params={"recruitment_obj": str(recruitment_obj)},
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
-            response = render(
-                request, "pipeline/form/recruitment_update.html", {"form": form}
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(request, "pipeline/form/recruitment_update.html", {"form": form})
 
 
@@ -531,7 +511,7 @@ def recruitment_delete_pipeline(request, rec_id):
     Args:
         id: recruitment instance id
     Returns:
-        HttpResponseRedirect: Used to refresh the page
+        HorillaRedirect: Used to refresh the page
     """
     recruitment_obj = Recruitment.objects.get(id=rec_id)
     try:
@@ -540,7 +520,7 @@ def recruitment_delete_pipeline(request, rec_id):
     except Exception as error:
         messages.error(request, error)
         messages.error(request, _("Recruitment already in use."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -588,20 +568,17 @@ def candidate_stage_update(request, cand_id):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb=f"New candidate arrived on stage {stage_obj.stage}",
-                verb_ar=f"وصل مرشح جديد إلى المرحلة {stage_obj.stage}",
-                verb_de=f"Neuer Kandidat ist auf der Stufe {stage_obj.stage} angekommen",
-                verb_es=f"Nuevo candidato llegó a la etapa {stage_obj.stage}",
-                verb_fr=f"Nouveau candidat arrivé à l'étape {stage_obj.stage}",
+                verb=gettext_noop("New candidate arrived on stage %(stage)s"),
+                verb_params={"stage": str(stage_obj.stage)},
                 icon="person-add",
-                redirect=reverse("pipeline"),
+                redirect=reverse("cbv-pipeline"),
             )
 
         return JsonResponse(
             {"type": "success", "message": _("Candidate stage updated")}
         )
     return JsonResponse(
-        {"type": "danger", "message": _("Something went wrong, Try agian.")}
+        {"type": "danger", "message": _("Something went wrong, Try again.")}
     )
 
 
@@ -623,12 +600,7 @@ def add_note(request, cand_id=None):
             note.updated_by = request.user.employee_get
             note.save()
             messages.success(request, _("Note added successfully.."))
-            response = render(
-                request, "pipeline/pipeline_components/add_note.html", {"form": form}
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(
         request,
         "pipeline/pipeline_components/add_note.html",
@@ -668,12 +640,7 @@ def note_update(request, note_id):
         if form.is_valid():
             form.save()
             messages.success(request, _("Note updated successfully..."))
-            response = render(
-                request, "pipeline/pipeline_components/update_note.html", {"form": form}
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(
         request, "pipeline/pipeline_components/update_note.html", {"form": form}
     )
@@ -765,19 +732,18 @@ def stage(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"Stage {stage_obj} is updated on recruitment {stage_obj.recruitment_id}, You are chosen as one of the managers",
-                    verb_ar=f"تم تحديث المرحلة {stage_obj} في التوظيف {stage_obj.recruitment_id}، تم اختيارك كأحد المديرين",
-                    verb_de=f"Stufe {stage_obj} wurde in der Rekrutierung {stage_obj.recruitment_id} aktualisiert. Sie wurden als einer der Manager ausgewählt",
-                    verb_es=f"La etapa {stage_obj} ha sido actualizada en la contratación {stage_obj.recruitment_id}. Has sido elegido/a como uno de los gerentes",
-                    verb_fr=f"L'étape {stage_obj} a été mise à jour dans le recrutement {stage_obj.recruitment_id}. Vous avez été choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "Stage %(stage_obj)s is updated on recruitment %(recruitment_id)s. You are chosen as one of the managers."
+                    ),
+                    verb_params={
+                        "stage_obj": str(stage_obj),
+                        "recruitment_id": str(stage_obj.recruitment_id),
+                    },
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
-            response = render(request, "stage/stage_form.html", {"form": form})
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(request, "stage/stage_form.html", {"form": form})
 
 
@@ -832,11 +798,10 @@ def remove_stage_manager(request, mid, sid):
     notify.send(
         request.user.employee_get,
         recipient=manager.employee_user_id,
-        verb=f"You are removed from stage managers from stage {stage_obj}",
-        verb_ar=f"تمت إزالتك من مديري المرحلة من المرحلة {stage_obj}",
-        verb_de=f"Sie wurden als Bühnenmanager von der Stufe {stage_obj} entfernt",
-        verb_es=f"Has sido eliminado/a de los gerentes de etapa de la etapa {stage_obj}",
-        verb_fr=f"Vous avez été supprimé(e) en tant que responsable de l'étape {stage_obj}",
+        verb=gettext_noop(
+            "You are removed from stage managers from stage %(stage_obj)s"
+        ),
+        verb_params={"stage_obj": str(stage_obj)},
         icon="person-remove",
         redirect="",
     )
@@ -909,7 +874,7 @@ def stage_delete(request, stage_id):
             manager.employee_user_id.user_permissions.remove(view_recruitment.id)
         initial_stage_manager = all_this_manger.filter(stage_type="initial")
         if len(initial_stage_manager) == 1:
-            add_candidate = Permission.objects.get(codename="add_candidate")
+            add_candidate = Permission.objects.get(codename="recruitment.add_candidate")
             change_candidate = Permission.objects.get(codename="change_candidate")
             manager.employee_user_id.user_permissions.remove(add_candidate.id)
             manager.employee_user_id.user_permissions.remove(change_candidate.id)
@@ -920,7 +885,7 @@ def stage_delete(request, stage_id):
     except Exception as error:
         messages.error(request, error)
         messages.error(request, _("You cannot delete this stage"))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1137,7 +1102,7 @@ def candidate_delete(request, cand_id):
     except Exception as error:
         messages.error(request, error)
         messages.error(request, _("You cannot delete this candidate"))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1149,7 +1114,7 @@ def candidate_archive(request, cand_id):
     candidate_obj = Candidate.objects.get(id=cand_id)
     candidate_obj.is_active = not candidate_obj.is_active
     candidate_obj.save()
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1195,7 +1160,11 @@ def candidate_bulk_archive(request):
         candidate_obj = Candidate.objects.get(id=cand_id)
         candidate_obj.is_active = is_active
         candidate_obj.save()
-        messages.success(request, f"{candidate_obj} is {message}")
+        messages.success(
+            request,
+            _("%(candidate_obj)s is %(message)s")
+            % {"candidate_obj": candidate_obj, "message": message},
+        )
     return JsonResponse({"message": "Success"})
 
 

@@ -22,39 +22,39 @@ from datetime import date, datetime
 from itertools import chain
 from urllib.parse import parse_qs
 
-try:
-    import fitz  # type: ignore # PyMuPDF
-    HAS_PYMUPDF = True
-except ImportError:
-    HAS_PYMUPDF = False
-    fitz = None
-
+import phonenumbers
+import pycountry
+import pymupdf  # type: ignore
+import spacy
+from dateutil import parser as dateutil_parser
 from django import template
-from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.models import User
 from django.core import serializers
 from django.core.cache import cache as CACHE
 from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Case, IntegerField, ProtectedError, Q, When
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
+from rapidfuzz import fuzz
 
 from base.backends import ConfiguredEmailBackend
 from base.context_processors import check_candidate_self_tracking
 from base.countries import country_arr, s_a, states
 from base.forms import MailTemplateForm
 from base.methods import (
+    build_safe_template_request,
     eval_validate,
     export_data,
     generate_pdf,
     get_key_instances,
+    sanitize_mail_template_body,
     sortby,
 )
 from base.models import EmailLog, HorillaMailTemplate, JobPosition, clear_messages
@@ -69,10 +69,13 @@ from horilla.decorators import (
     permission_required,
 )
 from horilla.group_by import group_by_queryset
+from horilla.http import HorillaRedirect
+from horilla_auth.models import HorillaUser
 from horilla_documents.models import Document
 from notifications.signals import notify
 from recruitment.auth import CandidateAuthenticationBackend
 from recruitment.decorators import (
+    all_manager_can_enter,
     candidate_login_required,
     manager_can_enter,
     recruitment_manager_can_enter,
@@ -116,6 +119,8 @@ from recruitment.models import (
     Recruitment,
     RecruitmentGeneralSetting,
     RecruitmentSurvey,
+    RecruitmentSurveyAnswer,
+    RejectedCandidate,
     RejectReason,
     Resume,
     Skill,
@@ -186,12 +191,13 @@ def is_recruitmentmanager(request, rec_id=False):
 def pipeline_grouper(request, recruitments):
     groups = []
     for rec in recruitments:
-        stages = StageFilter(request.GET, queryset=rec.stage_set.all()).qs.order_by(
+        stages_qs = StageFilter(request.GET, queryset=rec.stage_set.all()).qs.order_by(
             "sequence"
         )
+        stages = list(stages_qs)
         all_stages_grouper = []
         data = {"recruitment": rec, "stages": []}
-        for stage in stages.order_by("sequence"):
+        for stage in stages:
             all_stages_grouper.append({"grouper": stage, "list": []})
             stage_candidates = CandidateFilter(
                 request.GET,
@@ -277,15 +283,11 @@ def recruitment(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb="You are chosen as one of recruitment manager",
-                    verb_ar="تم اختيارك كأحد مديري التوظيف",
-                    verb_de="Sie wurden als einer der Personalvermittler ausgewählt",
-                    verb_es="Has sido elegido/a como uno de los gerentes de contratación",
-                    verb_fr="Vous êtes choisi(e) comme l'un des responsables du recrutement",
+                    verb=gettext_noop("You are chosen as one of recruitment manager"),
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
-            return HttpResponse("<script>location.reload();</script>")
+            return HorillaRedirect(request)
     return render(
         request, "recruitment/recruitment_form.html", {"form": form, "dynamic": dynamic}
     )
@@ -344,7 +346,7 @@ def recruitment_update(request, rec_id):
         messages.error(
             request, _("The recruitment entry you are trying to edit does not exist.")
         )
-        return HttpResponse("<script>window.location.reload();</script>")
+        return HorillaRedirect(request)
     survey_template_list = []
     survey_templates = RecruitmentSurvey.objects.filter(
         recruitment_ids=rec_id
@@ -386,16 +388,12 @@ def recruitment_update(request, rec_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"{recruitment_obj} is updated, You are chosen as one of the managers",
-                    verb_ar=f"{recruitment_obj} تم تحديثه، تم اختيارك كأحد المديرين",
-                    verb_de=f"{recruitment_obj} wurde aktualisiert. Sie wurden als\
-                            einer der Manager ausgewählt",
-                    verb_es=f"{recruitment_obj} ha sido actualizado/a. Has sido elegido\
-                            a como uno de los gerentes",
-                    verb_fr=f"{recruitment_obj} a été mis(e) à jour. Vous êtes choisi(e) comme\
-                            l'un des responsables",
+                    verb=gettext_noop(
+                        "%(recruitment_obj)s is updated. You are chosen as one of the managers."
+                    ),
+                    verb_params={"recruitment_obj": str(recruitment_obj)},
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
             return HttpResponse(
@@ -519,14 +517,15 @@ def filter_pipeline(request):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter("recruitment.view_recruitment")
 def get_stage_badge_count(request):
     """
     Method to update stage badge count
     """
-    stage_id = request.GET["stage_id"]
-    stage = Stage.objects.get(id=stage_id)
-    count = stage.candidate_set.filter(is_active=True).count()
+    stage_id = request.GET.get("stage_id")
+    stage = Stage.find(stage_id)
+    count = stage.candidate_set.filter(is_active=True).count() if stage else 0
     return HttpResponse(count)
 
 
@@ -536,11 +535,29 @@ def stage_component(request, view: str = "list"):
     """
     This method will stage tab contents
     """
-    recruitment_id = request.GET["rec_id"]
-    recruitment = Recruitment.objects.get(id=recruitment_id)
-    ordered_stages = CACHE.get(request.session.session_key + "pipeline")[
-        "stages"
-    ].filter(recruitment_id__id=recruitment_id)
+    recruitment_id = request.GET.get("rec_id")
+    if not recruitment_id or not (recruitment := Recruitment.find(recruitment_id)):
+        return HorillaRedirect(
+            request,
+            message=(
+                _("Recruitment ID missing.")
+                if not recruitment_id
+                else _("No Recruitment found matching the query.")
+            ),
+        )
+
+    cache_key = request.session.session_key + "pipeline"
+    pipeline_cache = CACHE.get(cache_key)
+    if pipeline_cache is None:
+        pipeline_cache = {
+            "stages": StageFilter(request.GET).qs.order_by("sequence"),
+            "filter_dict": get_key_instances(
+                Recruitment, parse_qs(request.GET.urlencode())
+            ),
+        }
+        CACHE.set(cache_key, pipeline_cache)
+
+    ordered_stages = pipeline_cache["stages"].filter(recruitment_id__id=recruitment_id)
     template = "pipeline/components/stages_tab_content.html"
     if view == "card":
         template = "pipeline/kanban_components/kanban_stage_components.html"
@@ -550,9 +567,7 @@ def stage_component(request, view: str = "list"):
         {
             "rec": recruitment,
             "ordered_stages": ordered_stages,
-            "filter_dict": CACHE.get(request.session.session_key + "pipeline")[
-                "filter_dict"
-            ],
+            "filter_dict": pipeline_cache.get("filter_dict"),
         },
     )
 
@@ -560,53 +575,57 @@ def stage_component(request, view: str = "list"):
 @login_required
 @manager_can_enter(perm="recruitment.change_candidate")
 def update_candidate_stage_and_sequence(request):
-    """
-    Update candidate sequence method
-    """
+    """Update candidate sequence"""
+
     order_list = request.GET.getlist("order")
-    stage_id = request.GET["stage_id"]
-    stage = (
-        CACHE.get(request.session.session_key + "pipeline")["stages"]
-        .filter(id=stage_id)
-        .first()
-    )
+    stage_id = request.GET.get("stage_id")
+
+    pipeline_cache = CACHE.get(request.session.session_key + "pipeline")
+    if not pipeline_cache:
+        return JsonResponse({"message": _("Pipeline cache expired.")})
+
+    stage = pipeline_cache["stages"].filter(id=stage_id).first()
+    if not stage:
+        return JsonResponse({"message": _("Stage not found.")})
+
     context = {}
+
     for index, cand_id in enumerate(order_list):
-        candidate = CACHE.get(request.session.session_key + "pipeline")[
-            "candidates"
-        ].filter(id=cand_id)
-        candidate.update(sequence=index, stage_id=stage)
-    if stage.stage_type == "hired":
-        if stage.recruitment_id.is_vacancy_filled():
-            context["message"] = _("Vaccancy is filled")
-            context["vacancy"] = stage.recruitment_id.vacancy
+        pipeline_cache["candidates"].filter(id=cand_id).update(
+            sequence=index, stage_id=stage
+        )
+
+    if stage.stage_type == "hired" and stage.recruitment_id.is_vacancy_filled():
+        context["message"] = _("Vacancy is filled")
+        context["vacancy"] = stage.recruitment_id.vacancy
+
     return JsonResponse(context)
 
 
 @login_required
 @manager_can_enter(perm="recruitment.change_candidate")
 def update_candidate_sequence(request):
-    """
-    Update candidate sequence method
-    """
+    """Update candidate sequence"""
+
     order_list = request.GET.getlist("order")
-    stage_id = request.GET["stage_id"]
-    stage = (
-        CACHE.get(request.session.session_key + "pipeline")["stages"]
-        .filter(id=stage_id)
-        .first()
-    )
-    data = {}
+    stage_id = request.GET.get("stage_id")
+
+    pipeline_cache = CACHE.get(request.session.session_key + "pipeline")
+    if not pipeline_cache:
+        return JsonResponse({"message": _("Pipeline cache expired.")})
+
+    stage = pipeline_cache["stages"].filter(id=stage_id).first()
+    if not stage:
+        return JsonResponse({"message": _("Stage not found.")})
 
     for index, cand_id in enumerate(order_list):
-        candidate = CACHE.get(request.session.session_key + "pipeline")[
-            "candidates"
-        ].filter(id=cand_id)
-        candidate.update(
-            sequence=index, stage_id=stage, hired=(stage.stage_type == "hired")
+        pipeline_cache["candidates"].filter(id=cand_id).update(
+            sequence=index,
+            stage_id=stage,
+            hired=(stage.stage_type == "hired"),
         )
 
-    return JsonResponse(data)
+    return JsonResponse({})
 
 
 def limited_paginator_qry(queryset, page):
@@ -626,20 +645,22 @@ def candidate_component(request):
     Candidate component
     """
     stage_id = request.GET.get("stage_id")
-    stage = (
-        CACHE.get(request.session.session_key + "pipeline")["stages"]
-        .filter(id=stage_id)
-        .first()
-    )
-    candidates = CACHE.get(request.session.session_key + "pipeline")[
-        "candidates"
-    ].filter(stage_id=stage)
+    cache_key = request.session.session_key + "pipeline"
+    cache = CACHE.get(cache_key)
+    if cache is None:
+        cache = {
+            "stages": StageFilter(request.GET).qs.order_by("sequence"),
+            "candidates": False,
+        }
+    if not cache.get("candidates"):
+        cache["candidates"] = CandidateFilter(request.GET).qs.filter(is_active=True)
+    CACHE.set(cache_key, cache, timeout=600)
+
+    stage = cache["stages"].filter(id=stage_id).first()
+    candidates = cache["candidates"].filter(stage_id=stage)
 
     template = "pipeline/components/candidate_stage_component.html"
-    if (
-        CACHE.get(request.session.session_key + "pipeline")["filter_query"].get("view")
-        == "card"
-    ):
+    if request.GET.get("view") == "card":
         template = "pipeline/kanban_components/candidate_kanban_components.html"
 
     now = timezone.now()
@@ -704,9 +725,14 @@ def change_candidate_stage(request):
             except Candidate.DoesNotExist:
                 messages.error(request, _("Candidate not found."))
         return JsonResponse(context)
-    candidate_id = request.GET["candidate_id"]
-    stage_id = request.GET["stage_id"]
-    candidate = Candidate.objects.get(id=candidate_id)
+    stage_id = request.GET.get("stage_id")
+    candidate_id = request.GET.get("candidate_id")
+    candidate = Candidate.find(candidate_id)
+    if not candidate:
+        return HorillaRedirect(
+            request, message=_("No Candidate found matching the query.")
+        )
+
     stage = Stage.objects.filter(
         recruitment_id=candidate.recruitment_id, id=stage_id
     ).first()
@@ -747,12 +773,23 @@ def recruitment_archive(request, rec_id):
         recruitment = Recruitment.objects.get(id=rec_id)
         if recruitment.is_active:
             recruitment.is_active = False
+            messages.success(request, _("Recruitment archived successfully."))
         else:
             recruitment.is_active = True
+            messages.success(request, _("Recruitment un-archived successfully."))
         recruitment.save()
     except (Recruitment.DoesNotExist, OverflowError):
         messages.error(request, _("Recruitment Does not exists.."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        if request.GET.get("context") == "modal":
+            return HttpResponse("")
+        return HttpResponse(
+            "<script>"
+            "$('#applyFilter').click();"
+            "$('#reloadMessagesButton').click();"
+            "</script>"
+        )
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -775,21 +812,18 @@ def stage_update_pipeline(request, stage_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"{stage_obj.stage} stage in recruitment {stage_obj.recruitment_id}\
-                            is updated, You are chosen as one of the managers",
-                    verb_ar=f"تم تحديث مرحلة {stage_obj.stage} في التوظيف {stage_obj.recruitment_id}\
-                            ، تم اختيارك كأحد المديرين",
-                    verb_de=f"Die Stufe {stage_obj.stage} in der Rekrutierung {stage_obj.recruitment_id}\
-                            wurde aktualisiert. Sie wurden als einer der Manager ausgewählt",
-                    verb_es=f"Se ha actualizado la etapa {stage_obj.stage} en la contratación\
-                          {stage_obj.recruitment_id}.Has sido elegido/a como uno de los gerentes",
-                    verb_fr=f"L'étape {stage_obj.stage} dans le recrutement {stage_obj.recruitment_id}\
-                          a été mise à jour.Vous avez été choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "%(stage)s stage in recruitment %(recruitment_id)s is updated. You are chosen as one of the managers."
+                    ),
+                    verb_params={
+                        "stage": str(stage_obj.stage),
+                        "recruitment_id": str(stage_obj.recruitment_id),
+                    },
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
 
     return render(request, "pipeline/form/stage_update.html", {"form": form})
 
@@ -816,24 +850,15 @@ def recruitment_update_pipeline(request, rec_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"{recruitment_obj} is updated, You are chosen as one of the managers",
-                    verb_ar=f"تم تحديث {recruitment_obj}، تم اختيارك كأحد المديرين",
-                    verb_de=f"{recruitment_obj} wurde aktualisiert.\
-                          Sie wurden als einer der Manager ausgewählt",
-                    verb_es=f"{recruitment_obj} ha sido actualizado/a. Has sido elegido\
-                            a como uno de los gerentes",
-                    verb_fr=f"{recruitment_obj} a été mis(e) à jour. Vous avez été\
-                            choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "%(recruitment_obj)s is updated. You are chosen as one of the managers."
+                    ),
+                    verb_params={"recruitment_obj": str(recruitment_obj)},
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
-            response = render(
-                request, "pipeline/form/recruitment_update.html", {"form": form}
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(request, "pipeline/form/recruitment_update.html", {"form": form})
 
 
@@ -847,10 +872,10 @@ def recruitment_close_pipeline(request, rec_id):
         recruitment_obj = Recruitment.objects.get(id=rec_id)
         recruitment_obj.closed = True
         recruitment_obj.save()
-        messages.success(request, "Recruitment closed successfully")
+        messages.success(request, _("Recruitment closed successfully"))
     except (Recruitment.DoesNotExist, OverflowError):
         messages.error(request, _("Recruitment Does not exists.."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -859,12 +884,16 @@ def recruitment_reopen_pipeline(request, rec_id):
     """
     This method is used to reopen recruitment from pipeline view
     """
-    recruitment_obj = Recruitment.objects.get(id=rec_id)
+    recruitment_obj = Recruitment.find(rec_id)
+    if not recruitment_obj:
+        return HorillaRedirect(
+            request, message=_("No Recruitment found matching the query.")
+        )
+
     recruitment_obj.closed = False
     recruitment_obj.save()
-
-    messages.success(request, "Recruitment reopend successfully")
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    messages.success(request, _("Recruitment reopend successfully"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -876,8 +905,13 @@ def candidate_stage_update(request, cand_id):
     Args:
         id : candidate_id
     """
-    stage_id = request.POST["stageId"]
-    candidate_obj = Candidate.objects.get(id=cand_id)
+    stage_id = request.POST.get("stageId")
+    candidate_obj = Candidate.find(cand_id)
+    if not candidate_obj:
+        return JsonResponse(
+            {"type": "error", "message": _("No Candidate found matching the query.")}
+        )
+
     history_queryset = candidate_obj.history_set.all().first()
     stage_obj = Stage.objects.get(id=stage_id)
     if candidate_obj.stage_id == stage_obj:
@@ -911,33 +945,33 @@ def candidate_stage_update(request, cand_id):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb=f"New candidate arrived on stage {stage_obj.stage}",
-                verb_ar=f"وصل مرشح جديد إلى المرحلة {stage_obj.stage}",
-                verb_de=f"Neuer Kandidat ist auf der Stufe {stage_obj.stage} angekommen",
-                verb_es=f"Nuevo candidato llegó a la etapa {stage_obj.stage}",
-                verb_fr=f"Nouveau candidat arrivé à l'étape {stage_obj.stage}",
+                verb=gettext_noop("New candidate arrived on stage %(stage)s"),
+                verb_params={"stage": str(stage_obj.stage)},
                 icon="person-add",
-                redirect=reverse("pipeline"),
+                redirect=reverse("cbv-pipeline"),
             )
 
         return JsonResponse(
             {"type": "success", "message": _("Candidate stage updated")}
         )
     return JsonResponse(
-        {"type": "danger", "message": _("Something went wrong, Try agian.")}
+        {"type": "danger", "message": _("Something went wrong, Try again.")}
     )
 
 
 @login_required
 @hx_request_required
-@manager_can_enter(perm="recruitment.view_stagenote")
+@all_manager_can_enter(perm="recruitment.view_stagenote")
 def view_note(request, cand_id):
     """
     This method renders a template components to view candidate remark or note
     Args:
         id : candidate instance id
     """
-    candidate_obj = Candidate.objects.get(id=cand_id)
+    candidate_obj = Candidate.objects.filter(id=cand_id).first()
+    if not candidate_obj:
+        messages.error(request, _("Candidate not found."))
+        return HorillaRedirect(request)
     notes = candidate_obj.stagenote_set.all().order_by("-id")
     return render(
         request,
@@ -949,11 +983,16 @@ def view_note(request, cand_id):
 @login_required
 @hx_request_required
 @manager_can_enter(perm="recruitment.add_stagenote")
-def add_note(request, cand_id=None):
+def add_note(request, pk=None):
     """
     This method renders template component to add candidate remark
     """
-    form = StageNoteForm(initial={"candidate_id": cand_id})
+    candidate_obj = Candidate.objects.filter(id=pk).first()
+    if not candidate_obj:
+        messages.error(request, _("Candidate not found."))
+        return HorillaRedirect(request)
+
+    form = StageNoteForm(initial={"candidate_id": pk})
     if request.method == "POST":
         form = StageNoteForm(
             request.POST,
@@ -961,20 +1000,21 @@ def add_note(request, cand_id=None):
         )
         if form.is_valid():
             note, attachment_ids = form.save(commit=False)
-            candidate = Candidate.objects.get(id=cand_id)
-            note.candidate_id = candidate
-            note.stage_id = candidate.stage_id
+            note.candidate_id = candidate_obj
+            note.stage_id = candidate_obj.stage_id
             note.updated_by = request.user.employee_get
             note.save()
             note.stage_files.set(attachment_ids)
             messages.success(request, _("Note added successfully.."))
-    candidate_obj = Candidate.objects.get(id=cand_id)
+    notes = candidate_obj.stagenote_set.all().order_by("-id")
+    notes = paginator_qry(notes, request.GET.get("page"))
     return render(
         request,
-        "candidate/individual_view_note.html",
+        "cbv/candidates/profile_notes_tab.html",
         {
             "candidate": candidate_obj,
             "note_form": form,
+            "notes": notes,
         },
     )
 
@@ -986,20 +1026,23 @@ def create_note(request, cand_id=None):
     """
     This method renders template component to add candidate remark
     """
+    candidate_obj = Candidate.objects.filter(id=cand_id).first()
+    if not candidate_obj:
+        messages.error(request, _("Candidate not found."))
+        return HorillaRedirect(request)
+
     form = StageNoteForm(initial={"candidate_id": cand_id})
     if request.method == "POST":
         form = StageNoteForm(request.POST, request.FILES)
         if form.is_valid():
             note, attachment_ids = form.save(commit=False)
-            candidate = Candidate.objects.get(id=cand_id)
-            note.candidate_id = candidate
-            note.stage_id = candidate.stage_id
+            note.candidate_id = candidate_obj
+            note.stage_id = candidate_obj.stage_id
             note.updated_by = request.user.employee_get
             note.save()
             note.stage_files.set(attachment_ids)
             messages.success(request, _("Note added successfully.."))
             return redirect("view-note", cand_id=cand_id)
-    candidate_obj = Candidate.objects.get(id=cand_id)
     notes = candidate_obj.stagenote_set.all().order_by("-id")
     return render(
         request,
@@ -1016,7 +1059,12 @@ def note_update(request, note_id):
     Args:
         id : stage note instance id
     """
-    note = StageNote.objects.get(id=note_id)
+    note = StageNote.find(note_id)
+    if not note:
+        return HorillaRedirect(
+            request, message=_("No Stage Note found matching the query.")
+        )
+
     form = StageNoteUpdateForm(instance=note)
     if request.POST:
         form = StageNoteUpdateForm(request.POST, request.FILES, instance=note)
@@ -1039,21 +1087,19 @@ def note_update_individual(request, note_id):
     Args:
         id : stage note instance id
     """
-    note = StageNote.objects.get(id=note_id)
+    note = StageNote.find(note_id)
+    if not note:
+        return HorillaRedirect(
+            request, message=_("No Stage Note found matching the query.")
+        )
+
     form = StageNoteForm(instance=note)
     if request.POST:
         form = StageNoteForm(request.POST, request.FILES, instance=note)
         if form.is_valid():
             form.save()
             messages.success(request, _("Note updated successfully..."))
-            response = render(
-                request,
-                "pipeline/pipeline_components/update_note_individual.html",
-                {"form": form},
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(
         request,
         "pipeline/pipeline_components/update_note_individual.html",
@@ -1071,7 +1117,10 @@ def add_more_files(request, id):
     Args:
         id : stage note instance id
     """
-    note = StageNote.objects.get(id=id)
+    note = StageNote.objects.filter(id=id).first()
+    if not note:
+        messages.error(request, _("Note not found."))
+        return HorillaRedirect(request)
     if request.method == "POST":
         files = request.FILES.getlist("files")
         files_ids = []
@@ -1091,7 +1140,10 @@ def add_more_individual_files(request, id):
     Args:
         id : stage note instance id
     """
-    note = StageNote.objects.get(id=id)
+    note = StageNote.objects.filter(id=id).first()
+    if not note:
+        messages.error(request, _("Note not found."))
+        return HorillaRedirect(request)
     if request.method == "POST":
         files = request.FILES.getlist("files")
         files_ids = []
@@ -1104,17 +1156,20 @@ def add_more_individual_files(request, id):
 
 
 @login_required
+@hx_request_required
 def delete_stage_note_file(request, id):
     """
     This method is used to delete the stage note file
     Args:
         id : stage file instance id
     """
-    script = ""
-    file = StageFiles.objects.get(id=id)
-    file.delete()
-    messages.success(request, _("File deleted successfully"))
-    return HttpResponse(script)
+    if stage_file := StageFiles.find(id):
+        stage_file.delete()
+        messages.success(request, _("File deleted successfully"))
+    else:
+        messages.error(request, _("No Stage Files found matching the query."))
+
+    return HttpResponse("")
 
 
 @login_required
@@ -1126,10 +1181,10 @@ def delete_individual_note_file(request, id):
         id : stage file instance id
     """
     script = ""
-    file = StageFiles.objects.get(id=id)
-    cand_id = file.stagenote_set.all().first().candidate_id.id
-    file.delete()
-    messages.success(request, _("File deleted successfully"))
+    file = StageFiles.objects.filter(id=id).first()
+    if file:
+        file.delete()
+        messages.success(request, _("File deleted successfully"))
     return HttpResponse(script)
 
 
@@ -1138,10 +1193,14 @@ def delete_individual_note_file(request, id):
 @manager_can_enter(perm="recruitment.add_stagenote")
 def candidate_can_view_note(request, id):
     note = StageNote.objects.filter(id=id)
-    note.update(candidate_can_view=not note.first().candidate_can_view)
+    note_obj = note.first()
+    if not note_obj:
+        return HorillaRedirect(request, message=_("Note not found."))
+
+    note.update(candidate_can_view=not note_obj.candidate_can_view)
 
     messages.success(request, _("Candidate view status updated"))
-    return redirect("view-note", cand_id=note.first().candidate_id.id)
+    return redirect("view-note", cand_id=note_obj.candidate_id.id)
 
 
 @login_required
@@ -1150,12 +1209,15 @@ def candidate_schedule_date_update(request):
     """
     This is a an ajax method to update schedule date for a candidate
     """
-    candidate_id = request.POST["candidateId"]
-    schedule_date = request.POST["date"]
-    candidate_obj = Candidate.objects.get(id=candidate_id)
-    candidate_obj.schedule_date = schedule_date
-    candidate_obj.save()
-    return JsonResponse({"message": "congratulations"})
+    candidate_id = request.POST.get("candidateId")
+    schedule_date = request.POST.get("date")
+    candidate_obj = Candidate.find(candidate_id)
+    message = "Error"
+    if candidate_obj:
+        candidate_obj.schedule_date = schedule_date
+        candidate_obj.save()
+        message = "Congratulations"
+    return JsonResponse({"message": message})
 
 
 @login_required
@@ -1193,21 +1255,18 @@ def stage(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb=f"Stage {stage_obj} is updated on recruitment {stage_obj.recruitment_id},\
-                          You are chosen as one of the managers",
-                    verb_ar=f"تم تحديث المرحلة {stage_obj} في التوظيف\
-                          {stage_obj.recruitment_id}، تم اختيارك كأحد المديرين",
-                    verb_de=f"Stufe {stage_obj} wurde in der Rekrutierung {stage_obj.recruitment_id}\
-                          aktualisiert. Sie wurden als einer der Manager ausgewählt",
-                    verb_es=f"La etapa {stage_obj} ha sido actualizada en la contratación\
-                          {stage_obj.recruitment_id}. Has sido elegido/a como uno de los gerentes",
-                    verb_fr=f"L'étape {stage_obj} a été mise à jour dans le recrutement\
-                          {stage_obj.recruitment_id}. Vous avez été choisi(e) comme l'un des responsables",
+                    verb=gettext_noop(
+                        "Stage %(stage_obj)s is updated on recruitment %(recruitment_id)s. You are chosen as one of the managers."
+                    ),
+                    verb_params={
+                        "stage_obj": str(stage_obj),
+                        "recruitment_id": str(stage_obj.recruitment_id),
+                    },
                     icon="people-circle",
-                    redirect=reverse("pipeline"),
+                    redirect=reverse("cbv-pipeline"),
                 )
 
-            return HttpResponse("<script>location.reload();</script>")
+            return HorillaRedirect(request)
     return render(request, "stage/stage_form.html", {"form": form})
 
 
@@ -1242,6 +1301,8 @@ def stage_view(request):
     )
 
 
+@login_required
+@hx_request_required
 def stage_data(request, rec_id):
     stages = StageFilter(request.GET).qs.filter(recruitment_id__id=rec_id)
     previous_data = request.GET.urlencode()
@@ -1288,6 +1349,43 @@ def stage_update(request, stage_id):
 
 
 @login_required
+@recruitment_manager_can_enter("recruitment.change_stage")
+def update_stage_order(request, pk):
+    """
+    This method is used to update the stage sequence of the onboarding
+    """
+    recruitment = Recruitment.find(pk)
+    if not recruitment:
+        return HorillaRedirect(
+            request, message=_("No Recruitment found matching the query.")
+        )
+
+    if request.method == "POST":
+        try:
+            order = json.loads(request.POST.get("order", "[]"))
+            for index, stage_id in enumerate(order):
+                stage = recruitment.stage_set.get(id=stage_id)
+                stage.sequence = index + 1
+                stage.save()
+            messages.success(request, _("Sequence Updated Successfully"))
+            return JsonResponse({"status": "success"})
+        except Exception as e:
+            messages.error(request, _("Error Updating Sequence.."))
+            return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+    stages = recruitment.stage_set.order_by("sequence")
+
+    return render(
+        request,
+        "cbv/pipeline/stage_order.html",
+        {
+            "stages": stages,
+            "recruitment": recruitment,
+        },
+    )
+
+
+@login_required
 @hx_request_required
 @manager_can_enter("recruitment.add_candidate")
 def add_candidate(request):
@@ -1303,8 +1401,8 @@ def add_candidate(request):
         )
         if form.is_valid():
             form.save()
-            messages.success(request, "Candidate Added")
-            return HttpResponse("<script>window.location.reload()</script>")
+            messages.success(request, _("Candidate Added"))
+            return HorillaRedirect(request)
     return render(request, "pipeline/form/candidate_form.html", {"form": form})
 
 
@@ -1335,6 +1433,9 @@ def candidate(request):
     form = CandidateCreationForm()
     open_recruitment = Recruitment.objects.filter(closed=False, is_active=True)
     path = "/recruitment/candidate-view"
+    template_name = "candidate/candidate_create_form.html"
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        template_name = "candidate/candidate_create_modal_form.html"
     if request.method == "POST":
         form = CandidateCreationForm(request.POST, request.FILES)
         if form.is_valid():
@@ -1353,32 +1454,65 @@ def candidate(request):
                 candidate_obj.save()
                 messages.success(request, _("Candidate added."))
             else:
-                messages.error(request, "Job position field is required")
+                messages.error(request, _("Job position field is required"))
                 return render(
                     request,
-                    "candidate/candidate_create_form.html",
+                    template_name,
                     {"form": form, "open_recruitment": open_recruitment},
+                )
+            if request.META.get("HTTP_HX_REQUEST") == "true":
+                close_modal_script = ""
+                if request.GET.get("container") != "true":
+                    close_modal_script = (
+                        "$('#objectCreateModal').removeClass('oh-modal--show');"
+                    )
+                container_reload_script = (
+                    "$('#candidateMainContainer').html("
+                    # The id="candidateListNavBar" wrapper must match the page
+                    # template (candidates.html) — syncCandidateListNavBar()
+                    # looks it up by id, so rebuilding the container without it
+                    # breaks nav-bar hiding on every later edit-form open.
+                    '\'<div id="candidateListNavBar"><div hx-get="/recruitment/nav-candidate/?" hx-trigger="load"></div></div>\' + '
+                    '\'<div class="oh-checkpoint-badge mb-2" id="selectedInstances" data-ids="[]" data-clicked="" style="display: none"></div>\' + '
+                    '\'<div class="oh-wrapper" id="listContainer"></div>\''
+                    ");"
+                    "htmx.process($('#candidateMainContainer')[0]);"
+                )
+                if request.GET.get("container") != "true":
+                    container_reload_script = "$('#applyFilter').click();"
+                return HttpResponse(
+                    "<script>"
+                    + close_modal_script
+                    + container_reload_script
+                    + "$('#reloadMessagesButton').click();"
+                    + "</script>"
                 )
             return redirect(path)
 
     return render(
         request,
-        "candidate/candidate_create_form.html",
+        template_name,
         {"form": form, "open_recruitment": open_recruitment},
     )
 
 
 @login_required
 @permission_required(perm="recruitment.add_candidate")
-def recruitment_stage_get(_, rec_id):
+def recruitment_stage_get(request, rec_id):
     """
     This method returns all stages as json
-    Args:
-        id: recruitment_id
     """
-    recruitment_obj = Recruitment.objects.get(id=rec_id)
+    recruitment_obj = Recruitment.find(rec_id)
+
+    if not recruitment_obj:
+        return JsonResponse(
+            {"error": _("No Recruitment found matching the query.")},
+            status=404,
+        )
+
     all_stages = recruitment_obj.stage_set.all()
     all_stage_json = serializers.serialize("json", all_stages)
+
     return JsonResponse({"stages": all_stage_json})
 
 
@@ -1394,9 +1528,9 @@ def candidate_view(request):
     recruitments = Recruitment.objects.filter(closed=False, is_active=True)
 
     mails = list(Candidate.objects.values_list("email", flat=True))
-    # Query the User model to check if any email is present
+    # Query the HorillaUser model to check if any email is present
     existing_emails = list(
-        User.objects.filter(username__in=mails).values_list("email", flat=True)
+        HorillaUser.objects.filter(username__in=mails).values_list("email", flat=True)
     )
 
     filter_obj = CandidateFilter(request.GET, queryset=candidates)
@@ -1498,6 +1632,7 @@ def interview_view(request):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter(perm="recruitment.change_interviewschedule")
 def interview_employee_remove(request, interview_id, employee_id):
     """
@@ -1506,11 +1641,17 @@ def interview_employee_remove(request, interview_id, employee_id):
         interview_id(int) : primarykey of the interview.
         employee_id(int) : primarykey of the employee
     """
-    interview = InterviewSchedule.objects.filter(id=interview_id).first()
+    interview = InterviewSchedule.find(interview_id)
+    if not interview:
+        return HorillaRedirect(
+            request, message=_("No Meeting found matching the query")
+        )
+
     interview.employee_id.remove(employee_id)
-    messages.success(request, "Interviewer removed succesfully.")
+    messages.success(request, _("Interviewer removed successfully."))
     interview.save()
-    return HttpResponse("<script>$('.filterButton')[0].click()</script>")
+    # return redirect(interview_filter_view)
+    return HttpResponse("<script> $('#applyFilter').click();</script>")
 
 
 @login_required
@@ -1580,70 +1721,252 @@ def candidate_view_card(request):
 
 @login_required
 @manager_can_enter(perm="recruitment.view_candidate")
+def candidate_about_tab(request, pk, **kwargs):
+    """
+    method for rendering about tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    if not candidate_obj:
+        messages.error(request, _("Candidate not found"))
+        return HorillaRedirect(request)
+    return render(
+        request,
+        "cbv/candidates/profile_about_tab.html",
+        {
+            "candidate": candidate_obj,
+        },
+    )
+
+
+@login_required
+@manager_can_enter(perm="recruitment.view_candidate")
+def candidate_resume_tab(request, pk, **kwargs):
+    """
+    method for rendering resume tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    return render(
+        request,
+        "cbv/candidates/profile_resume_tab.html",
+        {
+            "candidate": candidate_obj,
+        },
+    )
+
+
+@login_required
+@manager_can_enter(perm="recruitment.view_candidate")
+def candidate_survey_tab(request, pk, **kwargs):
+    """
+    method for rendering survey tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    survey = RecruitmentSurveyAnswer.objects.filter(candidate_id=pk).first()
+    return render(
+        request,
+        "cbv/candidates/profile_survey_tab.html",
+        {
+            "candidate": candidate_obj,
+            "survey": survey,
+        },
+    )
+
+
+# @login_required
+# @manager_can_enter(perm="recruitment.view_candidate")
+# def candidate_notes_tab(request, pk, **kwargs):
+#     """
+#     method for rendering notes tab
+#     """
+
+#     candidate_obj = Candidate.find(pk)
+#     return render(
+#         request,
+#         "candidate/individual_view_note.html",
+#         {
+#             "candidate": candidate_obj,
+#         },
+#     )
+
+
+@login_required
+@manager_can_enter(perm="recruitment.view_candidate")
+def candidate_history_tab(request, pk, **kwargs):
+    """
+    method for rendering history tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    return render(
+        request,
+        "candidate/history.html",
+        {
+            "candidate": candidate_obj,
+        },
+    )
+
+
+@login_required
+@all_manager_can_enter(perm="recruitment.view_candidate")
+def candidate_onboarding_tab(request, pk, **kwargs):
+    """
+    method for rendering onboarding tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    return render(
+        request,
+        "cbv/candidates/profile_onboarding_tab.html",
+        {
+            "candidate": candidate_obj,
+        },
+    )
+
+
+@login_required
+@all_manager_can_enter(perm="recruitment.view_candidate")
+def candidate_rating_tab(request, pk, **kwargs):
+    """
+    method for rendering rating tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    if not candidate_obj:
+        return HorillaRedirect(request, message=_("Candidate not found."))
+
+    ratings = candidate_obj.candidate_rating.all().order_by("-id")
+    ratings = paginator_qry(ratings, request.GET.get("page"))
+    return render(
+        request,
+        "candidate/rating_tab.html",
+        {
+            "candidate": candidate_obj,
+            "ratings": ratings,
+        },
+    )
+
+
+@login_required
+@manager_can_enter(perm="recruitment.view_candidate")
+def candidate_interview_tab(request, pk, **kwargs):
+    """
+    method for rendering interview tab
+    """
+
+    candidate_obj = Candidate.find(pk)
+    if not candidate_obj:
+        return HorillaRedirect(request, message=_("Candidate not found."))
+
+    interviews = candidate_obj.candidate_interview.all().order_by("-interview_date")
+    interviews = paginator_qry(interviews, request.GET.get("page"))
+    return render(
+        request,
+        "cbv/candidates/profile_interview_tab.html",
+        {
+            "candidate": candidate_obj,
+            "interviews": interviews,
+        },
+    )
+
+
+def scheduled_interview_tab(request, pk, **kwargs):
+    """
+    method for rendering interview tab
+    """
+    employee = Employee.objects.get(id=pk)
+    interviews = InterviewSchedule.objects.filter(employee_id=employee).order_by(
+        "-interview_date"
+    )
+    interviews = paginator_qry(interviews, request.GET.get("page"))
+    return render(
+        request,
+        "tabs/scheduled_interview.html",
+        {"interviews": interviews, "employee": employee},
+    )
+
+
+@login_required
+@all_manager_can_enter(perm="recruitment.view_candidate")
 def candidate_view_individual(request, cand_id, **kwargs):
     """
     This method is used to view profile of candidate.
     """
-    candidate_obj = Candidate.find(cand_id)
-    if not candidate_obj:
-        messages.error(request, _("Candidate not found"))
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    # candidate_obj = Candidate.find(cand_id)
+    # # if not candidate_obj:
+    # #     messages.error(request, _("Candidate not found"))
+    # #     return HorillaRedirect(request)
 
-    mails = list(Candidate.objects.values_list("email", flat=True))
-    # Query the User model to check if any email is present
-    existing_emails = list(
-        User.objects.filter(username__in=mails).values_list("email", flat=True)
-    )
-    ratings = candidate_obj.candidate_rating.all()
-    documents = CandidateDocument.objects.filter(candidate_id=cand_id)
-    rating_list = []
-    avg_rate = 0
-    for rating in ratings:
-        rating_list.append(rating.rating)
-    if len(rating_list) != 0:
-        avg_rate = round(sum(rating_list) / len(rating_list))
+    # mails = list(Candidate.objects.values_list("email", flat=True))
+    # # Query the HorillaUser model to check if any email is present
+    # existing_emails = list(
+    #     HorillaUser.objects.filter(username__in=mails).values_list("email", flat=True)
+    # )
+    # ratings = candidate_obj.candidate_rating.all()
+    # documents = CandidateDocument.objects.filter(candidate_id=cand_id)
+    # rating_list = []
+    # avg_rate = 0
+    # for rating in ratings:
+    #     rating_list.append(rating.rating)
+    # if len(rating_list) != 0:
+    #     avg_rate = round(sum(rating_list) / len(rating_list))
 
-    # Retrieve the filtered candidate from the session
-    filtered_candidate_ids = request.session.get("filtered_candidates", [])
+    # # Retrieve the filtered candidate from the session
+    # filtered_candidate_ids = request.session.get("filtered_candidates", [])
 
-    # Convert the string to an actual list of integers
-    requests_ids = (
-        ast.literal_eval(filtered_candidate_ids)
-        if isinstance(filtered_candidate_ids, str)
-        else filtered_candidate_ids
-    )
+    # # Convert the string to an actual list of integers
+    # requests_ids = (
+    #     ast.literal_eval(filtered_candidate_ids)
+    #     if isinstance(filtered_candidate_ids, str)
+    #     else filtered_candidate_ids
+    # )
 
-    next_id = None
-    previous_id = None
+    # next_id = None
+    # previous_id = None
 
-    for index, req_id in enumerate(requests_ids):
-        if req_id == cand_id:
+    # for index, req_id in enumerate(requests_ids):
+    #     if req_id == cand_id:
 
-            if index == len(requests_ids) - 1:
-                next_id = None
-            else:
-                next_id = requests_ids[index + 1]
-            if index == 0:
-                previous_id = None
-            else:
-                previous_id = requests_ids[index - 1]
-            break
+    #         if index == len(requests_ids) - 1:
+    #             next_id = None
+    #         else:
+    #             next_id = requests_ids[index + 1]
+    #         if index == 0:
+    #             previous_id = None
+    #         else:
+    #             previous_id = requests_ids[index - 1]
+    #         break
 
-    now = timezone.now()
+    # now = timezone.now()
 
     return render(
         request,
         "candidate/individual.html",
-        {
-            "candidate": candidate_obj,
-            "previous": previous_id,
-            "next": next_id,
-            "requests_ids": requests_ids,
-            "emp_list": existing_emails,
-            "average_rate": avg_rate,
-            "documents": documents,
-            "now": now,
-        },
+        # {
+        #     "candidate": candidate_obj,
+        #     "previous": previous_id,
+        #     "next": next_id,
+        #     "requests_ids": requests_ids,
+        #     "emp_list": existing_emails,
+        #     "average_rate": avg_rate,
+        #     "documents": documents,
+        #     "now": now,
+        # },
+    )
+
+
+def _query_param_truthy(get_dict, key):
+    val = get_dict.get(key)
+    if val is None:
+        return False
+    return str(val).lower() in ("true", "1", "yes")
+
+
+def _onboarding_container_request(request):
+    return request.GET.get("container") == "true" and _query_param_truthy(
+        request.GET, "onboarding"
     )
 
 
@@ -1661,6 +1984,9 @@ def candidate_update(request, cand_id, **kwargs):
         candidate_obj = Candidate.objects.get(id=cand_id)
         form = CandidateCreationForm(instance=candidate_obj)
         path = "/recruitment/candidate-view"
+        template_name = "candidate/candidate_create_form.html"
+        if request.META.get("HTTP_HX_REQUEST") == "true":
+            template_name = "candidate/candidate_create_modal_form.html"
         if request.method == "POST":
             form = CandidateCreationForm(
                 request.POST, request.FILES, instance=candidate_obj
@@ -1682,39 +2008,117 @@ def candidate_update(request, cand_id, **kwargs):
                                 stage_type="initial"
                             ).first()
                         )
-                if request.GET.get("onboarding") == "True":
+                if _query_param_truthy(request.GET, "onboarding"):
                     candidate_obj.hired = True
                     path = "/onboarding/candidates-view"
                 candidate_obj.save()
                 messages.success(request, _("Candidate Updated Successfully."))
+                if request.META.get("HTTP_HX_REQUEST") == "true":
+                    close_modal_script = ""
+                    if request.GET.get("container") != "true":
+                        close_modal_script = (
+                            "$('#objectCreateModal').removeClass('oh-modal--show');"
+                        )
+                    if request.GET.get("container") == "true":
+                        if _query_param_truthy(request.GET, "onboarding"):
+                            _onboarding_candidates_url = reverse("candidates-view")
+                            container_reload_script = (
+                                "if (window.history && history.pushState) { "
+                                f"history.pushState({{}}, '', '{_onboarding_candidates_url}'); "
+                                "}"
+                                "document.body.classList.remove('onboarding-list-hide-toolbar');"
+                                "var nav = document.getElementById('onboardingCandidatesNavBar');"
+                                "if (nav) { nav.style.display = ''; }"
+                                "var tagRow = nav && nav.querySelector('#filterTagContainerSectionNav');"
+                                "if (tagRow) { tagRow.innerHTML = ''; }"
+                                "var list = document.getElementById('listContainer');"
+                                "if (list) { list.innerHTML = ''; }"
+                                "setTimeout(function () { "
+                                "var b = document.getElementById('applyFilter'); "
+                                "if (b) { b.click(); } }, 100);"
+                            )
+                        else:
+                            _recruitment_candidates_url = reverse("candidate-view")
+                            container_reload_script = (
+                                "if (window.history && history.pushState) { "
+                                f"history.pushState({{}}, '', '{_recruitment_candidates_url}'); "
+                                "}"
+                                # Deferred a tick: this response is itself the
+                                # htmx swap target's (#candidateMainContainer)
+                                # new content, so replacing that same
+                                # container's HTML synchronously here races
+                                # htmx's own swap/settle bookkeeping on it --
+                                # observed as a "removeChild: not a child of
+                                # this node" console error. Queuing it as a
+                                # separate task lets htmx finish settling the
+                                # current swap first.
+                                "setTimeout(function () {"
+                                "$('#candidateMainContainer').html("
+                                # Must match candidates.html's real markup --
+                                # missing the id="candidateListNavBar" wrapper
+                                # here left that element absent from the DOM
+                                # after every save, so syncCandidateListNavBar()
+                                # (in candidates.html) could never find it again
+                                # to hide it on the next Edit, leaving the
+                                # search/filter/Create toolbar visible over
+                                # the edit form from the second edit onward.
+                                '\'<div id="candidateListNavBar"><div hx-get="/recruitment/nav-candidate/?" hx-trigger="load"></div></div>\' + '
+                                '\'<div class="oh-checkpoint-badge mb-2" id="selectedInstances" data-ids="[]" data-clicked="" style="display: none"></div>\' + '
+                                '\'<div class="oh-wrapper" id="listContainer"></div>\''
+                                ");"
+                                "htmx.process($('#candidateMainContainer')[0]);"
+                                "}, 0);"
+                            )
+                    else:
+                        container_reload_script = "$('#applyFilter').click();"
+                    return HttpResponse(
+                        "<script>"
+                        + close_modal_script
+                        + container_reload_script
+                        + "$('#reloadMessagesButton').click();"
+                        + "</script>"
+                    )
                 return redirect(path)
-        return render(request, "candidate/candidate_create_form.html", {"form": form})
+        onboarding_container_mode = _onboarding_container_request(request)
+        return render(
+            request,
+            template_name,
+            {
+                "form": form,
+                "onboarding_container_mode": onboarding_container_mode,
+            },
+        )
     except (Candidate.DoesNotExist, OverflowError):
         messages.error(request, _("Candidate Does not exists.."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @transaction.atomic
 @login_required
 @manager_can_enter(perm="recruitment.change_candidate")
 def candidate_conversion(request, cand_id, **kwargs):
+    container_request = request.GET.get("container") == "true"
     candidate_obj = Candidate.find(cand_id)
 
     if not candidate_obj:
-        messages.error(request, ("Candidate not found"))
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+        messages.error(request, _("Candidate not found"))
+        if container_request:
+            return JsonResponse({"message": "Candidate not found"}, status=404)
+        return HorillaRedirect(request)
 
     if candidate_obj.converted_employee_id:
-        messages.info(request, "This candidate is already converted to an employee.")
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+        messages.info(request, _("This candidate is already converted to an employee."))
+        if container_request:
+            return JsonResponse({"message": "Already converted"}, status=200)
+        return HorillaRedirect(request)
 
-    user_exists = User.objects.filter(username=candidate_obj.email).exists()
+    user_exists = HorillaUser.objects.filter(username=candidate_obj.email).exists()
     employee_exists = Employee.objects.filter(
         employee_user_id__username=candidate_obj.email
     ).exists()
 
     if user_exists:
-        messages.error(request, ("User instance with this mail already exists"))
+        messages.error(request, _("User instance with this mail already exists"))
     elif not employee_exists:
         try:
             new_employee = Employee(
@@ -1752,15 +2156,20 @@ def candidate_conversion(request, cand_id, **kwargs):
                 _("Candidate has been successfully converted into an employee."),
             )
         except IntegrityError:
-            messages.warning(request, "An error occurred while creating employee data.")
+            messages.warning(
+                request, _("An error occurred while creating employee data.")
+            )
 
     else:
-        messages.info(request, "An employee with this email already exists")
+        messages.info(request, _("An employee with this email already exists"))
+
+    if container_request:
+        return JsonResponse({"message": "Success"}, status=200)
 
     if "HTTP_HX_REQUEST" in request.META:
         return HttpResponse(status=204, headers={"HX-Refresh": "true"})
 
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1771,7 +2180,12 @@ def delete_profile_image(request, obj_id):
     Args:
         obj_id : candidate instance id
     """
-    candidate_obj = Candidate.objects.get(id=obj_id)
+    candidate_obj = Candidate.find(obj_id)
+    if not candidate_obj:
+        return HorillaRedirect(
+            request, message=_("No Candidate found matching the query.")
+        )
+
     try:
         if candidate_obj.profile:
             file_path = candidate_obj.profile.path
@@ -1793,7 +2207,12 @@ def candidate_history(request, cand_id):
     Args:
         id : candidate_id
     """
-    candidate_obj = Candidate.objects.get(id=cand_id)
+    candidate_obj = Candidate.find(cand_id)
+    if not candidate_obj:
+        return HorillaRedirect(
+            request, message=_("No Candidate found matching the query.")
+        )
+
     candidate_history_queryset = candidate_obj.history.all()
     return render(
         request,
@@ -1814,13 +2233,46 @@ def form_send_mail(request, cand_id=None):
     if request.GET.get("stage_id"):
         stage_id = eval_validate(request.GET.get("stage_id"))
     if cand_id:
-        candidate_obj = Candidate.objects.get(id=cand_id)
+        candidate_obj = Candidate.objects.filter(id=cand_id).first()
+        if not candidate_obj:
+            return HttpResponse()
     candidates = Candidate.objects.all()
     if stage_id and isinstance(stage_id, int):
         candidates = candidates.filter(stage_id__id=stage_id)
     else:
         stage_id = None
 
+    HorillaMailTemplate.objects.get_or_create(
+        title="Candidate Portal Login",
+        defaults={
+            "body": (
+                "<div style=\"font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f6f9; padding: 24px;\">"
+                '<div style="max-width: 640px; margin: auto; background: #ffffff; border-radius: 12px; padding: 28px; '
+                'box-shadow: 0 4px 14px rgba(0,0,0,0.08); border: 1px solid #eceff3;">'
+                '<h2 style="margin: 0 0 18px 0; color: #1f2937; font-size: 22px;">Candidate Portal Login Details</h2>'
+                '<p style="font-size: 14px; color: #374151; line-height: 1.7; margin: 0 0 14px 0;">'
+                "Hi {{instance.get_full_name}},</p>"
+                '<p style="font-size: 14px; color: #374151; line-height: 1.7; margin: 0 0 16px 0;">'
+                "You can track your application status from the candidate portal using the credentials below.</p>"
+                '<div style="margin: 18px 0; padding: 16px; background: #f9fafb; border-left: 4px solid hsl(8, 77%, 56%); border-radius: 8px;">'
+                '<p style="margin: 0 0 8px 0; font-size: 14px; color: #111827;">'
+                "<strong>Portal Link:</strong> "
+                '<a href="{{ request.scheme }}://{{ request.get_host }}/recruitment/candidate-login/" target="_blank" '
+                'style="color: hsl(8, 77%, 56%); text-decoration: none;">'
+                "{{ request.scheme }}://{{ request.get_host }}/recruitment/candidate-login/"
+                "</a></p>"
+                '<p style="margin: 0 0 8px 0; font-size: 14px; color: #111827;"><strong>Username (Email):</strong> {{instance.email}}</p>'
+                '<p style="margin: 0; font-size: 14px; color: #111827;"><strong>Password (Mobile Number):</strong> {{instance.mobile}}</p>'
+                "</div>"
+                '<p style="font-size: 13px; color: #6b7280; margin: 0 0 18px 0;">'
+                "For security, please keep these credentials private.</p>"
+                '<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">'
+                '<p style="font-size: 13px; color: #6b7280; margin: 0;">Regards,</p>'
+                '<p style="font-size: 13px; color: #111827; margin: 6px 0 0 0;"><strong>{{self.get_full_name}} | {{self.get_department}} | {{self.get_company}}</strong></p>'
+                "</div></div>"
+            )
+        },
+    )
     templates = HorillaMailTemplate.objects.all()
     return render(
         request,
@@ -1861,17 +2313,20 @@ def interview_schedule(request, cand_id):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb=f"You are scheduled as an interviewer for an interview with {cand_id.name} on {interview_date} at {interview_time}.",
-                verb_ar=f"أنت مجدول كمقابلة مع {cand_id.name} يوم {interview_date} في توقيت {interview_time}.",
-                verb_de=f"Sie sind als Interviewer für ein Interview mit {cand_id.name} am {interview_date} um {interview_time} eingeplant.",
-                verb_es=f"Estás programado como entrevistador para una entrevista con {cand_id.name} el {interview_date} a las {interview_time}.",
-                verb_fr=f"Vous êtes programmé en tant qu'intervieweur pour un entretien avec {cand_id.name} le {interview_date} à {interview_time}.",
+                verb=gettext_noop(
+                    "You are scheduled as an interviewer for an interview with %(name)s on %(interview_date)s at %(interview_time)s."
+                ),
+                verb_params={
+                    "name": str(cand_id.name),
+                    "interview_date": str(interview_date),
+                    "interview_time": str(interview_time),
+                },
                 icon="people-circle",
                 redirect=reverse("interview-view"),
             )
 
-            messages.success(request, "Interview Scheduled successfully.")
-            return HttpResponse("<script>window.location.reload()</script>")
+            messages.success(request, _("Interview Scheduled successfully."))
+            return HorillaRedirect(request)
     return render(request, template, {"form": form, "cand_id": cand_id})
 
 
@@ -1900,16 +2355,19 @@ def create_interview_schedule(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb=f"You are scheduled as an interviewer for an interview with {cand_id.name} on {interview_date} at {interview_time}.",
-                verb_ar=f"أنت مجدول كمقابلة مع {cand_id.name} يوم {interview_date} في توقيت {interview_time}.",
-                verb_de=f"Sie sind als Interviewer für ein Interview mit {cand_id.name} am {interview_date} um {interview_time} eingeplant.",
-                verb_es=f"Estás programado como entrevistador para una entrevista con {cand_id.name} el {interview_date} a las {interview_time}.",
-                verb_fr=f"Vous êtes programmé en tant qu'intervieweur pour un entretien avec {cand_id.name} le {interview_date} à {interview_time}.",
+                verb=gettext_noop(
+                    "You are scheduled as an interviewer for an interview with %(name)s on %(interview_date)s at %(interview_time)s."
+                ),
+                verb_params={
+                    "name": str(cand_id.name),
+                    "interview_date": str(interview_date),
+                    "interview_time": str(interview_time),
+                },
                 icon="people-circle",
                 redirect=reverse("interview-view"),
             )
 
-            messages.success(request, "Interview Scheduled successfully.")
+            messages.success(request, _("Interview Scheduled successfully."))
     return render(request, template, {"form": form})
 
 
@@ -1922,19 +2380,19 @@ def interview_delete(request, interview_id):
     Args:
         interview_id: InterviewSchedule instance ID
     """
-    view = request.GET.get("view", "false")
-
     try:
         InterviewSchedule.objects.get(id=interview_id).delete()
         messages.success(request, _("Interview deleted successfully."))
     except:
         messages.error(request, _("Scheduled Interview not found"))
-
-    return HttpResponse(
-        "<script>$('.filterButton')[0].click()</script>"
-        if view == "true"
-        else "<script>window.location.reload()</script>"
-    )
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        return HttpResponse(
+            "<script>"
+            "$('#applyFilter').click();"
+            "$('#reloadMessagesButton').click();"
+            "</script>"
+        )
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1969,16 +2427,19 @@ def interview_edit(request, interview_id):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb=f"You are scheduled as an interviewer for an interview with {cand_id.name} on {interview_date} at {interview_time}.",
-                verb_ar=f"أنت مجدول كمقابلة مع {cand_id.name} يوم {interview_date} في توقيت {interview_time}.",
-                verb_de=f"Sie sind als Interviewer für ein Interview mit {cand_id.name} am {interview_date} um {interview_time} eingeplant.",
-                verb_es=f"Estás programado como entrevistador para una entrevista con {cand_id.name} el {interview_date} a las {interview_time}.",
-                verb_fr=f"Vous êtes programmé en tant qu'intervieweur pour un entretien avec {cand_id.name} le {interview_date} à {interview_time}.",
+                verb=gettext_noop(
+                    "You are scheduled as an interviewer for an interview with %(name)s on %(interview_date)s at %(interview_time)s."
+                ),
+                verb_params={
+                    "name": str(cand_id.name),
+                    "interview_date": str(interview_date),
+                    "interview_time": str(interview_time),
+                },
                 icon="people-circle",
                 redirect=reverse("interview-view"),
             )
-            messages.success(request, "Interview updated successfully.")
-            return HttpResponse("<script>window.location.reload()</script>")
+            messages.success(request, _("Interview updated successfully."))
+            return HorillaRedirect(request)
     return render(
         request,
         template,
@@ -1990,9 +2451,44 @@ def interview_edit(request, interview_id):
     )
 
 
+@login_required
+@hx_request_required
+def get_interview_managers(request):
+    cand_id = request.GET.get("candidate_id")
+    form = ScheduleInterviewForm()
+    candidate_obj = Candidate.find(cand_id) if cand_id else None
+    if candidate_obj:
+        recruitment_managers = candidate_obj.recruitment_id.recruitment_managers.all()
+        stage_managers = (
+            candidate_obj.stage_id.stage_managers.all()
+            if candidate_obj.stage_id
+            else recruitment_managers.none()
+        )
+        managers = (recruitment_managers | stage_managers).distinct()
+        form.fields["employee_id"].queryset = managers
+    else:
+        form.fields["employee_id"].queryset = form.fields["employee_id"].queryset.none()
+    pk = request.GET.get("pk")
+    if pk:
+        try:
+            interviewer = InterviewSchedule.objects.get(id=pk)
+            form.fields["employee_id"].initial = interviewer.employee_id.all()
+        except InterviewSchedule.DoesNotExist:
+            pass
+    return render(
+        request,
+        "candidate/interview_form.html",
+        {"form": form, "CBV": True},
+    )
+
+
+@login_required
 def get_managers(request):
     cand_id = request.GET.get("cand_id")
-    candidate_obj = Candidate.objects.get(id=cand_id)
+    candidate_obj = Candidate.find(cand_id)
+    if not candidate_obj:
+        return JsonResponse({"employees": {}})
+
     stage_obj = Stage.objects.filter(recruitment_id=candidate_obj.recruitment_id.id)
 
     # Combine the querysets into a single iterable
@@ -2043,9 +2539,13 @@ def send_acknowledgement(request):
         )
         for html in bodys:
             # due to not having solid template we first need to pass the context
-            template_bdy = template.Template(html)
+            template_bdy = template.Template(sanitize_mail_template_body(html))
             context = template.Context(
-                {"instance": candidate, "self": request.user.employee_get}
+                {
+                    "instance": candidate,
+                    "self": request.user.employee_get,
+                    "request": build_safe_template_request(request),
+                }
             )
             render_bdy = template_bdy.render(context)
             attachments.append(
@@ -2056,9 +2556,13 @@ def send_acknowledgement(request):
                 )
             )
 
-        template_bdy = template.Template(bdy)
+        template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(
-            {"instance": candidate, "self": request.user.employee_get}
+            {
+                "instance": candidate,
+                "self": request.user.employee_get,
+                "request": build_safe_template_request(request),
+            }
         )
         render_bdy = template_bdy.render(context)
         to = candidate.email
@@ -2072,11 +2576,11 @@ def send_acknowledgement(request):
         email.attachments = attachments
         try:
             email.send()
-            messages.success(request, "Mail sent to candidate")
+            messages.success(request, _("Mail sent to candidate"))
         except Exception as e:
             logger.exception(e)
-            messages.error(request, "Something went wrong")
-    return HttpResponse("<script>window.location.reload()</script>")
+            messages.error(request, _("Something went wrong"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -2085,7 +2589,7 @@ def candidate_sequence_update(request):
     """
     This method is used to update the sequence of candidate
     """
-    sequence_data = json.loads(request.POST["sequenceData"])
+    sequence_data = json.loads(request.POST.get("sequenceData", "{}"))
     for cand_id, seq in sequence_data.items():
         cand = Candidate.objects.get(id=cand_id)
         cand.sequence = seq
@@ -2100,7 +2604,10 @@ def stage_sequence_update(request):
     """
     This method is used to update the sequence of the stages
     """
-    sequence_data = json.loads(request.POST["sequence"])
+    sequence_data = json.loads(request.POST.get("sequence", "{}"))
+    if not sequence_data:
+        return JsonResponse({"type": "error", "message": _("Missing Sequence")})
+
     for stage_id, seq in sequence_data.items():
         stage = Stage.objects.get(id=stage_id)
         stage.sequence = seq
@@ -2136,6 +2643,7 @@ def candidate_select_filter(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         candidate_filter = CandidateFilter(filters, queryset=Candidate.objects.all())
@@ -2143,12 +2651,12 @@ def candidate_select_filter(request):
         # Get the filtered queryset
         filtered_candidates = candidate_filter.qs
 
-        employee_ids = [str(emp.id) for emp in filtered_candidates]
+        candidate_ids = [str(cand.id) for cand in filtered_candidates]
         total_count = filtered_candidates.count()
 
-        context = {"employee_ids": employee_ids, "total_count": total_count}
+        context = {"employee_ids": candidate_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
@@ -2158,18 +2666,21 @@ def create_candidate_rating(request, cand_id):
     Args:
         cand_id : candidate instance id
     """
-    cand_id = cand_id
-    candidate = Candidate.objects.get(id=cand_id)
-    employee_id = request.user.employee_get
-    rating = request.POST.get("rating")
-    CandidateRating.objects.create(
-        candidate_id=candidate, rating=rating, employee_id=employee_id
-    )
+    candidate = Candidate.find(cand_id)
+    if candidate:
+        employee_id = request.user.employee_get
+        rating = request.POST.get("rating")
+        CandidateRating.objects.create(
+            candidate_id=candidate, rating=rating, employee_id=employee_id
+        )
+    else:
+        messages.error(request, _("No Candidate found matching the query"))
+
     return redirect(recruitment_pipeline)
 
 
 # ///////////////////////////////////////////////
-# skill zone
+# talent pool
 # ///////////////////////////////////////////////
 
 
@@ -2177,7 +2688,7 @@ def create_candidate_rating(request, cand_id):
 @manager_can_enter(perm="recruitment.view_skillzone")
 def skill_zone_view(request):
     """
-    This method is used to show Skill zone view
+    This method is used to show Talent pool view
     """
     candidates = SkillZoneCandFilter(request.GET).qs.filter(is_active=True)
     skill_groups = group_by_queryset(
@@ -2230,14 +2741,14 @@ def skill_zone_view(request):
 @manager_can_enter(perm="recruitment.add_skillzone")
 def skill_zone_create(request):
     """
-    This method is used to create Skill zone.
+    This method is used to create Talent pool.
     """
     form = SkillZoneCreateForm()
     if request.method == "POST":
         form = SkillZoneCreateForm(request.POST)
         if form.is_valid():
             form.save()
-            messages.success(request, _("Skill Zone created successfully."))
+            messages.success(request, _("Talent Pool created successfully."))
             form = SkillZoneCreateForm()
 
     return render(
@@ -2252,7 +2763,7 @@ def skill_zone_create(request):
 @manager_can_enter(perm="recruitment.change_skillzone")
 def skill_zone_update(request, sz_id):
     """
-    This method is used to update Skill zone.
+    This method is used to update Talent pool.
     """
     skill_zone = SkillZone.objects.get(id=sz_id)
     form = SkillZoneCreateForm(instance=skill_zone)
@@ -2260,7 +2771,7 @@ def skill_zone_update(request, sz_id):
         form = SkillZoneCreateForm(request.POST, instance=skill_zone)
         if form.is_valid():
             form.save()
-            messages.success(request, _("Skill Zone updated successfully."))
+            messages.success(request, _("Talent Pool updated successfully."))
     return render(
         request,
         "skill_zone/skill_zone_form.html",
@@ -2269,27 +2780,32 @@ def skill_zone_update(request, sz_id):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter(perm="recruitment.delete_skillzone")
 def skill_zone_delete(request, sz_id):
     """
-    function used to delete Skill zone.
+    function used to delete Talent pool.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_id : Skill zone id
+    sz_id : Talent pool id
 
     Returns:
-    GET : return Skill zone view template
+    GET : return Talent pool view template
     """
     try:
         skill_zone = SkillZone.find(sz_id)
         if skill_zone:
             skill_zone.delete()
-            messages.success(request, _("Skill zone deleted successfully.."))
+            messages.success(request, _("Talent pool deleted successfully."))
         else:
-            messages.error(request, _("Skill zone not found."))
+            messages.error(request, _("Talent pool not found."))
     except ProtectedError:
         messages.error(request, _("Related entries exists"))
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Trigger"] = "skillZoneContainerReload"
+        return response
     return HttpResponse(
         "<script>$('.filterButton')[0].click();reloadMessage();</script>"
     )
@@ -2299,14 +2815,14 @@ def skill_zone_delete(request, sz_id):
 @manager_can_enter(perm="recruitment.change_skillzone")
 def skill_zone_archive(request, sz_id):
     """
-    function used to archive or un-archive Skill zone.
+    function used to archive or un-archive Talent pool.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_id : Skill zone id
+    sz_id : Talent pool id
 
     Returns:
-    GET : return Skill zone view template
+    GET : return Talent pool view template
     """
     skill_zone = SkillZone.find(sz_id)
     if skill_zone:
@@ -2319,7 +2835,7 @@ def skill_zone_archive(request, sz_id):
             for i in skill_zone_candidates:
                 i.is_active = False
                 i.save()
-            messages.success(request, _("Skill zone archived successfully.."))
+            messages.success(request, _("Talent pool archived successfully."))
         else:
             skill_zone.is_active = True
             skill_zone_candidates = SkillZoneCandidate.objects.filter(
@@ -2328,10 +2844,14 @@ def skill_zone_archive(request, sz_id):
             for i in skill_zone_candidates:
                 i.is_active = True
                 i.save()
-            messages.success(request, _("Skill zone unarchived successfully.."))
+            messages.success(request, _("Talent pool unarchived successfully."))
         skill_zone.save()
     else:
-        messages.error(request, _("Skill zone not found."))
+        messages.error(request, _("Talent pool not found."))
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Trigger"] = "skillZoneContainerReload"
+        return response
     return redirect(skill_zone_view)
 
 
@@ -2340,7 +2860,7 @@ def skill_zone_archive(request, sz_id):
 @manager_can_enter(perm="recruitment.view_skillzone")
 def skill_zone_filter(request):
     """
-    This method is used to filter and show Skill zone view.
+    This method is used to filter and show Talent pool view.
     """
     template = "skill_zone/skill_zone_list.html"
     if request.GET.get("view") == "card":
@@ -2398,14 +2918,14 @@ def skill_zone_filter(request):
 @manager_can_enter(perm="recruitment.view_skillzonecandidate")
 def skill_zone_cand_card_view(request, sz_id):
     """
-    This method is used to show Skill zone candidates.
+    This method is used to show Talent pool candidates.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_cand_id : Skill zone id
+    sz_cand_id : Talent pool id
 
     Returns:
-    GET : return Skill zone candidate view template
+    GET : return Talent pool candidate view template
     """
     skill_zone = SkillZone.objects.get(id=sz_id)
     template = "skill_zone_cand/skill_zone_cand_view.html"
@@ -2425,14 +2945,14 @@ def skill_zone_cand_card_view(request, sz_id):
 @manager_can_enter(perm="recruitment.add_skillzonecandidate")
 def skill_zone_candidate_create(request, sz_id):
     """
-    This method is used to add candidates to a Skill zone.
+    This method is used to add candidates to a Talent pool.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_cand_id : Skill zone id
+    sz_cand_id : Talent pool id
 
     Returns:
-    GET : return Skill zone candidate create template
+    GET : return Talent pool candidate create template
     """
     skill_zone = SkillZone.objects.get(id=sz_id)
     template = "skill_zone_cand/skill_zone_cand_form.html"
@@ -2442,7 +2962,7 @@ def skill_zone_candidate_create(request, sz_id):
         if form.is_valid():
             form.save()
             messages.success(request, _("Candidate added successfully."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
 
     return render(request, template, {"form": form, "sz_id": sz_id})
 
@@ -2452,14 +2972,14 @@ def skill_zone_candidate_create(request, sz_id):
 @manager_can_enter(perm="recruitment.change_skillzonecandidate")
 def skill_zone_cand_edit(request, sz_cand_id):
     """
-    This method is used to edit candidates in a Skill zone.
+    This method is used to edit candidates in a Talent pool.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_cand_id : Skill zone candidate id
+    sz_cand_id : Talent pool candidate id
 
     Returns:
-    GET : return Skill zone candidate edit template
+    GET : return Talent pool candidate edit template
     """
     skill_zone_cand = SkillZoneCandidate.objects.filter(id=sz_cand_id).first()
     template = "skill_zone_cand/skill_zone_cand_form.html"
@@ -2469,39 +2989,16 @@ def skill_zone_cand_edit(request, sz_cand_id):
         if form.is_valid():
             form.save()
             messages.success(request, _("Candidate edited successfully."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     return render(request, template, {"form": form, "sz_cand_id": sz_cand_id})
 
 
 @login_required
-@manager_can_enter(perm="recruitment.delete_skillzonecandidate")
-def skill_zone_cand_delete(request, sz_cand_id):
-    """
-    function used to delete Skill zone candidate.
-
-    Parameters:
-    request (HttpRequest): The HTTP request object.
-    sz_cand_id : Skill zone candidate id
-
-    Returns:
-    GET : return Skill zone view template
-    """
-
-    try:
-        SkillZoneCandidate.objects.get(id=sz_cand_id).delete()
-        messages.success(request, _("Skill zone deleted successfully.."))
-    except SkillZoneCandidate.DoesNotExist:
-        messages.error(request, _("Skill zone not found."))
-    except ProtectedError:
-        messages.error(request, _("Related entries exists"))
-    return redirect(skill_zone_view)
-
-
-@login_required
+@hx_request_required
 @manager_can_enter(perm="recruitment.view_skillzonecandidate")
 def skill_zone_cand_filter(request):
     """
-    This method is used to filter the skill zone candidates
+    This method is used to filter the talent pool candidates
     """
     template = "skill_zone_cand/skill_zone_cand_card.html"
     if request.GET.get("view") == "list":
@@ -2529,14 +3026,14 @@ def skill_zone_cand_filter(request):
 @manager_can_enter(perm="recruitment.delete_skillzonecandidate")
 def skill_zone_cand_archive(request, sz_cand_id):
     """
-    function used to archive or un-archive Skill zone candidate.
+    function used to archive or un-archive Talent pool candidate.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_cand_id : Skill zone candidate id
+    sz_cand_id : Talent pool candidate id
 
     Returns:
-    GET : return Skill zone candidate view template
+    GET : return Talent pool candidate view template
     """
     try:
         skill_zone_cand = SkillZoneCandidate.objects.get(id=sz_cand_id)
@@ -2550,8 +3047,8 @@ def skill_zone_cand_archive(request, sz_cand_id):
             messages.success(request, _("Candidate unarchived successfully.."))
 
         skill_zone_cand.save()
-    except SkillZone.DoesNotExist:
-        messages.error(request, _("Candidate not found."))
+    except SkillZoneCandidate.DoesNotExist:
+        messages.error(request, _("No Candidate found matching the query."))
     return redirect(skill_zone_view)
 
 
@@ -2559,14 +3056,14 @@ def skill_zone_cand_archive(request, sz_cand_id):
 @manager_can_enter(perm="recruitment.delete_skillzonecandidate")
 def skill_zone_cand_delete(request, sz_cand_id):
     """
-    function used to delete Skill zone candidate.
+    function used to delete Talent pool candidate.
 
     Parameters:
     request (HttpRequest): The HTTP request object.
-    sz_cand_id : Skill zone candidate id
+    sz_cand_id : Talent pool candidate id
 
     Returns:
-    GET : return Skill zone view template
+    GET : return Talent pool view template
     """
     try:
         SkillZoneCandidate.objects.get(id=sz_cand_id).delete()
@@ -2575,6 +3072,10 @@ def skill_zone_cand_delete(request, sz_cand_id):
         messages.error(request, _("Candidate not found."))
     except ProtectedError:
         messages.error(request, _("Related entries exists"))
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Trigger"] = "skillZoneContainerReload"
+        return response
     return redirect(skill_zone_view)
 
 
@@ -2582,7 +3083,7 @@ def skill_zone_cand_delete(request, sz_cand_id):
 @hx_request_required
 def to_skill_zone(request, cand_id):
     """
-    This method is used to Add candidate into skill zone
+    This method is used to Add candidate into talent pool
     Args:
         cand_id : candidate instance id
     """
@@ -2590,8 +3091,8 @@ def to_skill_zone(request, cand_id):
         request.user.has_perm("recruitment.change_candidate")
         or request.user.has_perm("recruitment.add_skillzonecandidate")
     ):
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        messages.info(request, _("You don't have permission."))
+        return HorillaRedirect(request)
 
     candidate = Candidate.objects.get(id=cand_id)
     template = "skill_zone_cand/to_skill_zone_form.html"
@@ -2616,8 +3117,8 @@ def to_skill_zone(request, cand_id):
                     zone_candidate.skill_zone_id = zone
                     zone_candidate.reason = form.cleaned_data["reason"]
                     zone_candidate.save()
-            messages.success(request, "Candidate Added to skill zone successfully")
-            return HttpResponse("<script>window.location.reload()</script>")
+            messages.success(request, _("Candidate added to talent pool successfully"))
+            return HorillaRedirect(request)
     return render(request, template, {"form": form, "cand_id": cand_id})
 
 
@@ -2628,13 +3129,18 @@ def update_candidate_rating(request, cand_id):
     Args:
         id : candidate rating instance id
     """
-    cand_id = cand_id
-    candidate = Candidate.objects.get(id=cand_id)
-    employee_id = request.user.employee_get
-    rating = request.POST.get("rating")
-    rate = CandidateRating.objects.get(candidate_id=candidate, employee_id=employee_id)
-    rate.rating = int(rating)
-    rate.save()
+    candidate = Candidate.find(cand_id)
+    if candidate:
+        employee_id = request.user.employee_get
+        rating = request.POST.get("rating")
+        rate = CandidateRating.objects.get(
+            candidate_id=candidate, employee_id=employee_id
+        )
+        rate.rating = int(rating)
+        rate.save()
+    else:
+        messages.error(request, _("No Candidate found matching the query"))
+
     return redirect(recruitment_pipeline)
 
 
@@ -2654,12 +3160,25 @@ def open_recruitments(request):
     return response
 
 
-@hx_request_required
 def recruitment_details(request, id):
     """
-    This method is used to render the recruitment details page
+    This method is used to render the recruitment details page.
+
+    Public/unauthenticated visitors can view this (it's reached from the
+    public open-recruitments page); recruitment_details.html itself gates
+    the sensitive applied/capacity numbers behind
+    perms.recruitment.view_recruitment.
     """
-    recruitment = Recruitment.default.get(id=id)
+    # This endpoint returns only the sidebar fragment loaded via HTMX from
+    # the open-recruitments page; a genuine top-level browser navigation
+    # (e.g. someone bookmarking/sharing this exact URL) should land on that
+    # real public page instead of a bare "Method Not Allowed" error.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        return redirect(reverse("open-recruitments"))
+    recruitment = Recruitment.default.filter(id=id).first()
+    if not recruitment:
+        messages.error(request, _("Recruitment not found."))
+        return HorillaRedirect(request)
     context = {
         "recruitment": recruitment,
     }
@@ -2668,16 +3187,26 @@ def recruitment_details(request, id):
 
 @login_required
 @manager_can_enter("recruitment.view_candidate")
-def get_mail_log(request):
+def get_mail_log(request, pk):
     """
     This method is used to track mails sent along with the status
     """
-    candidate_id = request.GET["candidate_id"]
-    candidate = Candidate.objects.get(id=candidate_id)
-    tracked_mails = EmailLog.objects.filter(to__icontains=candidate.email).order_by(
+
+    candidate_obj = Candidate.find(pk)
+    if not candidate_obj:
+        return HorillaRedirect(request, message=_("Candidate not found."))
+
+    tracked_mails = EmailLog.objects.filter(to__icontains=candidate_obj.email).order_by(
         "-created_at"
     )
-    return render(request, "candidate/mail_log.html", {"tracked_mails": tracked_mails})
+    return render(
+        request,
+        "candidate/mail_log.html",
+        {
+            "candidate": candidate_obj,
+            "tracked_mails": tracked_mails,
+        },
+    )
 
 
 @login_required
@@ -2687,11 +3216,22 @@ def candidate_self_tracking(request):
     """
     This method is used to update the recruitment general setting
     """
-    settings = RecruitmentGeneralSetting.objects.first()
-    settings = settings if settings else RecruitmentGeneralSetting()
-    settings.candidate_self_tracking = "candidate_self_tracking" in request.GET.keys()
+    selected_company = request.session.get("selected_company")
+    company_id = (
+        None if not selected_company or selected_company == "all" else selected_company
+    )
+    settings, created = RecruitmentGeneralSetting.objects.get_or_create(
+        company_id_id=company_id
+    )
+    if request.GET.get("candidate_self_tracking") == "true":
+        settings.candidate_self_tracking = True
+        message = _("Application Tracking is enabled ")
+    else:
+        settings.candidate_self_tracking = False
+        message = _("Application Tracking is disabled ")
     settings.save()
-    return HttpResponse("success")
+    messages.success(request, message)
+    return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
 
 
 @login_required
@@ -2701,17 +3241,28 @@ def candidate_self_tracking_rating_option(request):
     """
     This method is used to enable/disable the selt tracking rating field
     """
-    settings = RecruitmentGeneralSetting.objects.first()
-    settings = settings if settings else RecruitmentGeneralSetting()
-    settings.show_overall_rating = "candidate_self_tracking" in request.GET.keys()
+    selected_company = request.session.get("selected_company")
+    company_id = (
+        None if not selected_company or selected_company == "all" else selected_company
+    )
+    settings, created = RecruitmentGeneralSetting.objects.get_or_create(
+        company_id_id=company_id
+    )
+    if request.GET.get("candidate_self_tracking") == "true":
+        settings.show_overall_rating = True
+        message = _("Rating visibility is enabled ")
+    else:
+        settings.show_overall_rating = False
+        message = _("Rating visibility is disabled ")
     settings.save()
-    return HttpResponse("success")
+    messages.success(request, message)
+    return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
 
 
 def candidate_login(request):
     if request.method == "POST":
-        email = request.POST["email"]
-        mobile = request.POST["phone"]
+        email = request.POST.get("email", "").strip()
+        mobile = request.POST.get("phone", "").strip()
 
         backend = CandidateAuthenticationBackend()
         candidate = backend.authenticate(request, username=email, password=mobile)
@@ -2733,7 +3284,7 @@ def candidate_logout(request):
 
     request.session.pop("candidate_id", None)
     request.session.pop("candidate_email", None)
-    messages.success(request, "You have been logged out.")
+    messages.success(request, _("You have been logged out."))
     return redirect("candidate_login")
 
 
@@ -2749,7 +3300,7 @@ def candidate_self_status_tracking(request):
         candidate_id = request.session.get("candidate_id")
 
         if not candidate_id:
-            return redirect("candidate-login")
+            return redirect("candidate-login/")
 
         candidate = Candidate.objects.get(pk=candidate_id)
         interviews = candidate.candidate_interview.annotate(
@@ -2789,7 +3340,7 @@ def candidate_self_status_tracking_managers_view(request, cand_id):
             candidate_id = cand_id
 
         if not candidate_id:
-            return redirect("candidate-login")
+            return redirect("candidate-login/")
 
         candidate = Candidate.objects.get(pk=candidate_id)
         interviews = candidate.candidate_interview.annotate(
@@ -2824,8 +3375,8 @@ def create_reject_reason(request):
         form = RejectReasonForm(request.POST, instance=instance)
         if form.is_valid():
             form.save()
-            messages.success(request, "Reject reason saved")
-            return HttpResponse("<script>window.location.reload()</script>")
+            messages.success(request, _("Reject reason saved"))
+            return HorillaRedirect(request)
     return render(request, "settings/reject_reason_form.html", {"form": form})
 
 
@@ -2839,17 +3390,31 @@ def self_tracking_feature(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("recruitment.delete_rejectreason")
 def delete_reject_reason(request):
     """
     This method is used to delete the reject reasons
     """
-    ids = request.GET.getlist("ids")
-    reasons = RejectReason.objects.filter(id__in=ids)
-    for reason in reasons:
-        reasons.delete()
-        messages.success(request, f"{reason.title} is deleted.")
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    id = request.GET.get("id")
+    if not (reason := RejectReason.find(id)):
+        messages.error(request, _("No Rejection Reason found matching the query."))
+        return HttpResponse("<script>$('.reload-record').click();</script>")
+
+    is_last = RejectReason.objects.count() == 1
+    reason.delete()
+    messages.success(request, _(f"{reason.title} is deleted."))
+    script = (
+        "$('.reload-record').click();"
+        if is_last
+        else "$('#reloadMessagesButton').click();"
+    )
+    return HttpResponse(f"<script>{script}</script>")
+
+
+# Loaded once per worker process at import time (spaCy model load is slow;
+# never call spacy.load() inside a request-handling function).
+_resume_nlp = spacy.load("en_core_web_sm")
 
 
 def extract_text_with_font_info(pdf):
@@ -2858,12 +3423,9 @@ def extract_text_with_font_info(pdf):
     Args:
         pdf (): pdf file to extract text from
     """
-    if not HAS_PYMUPDF:
-        return []
-    
     pdf_bytes = pdf.read()
     pdf_doc = io.BytesIO(pdf_bytes)
-    doc = fitz.open("pdf", pdf_doc)
+    doc = pymupdf.open("pdf", pdf_doc)
     text_info = []
 
     for page_num in range(len(doc)):
@@ -2905,6 +3467,36 @@ def rank_text(text_info):
     return ranked_text
 
 
+# --- Legacy implementation (superseded below, kept for reference) ---
+# def dob_matching(dob):
+#     """
+#     This method is used to change the date format to YYYY-MM-DD
+#
+#     Args:
+#         dob: Date
+#
+#     Returns:
+#         Return date in YYYY-MM-DD
+#     """
+#     date_formats = [
+#         "%Y-%m-%d",
+#         "%Y/%m/%d",
+#         "%d-%m-%Y",
+#         "%d/%m/%Y",
+#         "%Y.%m.%d",
+#         "%d.%m.%Y",
+#     ]
+#
+#     for fmt in date_formats:
+#         try:
+#             parsed_date = datetime.strptime(dob, fmt)
+#             return parsed_date.strftime("%Y-%m-%d")
+#         except ValueError:
+#             continue
+#
+#     return dob
+
+
 def dob_matching(dob):
     """
     This method is used to change the date format to YYYY-MM-DD
@@ -2915,23 +3507,90 @@ def dob_matching(dob):
     Returns:
         Return date in YYYY-MM-DD
     """
-    date_formats = [
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-        "%d-%m-%Y",
-        "%d/%m/%Y",
-        "%Y.%m.%d",
-        "%d.%m.%Y",
-    ]
+    try:
+        parsed_date = dateutil_parser.parse(dob, dayfirst=True, fuzzy=True)
+        return parsed_date.strftime("%Y-%m-%d")
+    except (ValueError, OverflowError):
+        return dob
 
-    for fmt in date_formats:
-        try:
-            parsed_date = datetime.strptime(dob, fmt)
-            return parsed_date.strftime("%Y-%m-%d")
-        except ValueError:
-            continue
 
-    return dob
+# --- Legacy implementation (superseded below, kept for reference) ---
+# def extract_info(pdf):
+#     """
+#     This method creates the contact information dictionary from the provided pdf file
+#     Args:
+#         pdf_file: pdf file
+#     """
+#     extracted_info = {
+#         "full_name": "",
+#         "address": "",
+#         "country": "",
+#         "state": "",
+#         "phone_number": "",
+#         "dob": "",
+#         "email_id": "",
+#         "zip": "",
+#     }
+#     if not pdf:
+#         return extracted_info
+#
+#     text_info = extract_text_with_font_info(pdf)
+#     ranked_text = rank_text(text_info)
+#
+#     phone_pattern = re.compile(r"\b\+?\d{1,2}\s?\d{9,10}\b")
+#     dob_pattern = re.compile(
+#         r"\b(?:\d{1,2}|\d{4})[-/.,]\d{1,2}[-/.,](?:\d{1,2}|\d{4})\b"
+#     )
+#     email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+#     zip_code_pattern = re.compile(r"\b\d{5,6}(?:-\d{4})?\b")
+#
+#     name_candidates = [
+#         item["text"]
+#         for item in ranked_text
+#         if item["font_size"] == max(item["font_size"] for item in ranked_text)
+#     ]
+#
+#     if name_candidates:
+#         extracted_info["full_name"] = " ".join(name_candidates)
+#
+#     for item in ranked_text:
+#         text = item["text"]
+#
+#         if not text:
+#             continue
+#
+#         if not extracted_info["phone_number"]:
+#             phone_match = phone_pattern.search(text)
+#             if phone_match:
+#                 extracted_info["phone_number"] = phone_match.group()
+#
+#         if not extracted_info["dob"]:
+#             dob_match = dob_pattern.search(text)
+#             if dob_match:
+#                 extracted_info["dob"] = dob_matching(dob_match.group())
+#
+#         if not extracted_info["zip"]:
+#             zip_match = zip_code_pattern.search(text)
+#             if zip_match:
+#                 extracted_info["zip"] = zip_match.group()
+#
+#         if not extracted_info["email_id"]:
+#             email_match = email_pattern.search(text)
+#             if email_match:
+#                 extracted_info["email_id"] = email_match.group()
+#
+#         if "address" in text.lower() and not extracted_info["address"]:
+#             extracted_info["address"] = text.replace("Address:", "").strip()
+#
+#         for item in text.split(" "):
+#             if item.capitalize() in country_arr:
+#                 extracted_info["country"] = item
+#
+#         for item in text.split(" "):
+#             if item.capitalize() in states:
+#                 extracted_info["state"] = item
+#
+#     return extracted_info
 
 
 def extract_info(pdf):
@@ -2940,17 +3599,6 @@ def extract_info(pdf):
     Args:
         pdf_file: pdf file
     """
-
-    text_info = extract_text_with_font_info(pdf)
-    ranked_text = rank_text(text_info)
-
-    phone_pattern = re.compile(r"\b\+?\d{1,2}\s?\d{9,10}\b")
-    dob_pattern = re.compile(
-        r"\b(?:\d{1,2}|\d{4})[-/.,]\d{1,2}[-/.,](?:\d{1,2}|\d{4})\b"
-    )
-    email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
-    zip_code_pattern = re.compile(r"\b\d{5,6}(?:-\d{4})?\b")
-
     extracted_info = {
         "full_name": "",
         "address": "",
@@ -2960,16 +3608,101 @@ def extract_info(pdf):
         "dob": "",
         "email_id": "",
         "zip": "",
+        "portfolio": "",
     }
+    if not pdf:
+        return extracted_info
 
-    name_candidates = [
-        item["text"]
-        for item in ranked_text
-        if item["font_size"] == max(item["font_size"] for item in ranked_text)
-    ]
+    text_info = extract_text_with_font_info(pdf)
+    ranked_text = rank_text(text_info)
 
-    if name_candidates:
-        extracted_info["full_name"] = " ".join(name_candidates)
+    if not ranked_text:
+        return extracted_info
+
+    # Use text_info (natural document order), not ranked_text (font-size sorted),
+    # since spaCy's NER needs coherent word order to detect entities correctly.
+    full_text = "\n".join(item["text"] for item in text_info if item["text"])
+    # added: line list, so a spaCy entity's char offset can be mapped back to
+    # its source line for the address fallback below.
+    lines = [item["text"] for item in text_info if item["text"]]
+
+    dob_pattern = re.compile(
+        r"\b(?:\d{1,2}|\d{4})[-/.,]\d{1,2}[-/.,](?:\d{1,2}|\d{4})\b"
+    )
+    email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+    zip_code_pattern = re.compile(r"\b\d{5,6}(?:-\d{4})?\b")
+    dob_keyword_pattern = re.compile(r"\b(dob|date\s+of\s+birth|born)\b", re.IGNORECASE)
+    url_pattern = re.compile(
+        r"\b(?:https?://\S+|www\.\S+"
+        r"|(?:github|linkedin|gitlab|behance|dribbble)\.com/\S+)",
+        re.IGNORECASE,
+    )
+
+    max_font_size = max(item["font_size"] for item in ranked_text)
+    top_spans = [item for item in ranked_text if item["font_size"] == max_font_size]
+    name_doc = _resume_nlp(" ".join(item["text"] for item in top_spans))
+    person_names = [ent.text for ent in name_doc.ents if ent.label_ == "PERSON"]
+    if person_names:
+        extracted_info["full_name"] = " ".join(person_names)
+    else:
+        extracted_info["full_name"] = " ".join(item["text"] for item in top_spans)
+
+    # added: fallback address candidate, taken from the resume line containing
+    # the matched country/state entity, used only if the "Address:"-keyword
+    # pass above found nothing.
+    def _line_for_char_offset(offset):
+        """Map a spaCy entity's char offset in full_text back to its source line."""
+        pos = 0
+        for line in lines:
+            end = pos + len(line)
+            if pos <= offset <= end:
+                return line
+            pos = end + 1  # account for the "\n" joiner
+        return None
+
+    gpe_address_candidate = None
+
+    doc = _resume_nlp(full_text)
+    for ent in doc.ents:
+        if ent.label_ != "GPE":
+            continue
+        if not extracted_info["country"]:
+            try:
+                country_match = pycountry.countries.lookup(ent.text)
+                extracted_info["country"] = getattr(
+                    country_match, "common_name", country_match.name
+                )
+                # added: capture the containing line as an address candidate
+                if not gpe_address_candidate:
+                    candidate_line = _line_for_char_offset(ent.start_char)
+                    if (
+                        candidate_line
+                        and candidate_line.strip().lower() != ent.text.lower()
+                    ):
+                        gpe_address_candidate = candidate_line.strip()
+                continue
+            except LookupError:
+                pass
+        if not extracted_info["state"]:
+            try:
+                subdivision_match = pycountry.subdivisions.lookup(ent.text)
+                extracted_info["state"] = subdivision_match.name
+                # added: capture the containing line as an address candidate
+                if not gpe_address_candidate:
+                    candidate_line = _line_for_char_offset(ent.start_char)
+                    if (
+                        candidate_line
+                        and candidate_line.strip().lower() != ent.text.lower()
+                    ):
+                        gpe_address_candidate = candidate_line.strip()
+            except LookupError:
+                pass
+
+    phone_matches = list(phonenumbers.PhoneNumberMatcher(full_text, None))
+    if phone_matches:
+        extracted_info["phone_number"] = phonenumbers.format_number(
+            phone_matches[0].number, phonenumbers.PhoneNumberFormat.INTERNATIONAL
+        )
 
     for item in ranked_text:
         text = item["text"]
@@ -2977,14 +3710,9 @@ def extract_info(pdf):
         if not text:
             continue
 
-        if not extracted_info["phone_number"]:
-            phone_match = phone_pattern.search(text)
-            if phone_match:
-                extracted_info["phone_number"] = phone_match.group()
-
         if not extracted_info["dob"]:
             dob_match = dob_pattern.search(text)
-            if dob_match:
+            if dob_match and dob_keyword_pattern.search(text):
                 extracted_info["dob"] = dob_matching(dob_match.group())
 
         if not extracted_info["zip"]:
@@ -3000,13 +3728,15 @@ def extract_info(pdf):
         if "address" in text.lower() and not extracted_info["address"]:
             extracted_info["address"] = text.replace("Address:", "").strip()
 
-        for item in text.split(" "):
-            if item.capitalize() in country_arr:
-                extracted_info["country"] = item
+        if not extracted_info["portfolio"]:
+            url_match = url_pattern.search(text)
+            if url_match:
+                extracted_info["portfolio"] = url_match.group()
 
-        for item in text.split(" "):
-            if item.capitalize() in states:
-                extracted_info["state"] = item
+    # added: fall back to the spaCy-derived address candidate only if the
+    # explicit "Address:" keyword pass above found nothing.
+    if not extracted_info["address"] and gpe_address_candidate:
+        extracted_info["address"] = gpe_address_candidate
 
     return extracted_info
 
@@ -3015,7 +3745,9 @@ def resume_completion(request):
     """
     This function is returns the data for completing the candidate creation form
     """
-    resume_file = request.FILES["resume"]
+    if not request.user.is_authenticated:
+        return redirect(f"{reverse('login')}?next={request.path}")
+    resume_file = request.FILES.get("resume")
     contact_info = extract_info(resume_file)
 
     return JsonResponse(contact_info)
@@ -3027,7 +3759,7 @@ def check_vaccancy(request):
     """
     stage_id = request.GET.get("stageId")
     stage = Stage.objects.get(id=stage_id)
-    message = "No message"
+    message = _("No message")
     if stage and stage.recruitment_id.is_vacancy_filled():
         message = _("Vaccancy is filled")
     return JsonResponse({"message": message})
@@ -3043,6 +3775,7 @@ def skills_view(request):
 
 
 @login_required
+@hx_request_required
 def create_skills(request):
     """
     This method is used to create the skills
@@ -3058,10 +3791,9 @@ def create_skills(request):
         form = SkillsForm(request.POST, instance=instance)
         if form.is_valid():
             form.save()
-            messages.success(request, "Skill created successfully")
+            messages.success(request, _("Skill created successfully"))
 
             if request.GET.get("dynamic") == "True":
-                from django.urls import reverse
 
                 url = reverse("recruitment-create")
                 instance = Skill.objects.all().last()
@@ -3091,17 +3823,27 @@ def create_skills(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("recruitment.delete_rejectreason")
-def delete_skills(request):
+def delete_skills(request, id=None):
     """
     This method is used to delete the skills
     """
     ids = request.GET.getlist("ids")
+
     skills = Skill.objects.filter(id__in=ids)
-    for skill in skills:
-        skill.delete()
-        messages.success(request, f"{skill.title} is deleted.")
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    titles = list(skills.values_list("title", flat=True))
+
+    count_before = skills.count()
+    deleted_count, d = skills.delete()
+
+    for title in titles:
+        messages.success(request, _("%(title)s is deleted.") % {"title": title})
+
+    if count_before - deleted_count == 0:
+        return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
+
+    return HttpResponse("<script>$('.reload-record').click()</script>")
 
 
 @login_required
@@ -3112,7 +3854,15 @@ def view_bulk_resumes(request):
     This function returns the bulk_resume.html page to the modal
     """
     rec_id = eval_validate(str(request.GET.get("rec_id")))
-    resumes = Resume.objects.filter(recruitment_id=rec_id)
+    if not rec_id:
+        return HttpResponse()
+    # Recruitment.objects is company-scoped; Resume is not (it has no
+    # company_id of its own), so resolving the recruitment first is what
+    # keeps another company's resumes out of this list.
+    recruitment = Recruitment.objects.filter(id=rec_id).first()
+    if not recruitment:
+        return HttpResponse()
+    resumes = Resume.objects.filter(recruitment_id=recruitment)
 
     return render(
         request, "pipeline/bulk_resume.html", {"resumes": resumes, "rec_id": rec_id}
@@ -3127,7 +3877,9 @@ def add_bulk_resumes(request):
     This function is used to create bulk resume
     """
     rec_id = eval_validate(str(request.GET.get("rec_id")))
-    recruitment = Recruitment.objects.get(id=rec_id)
+    recruitment = Recruitment.objects.filter(id=rec_id).first()
+    if not recruitment:
+        return HttpResponse()
     if request.method == "POST":
         files = request.FILES.getlist("files")
         for file in files:
@@ -3135,6 +3887,7 @@ def add_bulk_resumes(request):
                 file=file,
                 recruitment_id=recruitment,
             )
+        CACHE.delete(f"matching_resumes_{rec_id}")
 
         url = reverse("view-bulk-resume")
         query_params = f"?rec_id={rec_id}"
@@ -3151,7 +3904,15 @@ def delete_resume_file(request):
     """
     ids = request.GET.getlist("ids")
     rec_id = request.GET.get("rec_id")
-    Resume.objects.filter(id__in=ids).delete()
+    # Scope the delete to a recruitment this user can actually reach.
+    # manager_can_enter admits any reporting manager, and Resume is not
+    # company-scoped, so an unscoped filter let a manager in one company
+    # delete another company's resumes by passing their ids.
+    recruitment = Recruitment.objects.filter(id=rec_id).first()
+    if not recruitment:
+        return HttpResponse(status=404)
+    Resume.objects.filter(id__in=ids, recruitment_id=recruitment).delete()
+    CACHE.delete(f"matching_resumes_{rec_id}")
 
     url = reverse("view-bulk-resume")
     query_params = f"?rec_id={rec_id}"
@@ -3159,31 +3920,66 @@ def delete_resume_file(request):
     return redirect(f"{url}{query_params}")
 
 
+# --- Legacy implementation (superseded below, kept for reference) ---
+# def extract_words_from_pdf(pdf_file):
+#     """
+#     This method is used to extract the words from the pdf file into a list.
+#     Args:
+#         pdf_file: pdf file
+#
+#     """
+#     pdf_document = fitz.open(pdf_file.path)
+#
+#     words = []
+#
+#     for page_num in range(len(pdf_document)):
+#         page = pdf_document.load_page(page_num)
+#         page_text = page.get_text()
+#
+#         page_words = re.findall(r"\b\w+\b", page_text.lower())
+#
+#         words.extend(page_words)
+#
+#     pdf_document.close()
+#
+#     return words
+
+
 def extract_words_from_pdf(pdf_file):
     """
-    This method is used to extract the words from the pdf file into a list.
+    This method is used to extract the raw text content from the pdf file.
     Args:
         pdf_file: pdf file
 
     """
-    if not HAS_PYMUPDF:
-        return []
-    
-    pdf_document = fitz.open(pdf_file.path)
+    pdf_document = pymupdf.open(pdf_file.path)
 
-    words = []
+    text_chunks = []
 
     for page_num in range(len(pdf_document)):
         page = pdf_document.load_page(page_num)
-        page_text = page.get_text()
-
-        page_words = re.findall(r"\b\w+\b", page_text.lower())
-
-        words.extend(page_words)
+        text_chunks.append(page.get_text())
 
     pdf_document.close()
 
-    return words
+    return "\n".join(text_chunks).lower()
+
+
+def skill_match_count(text, skills, threshold=85):
+    """
+    This method counts how many of the given skills are present in the resume
+    text, using fuzzy matching so multi-word skills and near-variant spellings
+    (e.g. "Node.js" vs "NodeJS") are still counted as a match.
+
+    Args:
+        text: Full lowercased resume text
+        skills: Iterable of skill title strings
+        threshold: Minimum rapidfuzz partial_ratio score (0-100) to count as a match
+    """
+    if not text:
+        return 0
+    text = text.lower()
+    return sum(fuzz.partial_ratio(skill.lower(), text) >= threshold for skill in skills)
 
 
 @login_required
@@ -3197,38 +3993,49 @@ def matching_resumes(request, rec_id):
         rec_id: Recruitment ID
 
     """
-    recruitment = Recruitment.objects.filter(id=rec_id).first()
-    skills = recruitment.skills.values_list("title", flat=True)
-    resumes = recruitment.resume.all()
-    is_candidate = resumes.filter(is_candidate=True)
-    is_candidate_ids = set(is_candidate.values_list("id", flat=True))
+    cache_key = f"matching_resumes_{rec_id}"
+    ranked_resumes = CACHE.get(cache_key)
+    if ranked_resumes is None:
+        recruitment = Recruitment.objects.filter(id=rec_id).first()
+        if not recruitment:
+            return HttpResponse()
+        skills = recruitment.skills.values_list("title", flat=True)
+        resumes = recruitment.resume.all()
+        is_candidate = resumes.filter(is_candidate=True)
+        is_candidate_ids = set(is_candidate.values_list("id", flat=True))
 
-    resume_ranks = []
-    for resume in resumes:
-        words = extract_words_from_pdf(resume.file)
-        matching_skills_count = sum(skill.lower() in words for skill in skills)
+        resume_ranks = []
+        for resume in resumes:
+            text = extract_words_from_pdf(resume.file)
+            matching_skills_count = skill_match_count(text, skills)
 
-        item = {"resume": resume, "matching_skills_count": matching_skills_count}
-        if not len(words):
-            item["image_pdf"] = True
+            item = {"resume": resume, "matching_skills_count": matching_skills_count}
+            if not len(text):
+                item["image_pdf"] = True
 
-        resume_ranks.append(item)
+            resume_ranks.append(item)
 
-    candidate_resumes = [
-        rank for rank in resume_ranks if rank["resume"].id in is_candidate_ids
-    ]
-    non_candidate_resumes = [
-        rank for rank in resume_ranks if rank["resume"].id not in is_candidate_ids
-    ]
+        candidate_resumes = [
+            rank for rank in resume_ranks if rank["resume"].id in is_candidate_ids
+        ]
+        non_candidate_resumes = [
+            rank for rank in resume_ranks if rank["resume"].id not in is_candidate_ids
+        ]
 
-    non_candidate_resumes = sorted(
-        non_candidate_resumes, key=lambda x: x["matching_skills_count"], reverse=True
-    )
-    candidate_resumes = sorted(
-        candidate_resumes, key=lambda x: x["matching_skills_count"], reverse=True
-    )
+        non_candidate_resumes = sorted(
+            non_candidate_resumes,
+            key=lambda x: x["matching_skills_count"],
+            reverse=True,
+        )
+        candidate_resumes = sorted(
+            candidate_resumes, key=lambda x: x["matching_skills_count"], reverse=True
+        )
 
-    ranked_resumes = non_candidate_resumes + candidate_resumes
+        ranked_resumes = non_candidate_resumes + candidate_resumes
+        # A finite TTL, not timeout=None: the ranking is derived from resume
+        # files and the recruitment's skill list, both of which change without
+        # every edit path remembering to invalidate this key.
+        CACHE.set(cache_key, ranked_resumes, timeout=900)
 
     return render(
         request,
@@ -3303,6 +4110,7 @@ def hired_candidate_chart(request):
 
 
 @login_required
+@hx_request_required
 def candidate_document_request(request):
     """
     This function is used to create document requests of an employee in employee requests view.
@@ -3321,7 +4129,13 @@ def candidate_document_request(request):
         if form.is_valid():
             form.save()
             messages.success(request, _("Document request created successfully"))
-            return HttpResponse("<script>window.location.reload();</script>")
+            return HttpResponse(
+                "<script>"
+                "$('.oh-modal--show').removeClass('oh-modal--show');"
+                "$('#applyFilter').click();"
+                "$('#reloadMessagesButton').click();"
+                "</script>"
+            )
 
     context = {
         "form": form,
@@ -3343,7 +4157,9 @@ def document_create(request, id):
 
     Returns: return document_tab template
     """
-    candidate_id = Candidate.objects.get(id=id)
+    candidate_id = Candidate.objects.filter(id=id).first()
+    if not candidate_id:
+        return HttpResponse()
     form = CandidateDocumentForm(initial={"candidate_id": candidate_id})
     form.fields["candidate_id"].queryset = Candidate.objects.filter(id=id)
     if request.method == "POST":
@@ -3351,7 +4167,7 @@ def document_create(request, id):
         if form.is_valid():
             form.save()
             messages.success(request, _("Document created successfully."))
-            return HttpResponse("<script>window.location.reload();</script>")
+            return HorillaRedirect(request)
 
     context = {
         "form": form,
@@ -3420,7 +4236,80 @@ def document_delete(request, id):
         clear_messages(request)
         return HttpResponse()
     else:
-        return HttpResponse("<script>window.location.reload();</script>")
+        return HorillaRedirect(request)
+
+
+def candidate_documents_visible_to(request):
+    """CandidateDocument rows the current requester is allowed to touch.
+
+    `candidate_login_required` only asserts that *some* candidate is logged in
+    (`"candidate_id" in request.session`), so a view resolving a document by
+    client-supplied id alone serves any candidate's file to any other -- the
+    ids are sequential, so one self-registered account can harvest every
+    applicant's resume and identity documents. Reported as
+    GHSA-p745-9729-g8jw.
+
+    Recruiters keep full access through the model permission; a candidate is
+    scoped to their own session id. Mirrors the scoping employee/views.py
+    already applies to document_delete.
+    """
+    queryset = CandidateDocument.objects.all()
+    if request.user.is_authenticated and request.user.has_perm(
+        "recruitment.view_candidatedocument"
+    ):
+        return queryset
+
+    candidate_id = request.session.get("candidate_id")
+    if candidate_id is None:
+        return queryset.none()
+    return queryset.filter(candidate_id__id=candidate_id)
+
+
+def candidate_reachable_by(request, cand_id):
+    """The Candidate the requester may act on, or None.
+
+    `candidate_login_required` asserts only that *some* candidate session
+    exists (`"candidate_id" in request.session`), never that it is the
+    candidate named in the URL. A view that resolves its target from `cand_id`
+    alone therefore lets any logged-in candidate act on any other candidate's
+    record. Reported as GHSA-v963-hrfx-34mw.
+
+    The portal request carries no authenticated employee, so no company scoping
+    applies to it either, and the write crosses tenants: a candidate registered
+    under one company can reach a candidate belonging to another. Self
+    registration through `application-form/` is open, so the privilege needed
+    is nil.
+
+    Staff access is unchanged -- the three staff tests below are the ones
+    `candidate_login_required` already performs, repeated here rather than
+    tightened, so recruiters and stage/recruitment managers keep the access
+    they have. Only the candidate branch is narrowed, from "any candidate" to
+    "this candidate".
+
+    Companion to `candidate_documents_visible_to`, which scoped the document
+    views for GHSA-p745-9729-g8jw. `candidate_add_notes` is the third view on
+    the same decorator and was missed by that fix.
+    """
+    candidate = Candidate.find(cand_id)
+    if candidate is None:
+        return None
+
+    user = request.user
+    if user.is_authenticated:
+        if user.has_perm("recruitment.view_candidate"):
+            return candidate
+        employee = getattr(user, "employee_get", None)
+        if employee is not None and (
+            employee.stage_set.exists() or employee.recruitment_set.exists()
+        ):
+            return candidate
+
+    session_candidate_id = request.session.get("candidate_id")
+    if session_candidate_id is not None and str(session_candidate_id) == str(
+        candidate.pk
+    ):
+        return candidate
+    return None
 
 
 @candidate_login_required
@@ -3435,7 +4324,9 @@ def file_upload(request, id):
 
     Returns: return document_form template
     """
-    document_item = CandidateDocument.objects.get(id=id)
+    document_item = candidate_documents_visible_to(request).filter(id=id).first()
+    if not document_item:
+        return HttpResponse()
     form = CandidateDocumentUpdateForm(instance=document_item)
     if request.method == "POST":
         form = CandidateDocumentUpdateForm(
@@ -3444,7 +4335,7 @@ def file_upload(request, id):
         if form.is_valid():
             form.save()
             messages.success(request, _("Document uploaded successfully"))
-            return HttpResponse("<script>window.location.reload();</script>")
+            return HorillaRedirect(request)
 
     context = {
         "form": form,
@@ -3465,7 +4356,9 @@ def view_file(request, id):
 
     Returns: return view_file template
     """
-    document_obj = CandidateDocument.objects.filter(id=id).first()
+    document_obj = candidate_documents_visible_to(request).filter(id=id).first()
+    if not document_obj:
+        return HttpResponse()
     context = {
         "document": document_obj,
     }
@@ -3509,7 +4402,7 @@ def document_approve(request, id):
     else:
         messages.error(request, _("No document uploaded"))
 
-    return HttpResponse("<script>window.location.reload();</script>")
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -3537,10 +4430,10 @@ def document_reject(request, id):
                 document_obj.save()
                 messages.error(request, _("Document request rejected"))
 
-                return HttpResponse("<script>window.location.reload();</script>")
+                return HorillaRedirect(request)
     else:
         messages.error(request, _("No document uploaded"))
-        return HttpResponse("<script>window.location.reload();</script>")
+        return HorillaRedirect(request)
 
     return render(
         request,
@@ -3555,7 +4448,14 @@ def candidate_add_notes(request, cand_id):
     This method renders template component to add candidate remark
     """
 
-    candidate = Candidate.objects.get(id=cand_id)
+    # Same message whether the candidate does not exist or is not the caller's:
+    # a distinct "not yours" would confirm which sequential ids are real.
+    candidate = candidate_reachable_by(request, cand_id)
+    if not candidate:
+        return HorillaRedirect(
+            request, message=_("No Candidate found matching the query.")
+        )
+
     updated_by = request.user.employee_get if request.user.is_authenticated else None
     label = (
         request.user.employee_get.get_full_name()
@@ -3591,11 +4491,10 @@ def candidate_add_notes(request, cand_id):
                     candidate,
                     label=label,
                     recipient=users,
-                    verb=f"{label} has added a note on the candidate {candidate}",
-                    verb_ar=f"أضاف {label} ملاحظة حول المرشح {candidate}",
-                    verb_de=f"{label} hat dem {candidate} eine Notiz hinzugefügt.",
-                    verb_es=f"{label} agregó una nota al {candidate}.",
-                    verb_fr=f"{label} a ajouté une note à {candidate}.",
+                    verb=gettext_noop(
+                        "%(label)s has added a note on the candidate %(candidate)s"
+                    ),
+                    verb_params={"label": str(label), "candidate": str(candidate)},
                     icon="people-circle",
                     redirect=reverse(
                         "candidate-view-individual", kwargs={"cand_id": cand_id}
@@ -3626,3 +4525,22 @@ def employee_profile_interview_tab(request):
     ).order_by("is_today", "-interview_date", "interview_time")
 
     return render(request, "tabs/scheduled_interview.html", {"interviews": interviews})
+
+
+@login_required
+@hx_request_required
+@permission_required("recruitment.delete_rejectedcandidate")
+def delete_candidate_rejection(request, rej_id):
+    """
+    This method is used to delete candidate rejection
+    """
+    try:
+        instance = RejectedCandidate.objects.filter(id=rej_id).first()
+        if instance:
+            instance.delete()
+            messages.success(request, _("Candidate rejection deleted successfully"))
+        else:
+            messages.error(request, _("Candidate rejection not found"))
+    except Exception as e:
+        messages.error(request, _("Error occurred while deleting candidate rejection"))
+    return HorillaRedirect(request)

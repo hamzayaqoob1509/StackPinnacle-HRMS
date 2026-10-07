@@ -41,7 +41,7 @@ function countSequence(element) {
     });
     $.ajax({
       type: "post",
-      url: "/onboarding/candidate-sequence-update",
+      url: "/onboarding/candidate-sequence-update/",
       data: {
         csrfmiddlewaretoken: getCookie("csrftoken"),
         sequenceData: JSON.stringify(data),
@@ -57,6 +57,9 @@ function countSequence(element) {
           $(".messages").html(alertContainer);
         }
       },
+      error: () => {
+        reloadMessage()
+      },
     });
   }, 0);
 }
@@ -70,7 +73,7 @@ function updateStageSequence(parentElement) {
   });
   $.ajax({
     type: "post",
-    url: "/onboarding/stage-sequence-update",
+    url: "/onboarding/stage-sequence-update/",
     data: {
       csrfmiddlewaretoken: getCookie("csrftoken"),
       sequenceData: JSON.stringify(data),
@@ -85,6 +88,9 @@ function updateStageSequence(parentElement) {
         alertContainer.append(alertDiv);
         $(".messages").html(alertContainer);
       }
+    },
+    error: () => {
+      reloadMessage()
     },
   });
 }

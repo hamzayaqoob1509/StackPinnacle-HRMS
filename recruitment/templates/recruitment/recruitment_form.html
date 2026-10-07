@@ -1,4 +1,4 @@
-{% load i18n %} {% load static %}
+{% load i18n static %}
 <script>
     function skillChange(selectElement) {
         var selectedSkill = selectElement.val();
@@ -54,7 +54,7 @@
     <h5 class="oh-modal__dialog-title" id="addRecruitmentModalLabel"
       >{% if duplicate %}{% trans "Duplicate" %}{% else %}{% trans "Create" %}{% endif %} {{form.verbose_name}}</span
     >
-    <button class="oh-modal__close" aria-label="Close" >
+    <button class="oh-modal__close" aria-label="{% trans 'Close' %}" >
       <ion-icon name="close-outline"></ion-icon>
     </button>
 </div>
@@ -148,7 +148,7 @@
                 </div>
                     <div class="col-12 col-sm-12 col-md-12 col-lg-6">
                         <label class="oh-label" for="{{form.publish_in_linkedin.id_for_label}}"
-                        title="{{form.publish_in_linkedin.help_text|safe}}"
+                        title="{{form.publish_in_linkedin.help_text}}"
                             >{{form.publish_in_linkedin.label}}</label
                         >
                         <div class="w-100 d-flex" style="align-items: center">
@@ -166,7 +166,7 @@
                     <label
                         class="oh-label"
                         for="{{form.is_published.id_for_label}}"
-                        title="{{form.is_published.help_text|safe}}"
+                        title="{{form.is_published.help_text}}"
                         >{{form.is_published.label}} ?</label
                     >
                     <div class="w-100 d-flex" style="align-items: center">
@@ -177,7 +177,7 @@
                     <label
                         class="oh-label"
                         for="{{form.optional_profile_image.id_for_label}}"
-                        title="{{form.optional_profile_image.help_text|safe}}"
+                        title="{{form.optional_profile_image.help_text}}"
                         >{{form.optional_profile_image.label}}</label
                     >
                     <div class="w-100 d-flex" style="align-items: center">
@@ -188,7 +188,7 @@
                     <label
                         class="oh-label"
                         for="{{form.optional_resume.id_for_label}}"
-                        title="{{form.optional_resume.help_text|safe}}"
+                        title="{{form.optional_resume.help_text}}"
                         >{{form.optional_resume.label}}</label
                     >
                     <div class="w-100 d-flex" style="align-items: center">
@@ -197,7 +197,14 @@
                 </div>
             </div>
         </div>
-        <div class="d-flex flex-row-reverse w-100 align-items-right mt-4">
+        <div class="d-flex justify-content-between w-100 align-items-center mt-4">
+            <button
+                type="button"
+                class="oh-btn oh-btn--light-bkg"
+                onclick="$(this).closest('.oh-modal--show').removeClass('oh-modal--show')"
+            >
+                {% trans "Back" %}
+            </button>
             <button
                 type="submit"
                 class="oh-btn oh-btn--secondary pl-5 pr-5"
@@ -213,9 +220,8 @@
 <script>
     $(".oh-general__tab-target.oh-profile-section [name=description]").hide();
     $(document).ready(function () {
-        if (!$("#id_publish_in_linkedin").is(":checked")) {
-            const linkedInInput = $("[name='linkedin_account_id']");
-            linkedInInput.closest('div').toggleClass('d-none');
-            }
+        if (typeof toggleLinkedIn === "function") {
+            toggleLinkedIn();
+        }
     });
 </script>

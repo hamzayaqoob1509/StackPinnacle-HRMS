@@ -11,7 +11,7 @@
                 <img
                 src="https://ui-avatars.com/api/?name={{skill_zone}}&background=random"
                 class="oh-kanban-card__profile-image"
-                alt="Username"
+                alt="{% trans 'Employee' %}"
                 />
             </div>
         </div>
@@ -19,7 +19,7 @@
 
             <span class="oh-kanban-card__title d-flex">
               {{skill_zone}}
-              <span class="oh-badge oh-badge--secondary oh-badge--small oh-badge--round ms-2 mr-2"  title="{{skill_zone.skillzonecandidate_set.all|length}} Candidates" title="4 Stages" onclick="event.stopPropagation()">
+              <span class="oh-badge oh-badge--secondary oh-badge--small oh-badge--round ms-2 mr-2"  title="{{skill_zone.skillzonecandidate_set.all|length}} {% trans 'Candidates' %}" onclick="event.stopPropagation()">
                 {{skill_zone.skillzonecandidate_set.all|length}}
               </span>
             </span>
@@ -62,20 +62,20 @@
                       <li class="oh-dropdown__item">
                         <a
                         href="{% url 'skill-zone-archive' skill_zone.id %}"
-                        onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to Archive this Skill zone?' %}`)"
+                        onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to archive this talent pool?'|escapejs %}`)"
                         >{% trans "Archive" %}</a>
                       </li>
                     {% else %}
                       <a
                       href="{% url 'skill-zone-archive' skill_zone.id %}"
-                      onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to Un-Archive this Skill zone?' %}`)"
+                      onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to unarchive this talent pool?'|escapejs %}`)"
                       >{% trans "Un Archive" %}</a>
                     {% endif %}
 
                     <li class="oh-dropdown__item">
                         <a class="text-danger"
                         href="{% url 'skill-zone-delete' skill_zone.id %}"
-                        onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to delete this Skill zone?' %}`)"
+                        onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to delete this talent pool?'|escapejs %}`)"
                         >{% trans "Delete" %}</a>
                     </li>
                 </ul>

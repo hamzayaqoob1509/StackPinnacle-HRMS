@@ -6,6 +6,7 @@ module's URL patterns with the project router, mirroring the other Horilla apps.
 """
 
 from django.apps import AppConfig
+from django.conf import settings
 
 
 class EmployeeHandbookConfig(AppConfig):
@@ -16,11 +17,11 @@ class EmployeeHandbookConfig(AppConfig):
     def ready(self):
         from django.urls import include, path
 
-        from horilla.horilla_settings import APPS
         from horilla.urls import urlpatterns
 
-        APPS.append("employee_handbook")
+        settings.APPS.append("employee_handbook")
         urlpatterns.append(
             path("employee-handbook/", include("employee_handbook.urls")),
         )
+        settings.APP_URLS.append("employee_handbook.urls")
         super().ready()

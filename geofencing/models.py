@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+from django.utils.translation import gettext_lazy as _
 from geopy.geocoders import Nominatim
 
 
@@ -23,20 +24,21 @@ class GeoFencing(models.Model):
             if self.pk:
                 qs = qs.exclude(pk=self.pk)
             if qs.exists():
-                raise ValidationError("Only one GeoFencing can have a null company_id.")
+                raise ValidationError(
+                    _("Only one GeoFencing can have a null company_id.")
+                )
 
         geolocator = Nominatim(
             user_agent="geo_checker_unique"
         )  # Unique user-agent is important
-        if self.start:
-            try:
-                location = geolocator.reverse(
-                    (self.latitude, self.longitude), exactly_one=True
-                )
-                if not location:
-                    raise ValidationError("Invalid location coordinates.")
-            except Exception as e:
-                raise ValidationError(f"Geolocation error: {e}")
+        try:
+            location = geolocator.reverse(
+                (self.latitude, self.longitude), exactly_one=True
+            )
+            if not location:
+                raise ValidationError(_("Invalid location coordinates."))
+        except Exception as e:
+            raise ValidationError(f"Geolocation error: {e}")
 
         return super().clean()
 

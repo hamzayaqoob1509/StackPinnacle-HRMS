@@ -6,14 +6,14 @@
       "created_at": "2025-07-22T08:21:11.031Z",
       "created_by": 1,
       "modified_by": 1,
-      "is_active": false,
-      "company": "Horilla",
+      "is_active": true,
+      "company": "Your Company",
       "hq": true,
-      "address": "ABCD street",
-      "country": "USA",
+      "address": "100 Market Street, Suite 400",
+      "country": "United States",
       "state": "Nevada",
-      "city": "las vegas",
-      "zip": "89036",
+      "city": "Las Vegas",
+      "zip": "89101",
       "icon": "base/icon/Horilla_2.png",
       "date_format": null,
       "time_format": null
@@ -26,14 +26,14 @@
       "created_at": "2025-07-16T05:03:00.993Z",
       "created_by": 1,
       "modified_by": 1,
-      "is_active": false,
-      "company": "Horilla Inc.",
+      "is_active": true,
+      "company": "Your Company Inc.",
       "hq": false,
-      "address": "The Estate , 8th Floor",
+      "address": "The Estate, 8th Floor, MG Road",
       "country": "India",
       "state": "Karnataka",
-      "city": "Bangalore",
-      "zip": "560042",
+      "city": "Bengaluru",
+      "zip": "560001",
       "icon": "base/icon/Horilla_3.png",
       "date_format": null,
       "time_format": null
@@ -46,14 +46,14 @@
       "created_at": "2025-07-16T05:04:50.728Z",
       "created_by": 1,
       "modified_by": 1,
-      "is_active": false,
-      "company": "Horilla Next Inc.",
+      "is_active": true,
+      "company": "Your Company Ltd.",
       "hq": false,
-      "address": "Alpha House",
+      "address": "Alpha House, 25 Borough High Street",
       "country": "United Kingdom",
-      "state": "City of London",
-      "city": "SE1 1LB",
-      "zip": "673589",
+      "state": "England",
+      "city": "London",
+      "zip": "SE1 1LB",
       "icon": "base/icon/Horilla_1.png",
       "date_format": null,
       "time_format": null
@@ -67,7 +67,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "department": "S/W Dept",
+      "department": "Engineering",
       "company_id": []
     }
   },
@@ -79,7 +79,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "department": "Sales Dept",
+      "department": "Sales",
       "company_id": []
     }
   },
@@ -91,7 +91,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "department": "Hr Dept",
+      "department": "Human Resources",
       "company_id": []
     }
   },
@@ -103,7 +103,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "department": "Marketing Dept",
+      "department": "Marketing",
       "company_id": []
     }
   },
@@ -115,7 +115,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "department": "Finance Dept",
+      "department": "Finance",
       "company_id": []
     }
   },
@@ -127,8 +127,12 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "department": "Managers",
-      "company_id": [1, 2, 3]
+      "department": "Operations",
+      "company_id": [
+        1,
+        2,
+        3
+      ]
     }
   },
   {
@@ -139,7 +143,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "Odoo Dev",
+      "job_position": "Software Engineer",
       "department_id": 1,
       "company_id": []
     }
@@ -152,7 +156,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "Django Dev",
+      "job_position": "Backend Engineer",
       "department_id": 1,
       "company_id": []
     }
@@ -165,7 +169,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "Sales Man",
+      "job_position": "Sales Associate",
       "department_id": 2,
       "company_id": []
     }
@@ -269,7 +273,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "Chief Financial Officer (CFO)",
+      "job_position": "Chief Financial Officer",
       "department_id": 5,
       "company_id": []
     }
@@ -321,7 +325,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "System Admin",
+      "job_position": "System Administrator",
       "department_id": 1,
       "company_id": []
     }
@@ -334,7 +338,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "React Dev",
+      "job_position": "Frontend Engineer",
       "department_id": 1,
       "company_id": []
     }
@@ -347,7 +351,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "Flutter Dev",
+      "job_position": "Mobile Engineer",
       "department_id": 1,
       "company_id": []
     }
@@ -373,7 +377,7 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "job_position": "Sales Manage",
+      "job_position": "Sales Manager",
       "department_id": 2,
       "company_id": []
     }
@@ -452,7 +456,7 @@
       "modified_by": 1,
       "is_active": true,
       "job_position_id": 1,
-      "job_role": "Jnr Dev",
+      "job_role": "Junior Software Engineer",
       "company_id": []
     }
   },
@@ -465,7 +469,7 @@
       "modified_by": 1,
       "is_active": true,
       "job_position_id": 2,
-      "job_role": "Jnr Dev",
+      "job_role": "Junior Backend Engineer",
       "company_id": []
     }
   },
@@ -530,7 +534,7 @@
       "modified_by": 1,
       "is_active": true,
       "job_position_id": 5,
-      "job_role": "Jnr Manager",
+      "job_role": "Junior Manager",
       "company_id": []
     }
   },
@@ -543,7 +547,7 @@
       "modified_by": 1,
       "is_active": true,
       "job_position_id": 6,
-      "job_role": "Jnr Manager",
+      "job_role": "Junior Manager",
       "company_id": []
     }
   },
@@ -1135,7 +1139,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1156,7 +1163,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1177,7 +1187,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1198,7 +1211,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1219,7 +1235,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1240,7 +1259,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1261,7 +1283,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1282,7 +1307,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1303,7 +1331,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1324,7 +1355,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1345,7 +1379,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1366,7 +1403,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1387,7 +1427,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1408,7 +1451,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1429,7 +1475,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1450,7 +1499,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1471,7 +1523,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1492,7 +1547,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1513,7 +1571,10 @@
       "rotate_after_day": 3,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1, "next_work_type_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1,
+        "next_work_type_index": 1
+      }
     }
   },
   {
@@ -1555,37 +1616,58 @@
   {
     "model": "base.employeeshiftday",
     "pk": 1,
-    "fields": { "day": "monday", "company_id": [] }
+    "fields": {
+      "day": "monday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshiftday",
     "pk": 2,
-    "fields": { "day": "tuesday", "company_id": [] }
+    "fields": {
+      "day": "tuesday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshiftday",
     "pk": 3,
-    "fields": { "day": "wednesday", "company_id": [] }
+    "fields": {
+      "day": "wednesday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshiftday",
     "pk": 4,
-    "fields": { "day": "thursday", "company_id": [] }
+    "fields": {
+      "day": "thursday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshiftday",
     "pk": 5,
-    "fields": { "day": "friday", "company_id": [] }
+    "fields": {
+      "day": "friday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshiftday",
     "pk": 6,
-    "fields": { "day": "saturday", "company_id": [] }
+    "fields": {
+      "day": "saturday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshiftday",
     "pk": 7,
-    "fields": { "day": "sunday", "company_id": [] }
+    "fields": {
+      "day": "sunday",
+      "company_id": []
+    }
   },
   {
     "model": "base.employeeshift",
@@ -1979,7 +2061,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2000,7 +2084,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2021,7 +2107,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2042,7 +2130,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2063,7 +2153,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 0 }
+      "additional_data": {
+        "next_shift_index": 0
+      }
     }
   },
   {
@@ -2084,7 +2176,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2105,7 +2199,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 0 }
+      "additional_data": {
+        "next_shift_index": 0
+      }
     }
   },
   {
@@ -2126,7 +2222,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2147,7 +2245,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 0 }
+      "additional_data": {
+        "next_shift_index": 0
+      }
     }
   },
   {
@@ -2168,7 +2268,9 @@
       "rotate_after_day": 1,
       "rotate_every_weekend": "monday",
       "rotate_every": "1",
-      "additional_data": { "next_shift_index": 1 }
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   },
   {
@@ -2896,32 +2998,50 @@
   {
     "model": "base.dynamicpagination",
     "pk": 1,
-    "fields": { "user_id": 1, "pagination": 25 }
+    "fields": {
+      "user_id": 1,
+      "pagination": 25
+    }
   },
   {
     "model": "base.driverviewed",
     "pk": 1,
-    "fields": { "user": 1, "viewed": "dashboard" }
+    "fields": {
+      "user": 1,
+      "viewed": "dashboard"
+    }
   },
   {
     "model": "base.driverviewed",
     "pk": 2,
-    "fields": { "user": 1, "viewed": "settings" }
+    "fields": {
+      "user": 1,
+      "viewed": "settings"
+    }
   },
   {
     "model": "base.driverviewed",
     "pk": 3,
-    "fields": { "user": 1, "viewed": "pipeline" }
+    "fields": {
+      "user": 1,
+      "viewed": "pipeline"
+    }
   },
   {
     "model": "base.driverviewed",
     "pk": 4,
-    "fields": { "user": 13, "viewed": "dashboard" }
+    "fields": {
+      "user": 13,
+      "viewed": "dashboard"
+    }
   },
   {
     "model": "base.driverviewed",
     "pk": 5,
-    "fields": { "user": 13, "viewed": "pipeline" }
+    "fields": {
+      "user": 13,
+      "viewed": "pipeline"
+    }
   },
   {
     "model": "base.dashboardemployeecharts",
@@ -2946,27 +3066,12 @@
     }
   },
   {
-    "model": "base.announcement",
-    "pk": 1,
-    "fields": {
-      "created_at": "2025-07-17T10:34:52.749Z",
-      "created_by": 1,
-      "modified_by": 1,
-      "is_active": true,
-      "title": "Horilla Tour",
-      "description": "<h1 class=\"hr-heading hr-heading--h1 hr-hero__title\" style=\"-webkit-font-smoothing: auto; font-size: 5rem; margin-right: auto; margin-bottom: 0px; margin-left: auto; font-family: Poppins, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif; font-weight: bold; text-align: center; max-width: 855px; line-height: 96px; color: rgb(28, 28, 28);\">The&nbsp;<span class=\"hr-hero__highlight\" style=\"-webkit-font-smoothing: auto; position: relative;\">only</span>&nbsp;HR Software You'll ever need.</h1><p class=\"hr-hero__lead\" style=\"-webkit-font-smoothing: auto; font-size: 1.25rem; color: rgb(28, 28, 28); max-width: 650px; text-align: center; margin: 1rem auto 1.5rem; font-family: &quot;Open Sans&quot;, Inter, &quot;Helvetica Neue Light&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif;\">Horilla HRMS offers all the features you would expect from your favorite Open Source HR Software and much more.<span style=\"-webkit-font-smoothing: auto; font-weight: bolder;\"><br style=\"-webkit-font-smoothing: auto;\">It's free &amp; open-source!</span></p>",
-      "expire_date": "2100-12-17",
-      "disable_comments": false,
-      "attachments": [],
-      "employees": [],
-      "department": [],
-      "job_position": []
-    }
-  },
-  {
     "model": "base.biometricattendance",
     "pk": 1,
-    "fields": { "is_installed": false, "company_id": null }
+    "fields": {
+      "is_installed": false,
+      "company_id": null
+    }
   },
   {
     "model": "base.holidays",
@@ -2991,9 +3096,9 @@
       "created_by": null,
       "modified_by": null,
       "is_active": true,
-      "name": "Republic Day",
-      "start_date": "2025-01-26",
-      "end_date": "2025-01-26",
+      "name": "Good Friday",
+      "start_date": "2025-04-18",
+      "end_date": "2025-04-18",
       "recurring": false,
       "company_id": null
     }
@@ -3006,9 +3111,9 @@
       "created_by": null,
       "modified_by": null,
       "is_active": true,
-      "name": "Holi",
-      "start_date": "2025-01-20",
-      "end_date": "2025-01-20",
+      "name": "Easter Monday",
+      "start_date": "2025-04-21",
+      "end_date": "2025-04-21",
       "recurring": false,
       "company_id": null
     }
@@ -3021,9 +3126,9 @@
       "created_by": null,
       "modified_by": null,
       "is_active": true,
-      "name": "Vishu",
-      "start_date": "2025-01-14",
-      "end_date": "2025-01-14",
+      "name": "Founders' Day",
+      "start_date": "2025-06-01",
+      "end_date": "2025-06-01",
       "recurring": false,
       "company_id": null
     }
@@ -3037,8 +3142,8 @@
       "modified_by": null,
       "is_active": true,
       "name": "Eid al-Fitr",
-      "start_date": "2025-01-10",
-      "end_date": "2025-01-10",
+      "start_date": "2025-03-31",
+      "end_date": "2025-03-31",
       "recurring": false,
       "company_id": null
     }
@@ -3051,9 +3156,9 @@
       "created_by": null,
       "modified_by": null,
       "is_active": true,
-      "name": "Eid al-Adha ",
-      "start_date": "2025-01-19",
-      "end_date": "2025-01-19",
+      "name": "Eid al-Adha",
+      "start_date": "2025-06-07",
+      "end_date": "2025-06-07",
       "recurring": false,
       "company_id": null
     }
@@ -3067,8 +3172,8 @@
       "modified_by": null,
       "is_active": true,
       "name": "Labor Day",
-      "start_date": "2025-01-01",
-      "end_date": "2025-01-01",
+      "start_date": "2025-05-01",
+      "end_date": "2025-05-01",
       "recurring": false,
       "company_id": null
     }
@@ -3081,9 +3186,9 @@
       "created_by": null,
       "modified_by": null,
       "is_active": true,
-      "name": "Independence Day",
-      "start_date": "2025-01-15",
-      "end_date": "2025-01-15",
+      "name": "World Health Day",
+      "start_date": "2025-04-07",
+      "end_date": "2025-04-07",
       "recurring": false,
       "company_id": null
     }
@@ -3096,9 +3201,9 @@
       "created_by": null,
       "modified_by": null,
       "is_active": true,
-      "name": "Gandhi Jayanti ",
-      "start_date": "2025-10-02",
-      "end_date": "2025-10-02",
+      "name": "United Nations Day",
+      "start_date": "2025-10-24",
+      "end_date": "2025-10-24",
       "recurring": false,
       "company_id": null
     }
@@ -3112,8 +3217,8 @@
       "modified_by": null,
       "is_active": true,
       "name": "Children's Day",
-      "start_date": "2025-01-14",
-      "end_date": "2025-01-14",
+      "start_date": "2025-11-20",
+      "end_date": "2025-11-20",
       "recurring": false,
       "company_id": null
     }
@@ -3127,8 +3232,8 @@
       "modified_by": null,
       "is_active": true,
       "name": "Christmas",
-      "start_date": "2025-01-25",
-      "end_date": "2025-01-25",
+      "start_date": "2025-12-25",
+      "end_date": "2025-12-25",
       "recurring": false,
       "company_id": null
     }
@@ -3143,7 +3248,7 @@
       "is_active": true,
       "based_on_week": null,
       "based_on_week_day": "6",
-      "company_id": null
+      "company_id": []
     }
   },
   {
@@ -3156,7 +3261,7 @@
       "is_active": true,
       "based_on_week": "1",
       "based_on_week_day": "5",
-      "company_id": null
+      "company_id": []
     }
   },
   {
@@ -3169,7 +3274,7 @@
       "is_active": true,
       "based_on_week": "3",
       "based_on_week_day": "5",
-      "company_id": null
+      "company_id": []
     }
   },
   {
@@ -3213,6 +3318,724 @@
       "title": "Leave Request Mail",
       "body": "<p>Dear,</p><p>This is to inform you that {{ model_instance.employee_id }} has submitted a leave request for {{model_instance.requested_days}} days. Please take the necessary actions to review and process the request at your earliest convenience.<br><br>If you require any additional information or updates, feel free to communicate directly with {{ model_instance.employee_id }}.<br><br>Thank you for your prompt attention to this matter.</p>",
       "company_id": 1
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 1,
+    "fields": {
+      "created_at": "2025-07-01T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Q2 Performance Highlights — Thank You, Team!",
+      "description": "<p><strong>Dear Team,</strong></p><p>We are pleased to share strong quarterly results across all companies. Thank you for your dedication and collaboration.</p><p><em>— The Leadership Team</em></p>",
+      "expire_date": "2025-08-31",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 2,
+    "fields": {
+      "created_at": "2025-07-01T10:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Mid-Year Performance Reviews — Schedule Now Open",
+      "description": "<p>Mid-year performance reviews are now open. Please complete self-assessments and schedule 1-on-1 discussions with your manager.</p>",
+      "expire_date": "2025-07-28",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 3,
+    "fields": {
+      "created_at": "2025-07-02T08:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Annual Leave Encashment — Submit Before Deadline",
+      "description": "<p><strong>From: Human Resources</strong></p><p>Unused annual leave encashment requests must be submitted before the published deadline. Apply via Leave → Leave Request.</p>",
+      "expire_date": "2025-07-15",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 4,
+    "fields": {
+      "created_at": "2025-07-03T09:15:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Mandatory Cybersecurity Awareness Training",
+      "description": "<p>All employees must complete cybersecurity awareness training by the published deadline. Topics include phishing, password hygiene, MFA, and incident reporting.</p>",
+      "expire_date": "2025-07-20",
+      "disable_comments": true,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 5,
+    "fields": {
+      "created_at": "2025-07-07T11:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Employee of the Month",
+      "description": "<p>We are delighted to recognize outstanding contributions across Engineering and other departments.</p>",
+      "expire_date": "2025-07-31",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 6,
+    "fields": {
+      "created_at": "2025-07-08T10:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Updated Work-From-Home Policy",
+      "description": "<p>The remote work policy has been updated. Engineering &amp; Finance may take up to 3 WFH days per week; Sales, Marketing &amp; HR up to 2. Wednesday remains the in-office anchor day.</p>",
+      "expire_date": "2025-08-31",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 7,
+    "fields": {
+      "created_at": "2025-07-04T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Compensation Review Cycle",
+      "description": "<p>The compensation review cycle is underway. Updated letters will appear under Profile → Documents when available. Compensation details are confidential.</p>",
+      "expire_date": "2025-07-31",
+      "disable_comments": true,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 8,
+    "fields": {
+      "created_at": "2025-07-09T11:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Company Family Day",
+      "description": "<p>Join us for Company Family Day. Guests, meals, and activities details will be shared by HR. Please register in advance.</p>",
+      "expire_date": "2025-07-26",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 9,
+    "fields": {
+      "created_at": "2025-07-10T14:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Scheduled IT Infrastructure Maintenance",
+      "description": "<p><strong>From: IT Department</strong></p><p>A planned infrastructure maintenance window will run this weekend. Internal systems may be briefly unavailable overnight.</p>",
+      "expire_date": "2025-07-15",
+      "disable_comments": true,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcement",
+    "pk": 10,
+    "fields": {
+      "created_at": "2025-07-11T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "title": "Employee Referral Program — Earn Referral Bonuses",
+      "description": "<p>Our employee referral program is open. Refer qualified candidates for open roles and earn a referral bonus upon successful hire.</p>",
+      "expire_date": "2025-09-30",
+      "disable_comments": false,
+      "attachments": [],
+      "employees": [],
+      "department": [],
+      "job_position": []
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 1,
+    "fields": {
+      "created_at": "2025-07-01T10:15:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 1,
+      "employee_id": 4,
+      "comment": "Incredible milestone! Really proud of what we've achieved together. The 96% retention rate is what stands out most to me — shows how much people love being here."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 2,
+    "fields": {
+      "created_at": "2025-07-01T11:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 1,
+      "employee_id": 9,
+      "comment": "18% above revenue target is no small feat. Looking forward to the All-Hands on July 10 to see the department-wise breakdown. Great work everyone!"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 3,
+    "fields": {
+      "created_at": "2025-07-01T14:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 1,
+      "employee_id": 16,
+      "comment": "Customer sat at 4.7/5 — that's phenomenal. Our product team put in a lot of quiet work this quarter that deserves recognition. 🙌"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 4,
+    "fields": {
+      "created_at": "2025-07-01T11:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 2,
+      "employee_id": 13,
+      "comment": "Quick question — does the self-assessment in Horilla auto-save as you fill it, or do you need to submit all at once? Want to start early but take time on each section."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 5,
+    "fields": {
+      "created_at": "2025-07-01T13:45:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 2,
+      "employee_id": 7,
+      "comment": "Thanks for the clear timeline. Having the deadlines in one place is really helpful. July 12 for self-assessment is noted."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 6,
+    "fields": {
+      "created_at": "2025-07-07T11:45:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 5,
+      "employee_id": 2,
+      "comment": "Congratulations Emma! Well-deserved — the API migration work was exceptional. You set the bar high for the whole team. 🏆"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 7,
+    "fields": {
+      "created_at": "2025-07-07T12:10:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 5,
+      "employee_id": 11,
+      "comment": "Emma, the way you handled the production incident was impressive — the whole team stayed calm because of your quick response. Congrats! 👏"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 8,
+    "fields": {
+      "created_at": "2025-07-07T14:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 5,
+      "employee_id": 6,
+      "comment": "Very well deserved, Emma! Your backend documentation saved us hours during onboarding last month. Huge contribution that often goes unseen. Congrats!"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 9,
+    "fields": {
+      "created_at": "2025-07-07T16:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 5,
+      "employee_id": 17,
+      "comment": "Congrats Emma! I was one of the juniors you mentored this quarter — learned so much from you. This recognition is very well earned. 🙌"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 10,
+    "fields": {
+      "created_at": "2025-07-08T10:45:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 6,
+      "employee_id": 7,
+      "comment": "Great news for the software team! The extra WFH day will make a real difference for deep focus work. Thanks for listening to the survey feedback."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 11,
+    "fields": {
+      "created_at": "2025-07-08T11:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 6,
+      "employee_id": 16,
+      "comment": "Appreciate the transparency in sharing the reasoning. The Wednesday anchor day makes sense — it keeps team alignment without sacrificing flexibility."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 12,
+    "fields": {
+      "created_at": "2025-07-09T12:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 8,
+      "employee_id": 5,
+      "comment": "Just registered! Bringing my two kids. The kids' zone sounds amazing — they've been asking when the next company event is. Can't wait! 😊"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 13,
+    "fields": {
+      "created_at": "2025-07-09T14:15:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 8,
+      "employee_id": 13,
+      "comment": "Will transport be arranged from the Whitefield office as well? A few of us are based there and would love to join but need to plan the commute."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 14,
+    "fields": {
+      "created_at": "2025-07-09T15:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 8,
+      "employee_id": 20,
+      "comment": "So excited for Family Day! Last year's talent show was unforgettable. Already planning my entry this time. 🎉"
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 15,
+    "fields": {
+      "created_at": "2025-07-11T10:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 10,
+      "employee_id": 15,
+      "comment": "Already shared the open positions with two former colleagues this morning. Fingers crossed they apply! The updated bonus structure is very competitive."
+    }
+  },
+  {
+    "model": "base.announcementcomment",
+    "pk": 16,
+    "fields": {
+      "created_at": "2025-07-11T11:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "announcement_id": 10,
+      "employee_id": 22,
+      "comment": "I referred someone last quarter and the process was smooth — HR confirmed within 3 days. Happy to share my experience with anyone who has questions."
+    }
+  },
+  {
+    "model": "base.worktyperequest",
+    "pk": 6,
+    "fields": {
+      "created_at": "2025-07-19T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 3,
+      "work_type_id": 3,
+      "previous_work_type_id": 1,
+      "requested_date": "2025-07-19",
+      "requested_till": "2025-08-19",
+      "description": "Requesting a temporary work-type change.",
+      "is_permanent_work_type": false,
+      "approved": false,
+      "canceled": false,
+      "work_type_changed": false
+    }
+  },
+  {
+    "model": "base.worktyperequest",
+    "pk": 7,
+    "fields": {
+      "created_at": "2025-07-19T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 9,
+      "work_type_id": 4,
+      "previous_work_type_id": 2,
+      "requested_date": "2025-07-19",
+      "requested_till": "2025-08-19",
+      "description": "Requesting a temporary work-type change.",
+      "is_permanent_work_type": false,
+      "approved": true,
+      "canceled": false,
+      "work_type_changed": true
+    }
+  },
+  {
+    "model": "base.worktyperequest",
+    "pk": 8,
+    "fields": {
+      "created_at": "2025-07-19T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 20,
+      "work_type_id": 2,
+      "previous_work_type_id": 1,
+      "requested_date": "2025-07-19",
+      "requested_till": "2025-08-19",
+      "description": "Requesting a temporary work-type change.",
+      "is_permanent_work_type": false,
+      "approved": true,
+      "canceled": false,
+      "work_type_changed": true
+    }
+  },
+  {
+    "model": "base.worktyperequest",
+    "pk": 9,
+    "fields": {
+      "created_at": "2025-07-19T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 38,
+      "work_type_id": 3,
+      "previous_work_type_id": 2,
+      "requested_date": "2025-07-19",
+      "requested_till": "2025-08-19",
+      "description": "Requesting a temporary work-type change.",
+      "is_permanent_work_type": false,
+      "approved": false,
+      "canceled": false,
+      "work_type_changed": false
+    }
+  },
+  {
+    "model": "base.worktyperequest",
+    "pk": 10,
+    "fields": {
+      "created_at": "2025-07-19T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 60,
+      "work_type_id": 4,
+      "previous_work_type_id": 1,
+      "requested_date": "2025-07-19",
+      "requested_till": "2025-08-19",
+      "description": "Requesting a temporary work-type change.",
+      "is_permanent_work_type": false,
+      "approved": true,
+      "canceled": false,
+      "work_type_changed": true
+    }
+  },
+  {
+    "model": "base.shiftrequest",
+    "pk": 11,
+    "fields": {
+      "created_at": "2025-07-20T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 3,
+      "shift_id": 2,
+      "previous_shift_id": 1,
+      "requested_date": "2025-07-20",
+      "reallocate_to": null,
+      "reallocate_approved": false,
+      "reallocate_canceled": false,
+      "requested_till": "2025-08-20",
+      "description": "Requesting a temporary shift change.",
+      "is_permanent_shift": false,
+      "approved": true,
+      "canceled": false,
+      "shift_changed": true
+    }
+  },
+  {
+    "model": "base.shiftrequest",
+    "pk": 12,
+    "fields": {
+      "created_at": "2025-07-20T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 9,
+      "shift_id": 3,
+      "previous_shift_id": 1,
+      "requested_date": "2025-07-20",
+      "reallocate_to": null,
+      "reallocate_approved": false,
+      "reallocate_canceled": false,
+      "requested_till": "2025-08-20",
+      "description": "Requesting a temporary shift change.",
+      "is_permanent_shift": false,
+      "approved": false,
+      "canceled": false,
+      "shift_changed": false
+    }
+  },
+  {
+    "model": "base.shiftrequest",
+    "pk": 13,
+    "fields": {
+      "created_at": "2025-07-20T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 20,
+      "shift_id": 1,
+      "previous_shift_id": 3,
+      "requested_date": "2025-07-20",
+      "reallocate_to": null,
+      "reallocate_approved": false,
+      "reallocate_canceled": false,
+      "requested_till": "2025-08-20",
+      "description": "Requesting a temporary shift change.",
+      "is_permanent_shift": false,
+      "approved": true,
+      "canceled": false,
+      "shift_changed": true
+    }
+  },
+  {
+    "model": "base.shiftrequest",
+    "pk": 14,
+    "fields": {
+      "created_at": "2025-07-20T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 38,
+      "shift_id": 2,
+      "previous_shift_id": 1,
+      "requested_date": "2025-07-20",
+      "reallocate_to": null,
+      "reallocate_approved": false,
+      "reallocate_canceled": false,
+      "requested_till": "2025-08-20",
+      "description": "Requesting a temporary shift change.",
+      "is_permanent_shift": false,
+      "approved": false,
+      "canceled": false,
+      "shift_changed": false
+    }
+  },
+  {
+    "model": "base.shiftrequest",
+    "pk": 15,
+    "fields": {
+      "created_at": "2025-07-20T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 60,
+      "shift_id": 3,
+      "previous_shift_id": 2,
+      "requested_date": "2025-07-20",
+      "reallocate_to": null,
+      "reallocate_approved": false,
+      "reallocate_canceled": false,
+      "requested_till": "2025-08-20",
+      "description": "Requesting a temporary shift change.",
+      "is_permanent_shift": false,
+      "approved": true,
+      "canceled": false,
+      "shift_changed": true
+    }
+  },
+  {
+    "model": "base.rotatingshiftassign",
+    "pk": 11,
+    "fields": {
+      "created_at": "2025-07-21T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 3,
+      "rotating_shift_id": 1,
+      "start_date": "2025-07-21",
+      "next_change_date": "2025-07-28",
+      "current_shift": 1,
+      "next_shift": 2,
+      "based_on": "after",
+      "rotate_after_day": 7,
+      "rotate_every_weekend": "monday",
+      "rotate_every": "1",
+      "additional_data": {
+        "next_shift_index": 1
+      }
+    }
+  },
+  {
+    "model": "base.rotatingshiftassign",
+    "pk": 12,
+    "fields": {
+      "created_at": "2025-07-21T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 9,
+      "rotating_shift_id": 2,
+      "start_date": "2025-07-21",
+      "next_change_date": "2025-07-28",
+      "current_shift": 1,
+      "next_shift": 3,
+      "based_on": "after",
+      "rotate_after_day": 7,
+      "rotate_every_weekend": "monday",
+      "rotate_every": "1",
+      "additional_data": {
+        "next_shift_index": 1
+      }
+    }
+  },
+  {
+    "model": "base.rotatingshiftassign",
+    "pk": 13,
+    "fields": {
+      "created_at": "2025-07-21T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 20,
+      "rotating_shift_id": 1,
+      "start_date": "2025-07-21",
+      "next_change_date": "2025-07-28",
+      "current_shift": 1,
+      "next_shift": 2,
+      "based_on": "after",
+      "rotate_after_day": 7,
+      "rotate_every_weekend": "monday",
+      "rotate_every": "1",
+      "additional_data": {
+        "next_shift_index": 1
+      }
+    }
+  },
+  {
+    "model": "base.rotatingshiftassign",
+    "pk": 14,
+    "fields": {
+      "created_at": "2025-07-21T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 38,
+      "rotating_shift_id": 2,
+      "start_date": "2025-07-21",
+      "next_change_date": "2025-07-28",
+      "current_shift": 1,
+      "next_shift": 3,
+      "based_on": "after",
+      "rotate_after_day": 7,
+      "rotate_every_weekend": "monday",
+      "rotate_every": "1",
+      "additional_data": {
+        "next_shift_index": 1
+      }
+    }
+  },
+  {
+    "model": "base.rotatingshiftassign",
+    "pk": 15,
+    "fields": {
+      "created_at": "2025-07-21T09:00:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 60,
+      "rotating_shift_id": 1,
+      "start_date": "2025-07-21",
+      "next_change_date": "2025-07-28",
+      "current_shift": 1,
+      "next_shift": 2,
+      "based_on": "after",
+      "rotate_after_day": 7,
+      "rotate_every_weekend": "monday",
+      "rotate_every": "1",
+      "additional_data": {
+        "next_shift_index": 1
+      }
     }
   }
 ]

@@ -8,6 +8,7 @@ import math
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.urls import reverse
 from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _
 
@@ -24,7 +25,7 @@ class PayrollSettings(HorillaModel):
 
     choices = [
         ("prefix", _("Prefix")),
-        ("postfix", _("Postfix")),
+        ("postfix", _("Suffix")),
     ]
 
     currency_symbol = models.CharField(null=True, default="$", max_length=5)
@@ -83,6 +84,20 @@ class TaxBracket(HorillaModel):
         if self.max_income != math.inf:
             return self.max_income
         return None
+
+    def get_update_url(self):
+        """
+        Returns the URL for updating the tax bracket.
+        """
+
+        return reverse("tax-bracket-update", kwargs={"pk": self.pk})
+
+    def get_delete_url(self):
+        """
+        Returns the URL for updating the tax bracket.
+        """
+
+        return reverse("tax-bracket-delete", kwargs={"tax_bracket_id": self.pk})
 
     def clean(self):
         super().clean()

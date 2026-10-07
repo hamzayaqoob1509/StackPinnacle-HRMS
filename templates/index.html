@@ -1,6 +1,8 @@
 {% load static %}
 {% load i18n %}
 {% load horillafilters %}
+{% load basefilters %}
+{% show_section as show_section %}
 <!DOCTYPE html>
 <html>
 {% get_current_language_bidi as LANGUAGE_BIDI %}
@@ -12,6 +14,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <script>
+        window.CURRENT_LANGUAGE = "{{ LANGUAGE_CODE }}";
         var at_work_seconds = {{ request.user.employee_get.get_forecasted_at_work.forecasted_at_work_seconds }}
         var run = 0
     </script>
@@ -20,11 +23,11 @@
     <meta name="theme-color" content="orangered">
     <link rel="manifest" href="{% static 'build/manifest.json' %}">
     <link rel="apple-touch-icon" sizes="180x180"
-        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}">
+        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'favicons/apple-touch-icon.png' %}{% endif %}">
     <link rel="icon" type="image/png" sizes="32x32"
-        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}">
+        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'favicons/favicon-32x32.png' %}{% endif %}">
     <link rel="icon" type="image/png" sizes="16x16"
-        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'images/ui/sp-logo.png' %}{% endif %}">
+        href="{% if white_label_company.icon %}{{white_label_company.icon.url}} {% else %}{% static 'favicons/favicon-16x16.png' %}{% endif %}">
 
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
@@ -42,6 +45,7 @@
     <script src="{% static '/build/js/orgChart.js' %}"></script>
     <script src="{% static 'build/js/driver.js' %}"></script>
     <script src="{% static 'build/js/clearFilter.js' %}"></script>
+    <script src="{% static 'src/js/customHeaderScripts.js' %}"></script>
 
 
 
@@ -75,6 +79,7 @@
         </div>
     {% endif %}
     <button id="reloadMessagesButton" hx-get="{% url 'reload-messages' %}" hx-swap="afterend" hidden hx-target="#reloadMessages"></button>
+    {% include "generic/components.html" %}
 
     <div class="oh-wrapper-main">
 
@@ -148,9 +153,9 @@
                             <!-- End of check in/out button in nav bar -->
                         {% endif %}
 
-                        {% if request.user|any_permission:'base' or perms.attendance.view_attendancevalidationcondition %}
+                        {% if show_section %}
                             <!-- Start of settings button in nav bar -->
-                            <div class="oh-navbar__action-icons" title="Settings">
+                            <div class="oh-navbar__action-icons" title="{% trans 'Settings' %}">
                                 <a href="{% url 'general-settings' %}" id="settingsMenu" class="oh-navbar__action-icons-link">
                                     <ion-icon name="settings-outline" class="oh-navbar__icon"></ion-icon>
                                 </a>
@@ -162,11 +167,13 @@
                         {% include 'notification/notification.html' %}
                         <!-- End of notifications button in nav bar -->
 
-                        <!-- Start of Languages dropdown in nav bar -->
-                        {% include "base/navbar_components/language_settings.html" %}
-                        <!-- End of Languages dropdown in nav bar -->
+                        {% if show_language_switcher %}
+                            <!-- Start of Languages dropdown in nav bar -->
+                            {% include "base/navbar_components/language_settings.html" %}
+                            <!-- End of Languages dropdown in nav bar -->
+                        {% endif %}
 
-                        {% if perms.base.change_company %}
+                        {% if show_company_switcher %}
                             <!-- Start of Companies dropdown in nav bar -->
                             {% include "base/navbar_components/company_selection.html" %}
                             <!-- End of Companies dropdown in nav bar -->
@@ -220,6 +227,7 @@
         </div>
     </div>
 
+    <script src="{% url 'javascript-catalog' %}"></script>
     <!--htmx script -->
     <script src="{% static 'build/js/web.frontend.min.js' %}"></script>
     <script src="{% static 'htmx/htmx.min.js' %}"></script>
@@ -248,6 +256,10 @@
     <script src="{% static 'build/js/pivottable_plot.min.js' %}"></script>
     <script src="{% static 'build/js/pivottable_ploty.min.js' %}"></script>
     <script src="{% static 'build/js/pivottable_excel.min.js' %}"></script>
+    {% comment %} Pivot explorer safety: warns when a payload was capped server-side so
+       a partial total is never shown as complete, and guards cells on the
+       browser-side xlsx export against formula injection. {% endcomment %}
+    <script src="{% static 'report/js/pivot_safety.js' %}"></script>
 
     {% if "attendance"|app_installed %}
         <script src="{% static 'attendance/actions.js' %}"></script>
@@ -255,6 +267,7 @@
     <script type="module" src="{% static 'images/ionicons/ui_icons/ionicons/ionicons.esm.js' %}"></script>
     <script src="{% static '/build/js/sweetAlert.js' %}"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{% static 'src/js/customFooterScripts.js' %}"></script>
     <script>
         // Clear all query parameters from the URL
         function clearQueryParameters() {
@@ -279,12 +292,12 @@
             }
             // accessing initial worked hours from the user
             $(".time-runner").not("title").html(secondsToDuration(at_work_seconds));
-            $("title.time-runner").html("{{white_label_company_name}}");
+            $("title.time-runner").html("{{white_label_company_name}} | " + secondsToDuration(at_work_seconds));
             setInterval(() => {
                 if (run) {
                     at_work_seconds = at_work_seconds + 1
                     $("div.time-runner").html(secondsToDuration(at_work_seconds));
-                    $("title").html("{{white_label_company_name}}");
+                    $("title").html("{{white_label_company_name}} | " + secondsToDuration(at_work_seconds));
                 }
             }, 1000);
 

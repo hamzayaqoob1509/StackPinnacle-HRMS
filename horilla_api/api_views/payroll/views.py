@@ -4,13 +4,15 @@ from collections import defaultdict
 from django.contrib.auth.decorators import permission_required
 from django.shortcuts import render
 from django.utils.decorators import method_decorator
-from rest_framework.pagination import PageNumberPagination
+from django.utils.translation import gettext_lazy as _
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from base.backends import ConfiguredEmailBackend
-from base.methods import eval_validate
+from base.methods import eval_validate, filtersubordinates
+from horilla_api.api_methods.base.methods import reject_reason_from
+from horilla_api.api_methods.base.pagination import HorillaPageNumberPagination
 from payroll.filters import (
     AllowanceFilter,
     ContractFilter,
@@ -24,11 +26,13 @@ from payroll.models.models import (
     LoanAccount,
     Payslip,
     Reimbursement,
+    ReimbursementrequestComment,
 )
 from payroll.models.tax_models import TaxBracket
 from payroll.threadings.mail import MailSendThread
 from payroll.views.views import payslip_pdf
 
+from ...api_decorators.base.decorators import approver_permission_required
 from ...api_methods.base.methods import groupby_queryset
 from ...api_serializers.payroll.serializers import (
     AllowanceSerializer,
@@ -47,12 +51,15 @@ class PayslipView(APIView):
     def get(self, request, id=None):
         if id:
             payslip = Payslip.objects.filter(id=id).first()
+            if payslip is None:
+                return Response({"detail": "Not found."}, status=404)
             if (
                 request.user.has_perm("payroll.view_payslip")
                 or payslip.employee_id == request.user.employee_get
             ):
                 serializer = PayslipSerializer(payslip)
-            return Response(serializer.data, status=200)
+                return Response(serializer.data, status=200)
+            return Response({"detail": _("Permission denied.")}, status=403)
         if request.user.has_perm("payroll.view_payslip"):
             payslips = Payslip.objects.all()
         else:
@@ -66,7 +73,7 @@ class PayslipView(APIView):
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, payslip_filter_queryset)
-        pagination = PageNumberPagination()
+        pagination = HorillaPageNumberPagination()
         page = pagination.paginate_queryset(payslip_filter_queryset, request)
         serializer = PayslipSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -83,7 +90,7 @@ class PayslipDownloadView(APIView):
         if Payslip.objects.filter(id=id, employee_id=request.user.employee_get):
             return payslip_pdf(request, id)
         else:
-            raise Response({"error": "You don't have permission"})
+            raise Response({"error": _("You don't have permission")})
 
 
 class PayslipSendMailView(APIView):
@@ -95,7 +102,7 @@ class PayslipSendMailView(APIView):
         if not getattr(
             email_backend, "dynamic_username_with_display_name", None
         ) or not len(email_backend.dynamic_username_with_display_name):
-            return Response({"error": "Email server is not configured"}, status=400)
+            return Response({"error": _("Email server is not configured")}, status=400)
 
         payslip_ids = request.data.get("id", [])
         payslips = Payslip.objects.filter(id__in=payslip_ids)
@@ -118,7 +125,14 @@ class ContractView(APIView):
 
     def get(self, request, id=None):
         if id:
-            contract = Contract.objects.filter(id=id).first()
+            if request.user.has_perm("payroll.view_contract"):
+                contract = Contract.objects.filter(id=id).first()
+            else:
+                contract = Contract.objects.filter(
+                    id=id, employee_id=request.user.employee_get
+                ).first()
+            if not contract:
+                return Response({"error": _("Contract not found.")}, status=404)
             serializer = ContractSerializer(contract)
             return Response(serializer.data, status=200)
         if request.user.has_perm("payroll.view_contract"):
@@ -131,7 +145,7 @@ class ContractView(APIView):
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filter_queryset)
-        pagination = PageNumberPagination()
+        pagination = HorillaPageNumberPagination()
         page = pagination.paginate_queryset(filter_queryset, request)
         serializer = ContractSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -171,7 +185,7 @@ class AllowanceView(APIView):
             return Response(serializer.data, status=200)
         allowance = Allowance.objects.all()
         filter_queryset = AllowanceFilter(request.GET, allowance).qs
-        pagination = PageNumberPagination()
+        pagination = HorillaPageNumberPagination()
         page = pagination.paginate_queryset(filter_queryset, request)
         serializer = AllowanceSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -211,7 +225,7 @@ class DeductionView(APIView):
             return Response(serializer.data, status=200)
         deduction = Deduction.objects.all()
         filter_queryset = DeductionFilter(request.GET, deduction).qs
-        pagination = PageNumberPagination()
+        pagination = HorillaPageNumberPagination()
         page = pagination.paginate_queryset(filter_queryset, request)
         serializer = DeductionSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -258,7 +272,7 @@ class LoanAccountView(APIView):
             serializer = LoanAccountSerializer(instance=loan_account)
             return Response(serializer.data, status=200)
         loan_accounts = LoanAccount.objects.all()
-        pagination = PageNumberPagination()
+        pagination = HorillaPageNumberPagination()
         page = pagination.paginate_queryset(loan_accounts, request)
         serializer = LoanAccountSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -284,27 +298,41 @@ class ReimbursementView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk=None):
+        # A line manager sees (and, per ReimbusementApproveRejectView below,
+        # can now decide on) their reports' claims too, not only their own --
+        # filtersubordinates already returns everything for a
+        # payroll.view_reimbursement holder, and always includes the
+        # caller's own records alongside any subordinates'.
         if pk:
-            reimbursement = Reimbursement.objects.get(id=pk)
+            reimbursement = filtersubordinates(
+                request,
+                Reimbursement.objects.filter(id=pk),
+                "payroll.view_reimbursement",
+            ).first()
+            if not reimbursement:
+                return Response({"error": _("Reimbursement not found.")}, status=404)
             serializer = self.serializer_class(reimbursement)
             return Response(serializer.data, status=200)
-        reimbursements = Reimbursement.objects.all()
-
-        if request.user.has_perm("payroll.view_reimbursement"):
-            reimbursements = Reimbursement.objects.all()
-        else:
-            reimbursements = Reimbursement.objects.filter(
-                employee_id=request.user.employee_get
-            )
-        pagination = PageNumberPagination()
+        reimbursements = filtersubordinates(
+            request, Reimbursement.objects.all(), "payroll.view_reimbursement"
+        )
+        # "?status=requested" for the pending ones only -- the other request
+        # lists already take a status filter; this one returned everything.
+        status_filter = request.query_params.get("status")
+        valid_statuses = dict(Reimbursement._meta.get_field("status").choices)
+        if status_filter in valid_statuses:
+            reimbursements = reimbursements.filter(status=status_filter)
+        reimbursements = reimbursements.order_by("-id")
+        pagination = HorillaPageNumberPagination()
         page = pagination.paginate_queryset(reimbursements, request)
         serializer = self.serializer_class(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
     def post(self, request):
-        serializer = self.serializer_class(
-            data=request.data, context={"request": request}
-        )
+        data = request.data.copy()
+        if not request.user.has_perm("payroll.add_reimbursement"):
+            data["employee_id"] = request.user.employee_get.id
+        serializer = self.serializer_class(data=data, context={"request": request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=200)
@@ -329,33 +357,76 @@ class ReimbursementView(APIView):
 class ReimbusementApproveRejectView(APIView):
     permission_classes = [IsAuthenticated]
 
+    # A reporting manager may now decide on their own report's claim, same as
+    # leave and attendance already work -- never their own claim, and never a
+    # claim belonging to someone outside their reporting chain.
+    @approver_permission_required(Reimbursement, "payroll.change_reimbursement")
     def post(self, request, pk):
-        status = request.data.get("status", None)
-        amount = request.data.get("amount", None)
-        amount = (
-            eval_validate(request.data.get("amount"))
-            if request.data.get("amount")
-            else 0
-        )
-        amount = max(0, amount)
-        reimbursement = Reimbursement.objects.filter(id=pk)
-        if amount:
-            reimbursement.update(amount=amount)
-        reimbursement.update(status=status)
-        return Response({"status": reimbursement.first().status}, status=200)
+        reimbursement = Reimbursement.objects.filter(id=pk).first()
+        if reimbursement is None:
+            return Response({"error": "Not found"}, status=404)
+
+        # Validated against the model's own choices. The previous version wrote
+        # request.data["status"] through queryset.update(), which skips model
+        # validation entirely, so any string could be stored in the status
+        # column -- including one no view knows how to display. Read off the
+        # field rather than a constant so this cannot drift from the model.
+        status = request.data.get("status")
+        valid_statuses = dict(Reimbursement._meta.get_field("status").choices)
+        if status not in valid_statuses:
+            return Response(
+                {"error": f"status must be one of {sorted(valid_statuses)}"},
+                status=400,
+            )
+
+        # The claimed amount is NOT taken from the approval request for an
+        # ordinary reimbursement. It is set when the claim is filed and is what
+        # the approver is reviewing; letting the approve call rewrite it means
+        # an approved claim need not resemble the one submitted, and nothing
+        # records the original figure. Reported alongside GHSA-56x4-6268-vg4f,
+        # whose primary finding -- no permission check here at all -- was fixed
+        # separately.
+        #
+        # Encashments are the deliberate exception: their payout is computed at
+        # approval time rather than claimed up front. This mirrors
+        # payroll.views.component_views.approve_reimbursements, which applies
+        # the same rule to the web flow.
+        if reimbursement.type in ("leave_encashment", "bonus_encashment"):
+            raw_amount = request.data.get("amount")
+            if raw_amount:
+                try:
+                    reimbursement.amount = max(0, eval_validate(raw_amount))
+                except (ValueError, SyntaxError):
+                    return Response({"error": "amount must be a number"}, status=400)
+
+        reimbursement.status = status
+        # save(), not queryset.update(): update() bypasses model validation and
+        # the modified_by bookkeeping in HorillaModel.save().
+        reimbursement.save()
+        reason = reject_reason_from(request)
+        if status == "rejected" and reason:
+            ReimbursementrequestComment.objects.create(
+                request_id=reimbursement,
+                employee_id=request.user.employee_get,
+                comment=reason,
+            )
+        return Response({"status": reimbursement.status}, status=200)
 
 
 class TaxBracketView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    @method_decorator(permission_required("payroll.view_taxbracket"))
     def get(self, request, pk=None):
         if pk:
-            tax_bracket = TaxBracket.objects.get(id=pk)
+            tax_bracket = TaxBracket.find(pk)
             serializer = TaxBracketSerializer(tax_bracket)
             return Response(serializer.data, status=200)
         tax_brackets = TaxBracket.objects.all()
         serializer = TaxBracketSerializer(instance=tax_brackets, many=True)
         return Response(serializer.data, status=200)
 
+    @method_decorator(permission_required("payroll.add_taxbracket"))
     def post(self, request):
         serializer = TaxBracketSerializer(data=request.data)
         if serializer.is_valid():
@@ -363,6 +434,7 @@ class TaxBracketView(APIView):
             return Response(serializer.data, status=200)
         return Response(serializer.errors, status=400)
 
+    @method_decorator(permission_required("payroll.change_taxbracket"))
     def put(self, request, pk):
         tax_bracket = TaxBracket.objects.get(id=pk)
         serializer = TaxBracketSerializer(
@@ -373,6 +445,7 @@ class TaxBracketView(APIView):
             return Response(serializer.data, status=200)
         return Response(serializer.errors, status=400)
 
+    @method_decorator(permission_required("payroll.delete_taxbracket"))
     def delete(self, request, pk):
         tax_bracket = TaxBracket.objects.get(id=pk)
         tax_bracket.delete()
@@ -381,6 +454,7 @@ class TaxBracketView(APIView):
 
 from datetime import datetime
 
+from django.conf import settings
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -389,14 +463,12 @@ from rest_framework.authentication import SessionAuthentication
 
 # DRF / Simple JWT imports
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from horilla.horilla_settings import HORILLA_DATE_FORMATS
+from horilla_api.authentication import TenantScopedJWTAuthentication
 
 # Your models / helpers
-from payroll.models.models import Company, EmployeeWorkInformation, Payslip
+from payroll.models.models import Company, EmployeeWorkInformation
 from payroll.models.tax_models import PayrollSettings
 from payroll.views.component_views import filter_payslip
 from payroll.views.views import equalize_lists_length
@@ -417,7 +489,7 @@ class PayslipPDFAPIView(APIView):
       - Also accepts session auth (browser) when available
     """
 
-    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    authentication_classes = (TenantScopedJWTAuthentication, SessionAuthentication)
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, id, format=None):
@@ -431,7 +503,7 @@ class PayslipPDFAPIView(APIView):
             or payslip.employee_id.employee_user_id == user
         ):
             return Response(
-                {"detail": "You do not have permission to view this payslip."},
+                {"detail": _("You do not have permission to view this payslip.")},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -461,7 +533,7 @@ class PayslipPDFAPIView(APIView):
 
         if not start_date_str or not end_date_str:
             return Response(
-                {"detail": "Payslip missing start_date or end_date"},
+                {"detail": _("Payslip missing start_date or end_date")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -474,10 +546,10 @@ class PayslipPDFAPIView(APIView):
 
         # formatted date for chosen company format (safe default if not found)
         formatted_start_date = start_date.strftime(
-            HORILLA_DATE_FORMATS.get(date_format, "%b. %d, %Y")
+            settings.HORILLA_DATE_FORMATS.get(date_format, "%b. %d, %Y")
         )
         formatted_end_date = end_date.strftime(
-            HORILLA_DATE_FORMATS.get(date_format, "%b. %d, %Y")
+            settings.HORILLA_DATE_FORMATS.get(date_format, "%b. %d, %Y")
         )
 
         # fill template context like original view
@@ -526,7 +598,9 @@ class PayslipPDFAPIView(APIView):
             if not HAVE_PDFKIT:
                 return Response(
                     {
-                        "detail": "PDF generation not available on server. Install pdfkit/wkhtmltopdf."
+                        "detail": _(
+                            "PDF generation not available on server. Install pdfkit/wkhtmltopdf."
+                        )
                     },
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )

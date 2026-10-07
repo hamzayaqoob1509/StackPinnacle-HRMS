@@ -1,19 +1,55 @@
 from datetime import datetime
 
 from django.apps import apps
-from django.db.models.signals import post_save, pre_save
+from django.db.models import Q
+from django.db.models.signals import m2m_changed, post_save, pre_save
 from django.dispatch import receiver
 
-from employee.models import EmployeeWorkInformation
+from employee.models import Employee, EmployeeWorkInformation
 from payroll.methods.deductions import create_deductions
-from payroll.models.models import Allowance, Contract, Deduction, LoanAccount, Payslip
+from payroll.models.models import (
+    Allowance,
+    Contract,
+    Deduction,
+    EncashmentGeneralSettings,
+    LoanAccount,
+    Payslip,
+)
 
 
-@receiver(pre_save, sender=EmployeeWorkInformation)
-def employeeworkinformation_pre_save(sender, instance, **_kwargs):
+@receiver(m2m_changed, sender=EncashmentGeneralSettings.employees.through)
+@receiver(m2m_changed, sender=EncashmentGeneralSettings.department.through)
+@receiver(m2m_changed, sender=EncashmentGeneralSettings.job_position.through)
+def encashment_settings_filtered_employees(sender, instance, action, **kwargs):
+    """
+    Recompute EncashmentGeneralSettings.filtered_employees whenever the
+    employees/department/job_position eligibility selection changes --
+    mirrors Policy's targeting in base/signals.py.
+    """
+    if action not in ["post_add", "post_remove", "post_clear"]:
+        return
+    employee_ids = list(instance.employees.values_list("id", flat=True))
+    department_ids = list(instance.department.values_list("id", flat=True))
+    job_position_ids = list(instance.job_position.values_list("id", flat=True))
+
+    employees = Employee.objects.filter(
+        Q(id__in=employee_ids)
+        | Q(employee_work_info__department_id__in=department_ids)
+        | Q(employee_work_info__job_position_id__in=job_position_ids)
+    )
+
+    instance.filtered_employees.set(employees)
+
+
+@receiver(post_save, sender=EmployeeWorkInformation)
+def employeeworkinformation_post_save(sender, instance, **_kwargs):
     """
     This method is used to override the save method for EmployeeWorkInformation Model
     """
+    # Skip during fixture load — demo contracts come from payroll_data.json
+    if _kwargs.get("raw"):
+        return
+
     active_employee = (
         instance.employee_id
         if instance.employee_id and instance.employee_id.is_active == True
@@ -32,6 +68,7 @@ def employeeworkinformation_pre_save(sender, instance, **_kwargs):
             contract.wage = (
                 instance.basic_salary if instance.basic_salary is not None else 0
             )
+            contract.contract_status = "active"
             contract.save()
 
 
@@ -41,6 +78,8 @@ def grant_prorata_leave_on_active_contract(sender, instance, **_kwargs):
     When a contract becomes active, allocate any pro-rated leave the employee
     is now entitled to. The leave app's ledger keeps this idempotent.
     """
+    if _kwargs.get("raw"):
+        return
     if instance.contract_status != "active" or not apps.is_installed("leave"):
         return
     try:
@@ -56,6 +95,12 @@ def create_installments(sender, instance, created, **kwargs):
     """
     Post save method for loan account
     """
+    # Demo fixtures carry pre-built allowance and installment relationships.
+    # Rebuilding them while loaddata is running duplicates the allowance and
+    # replaces the curated schedule with signal-generated records.
+    if kwargs.get("raw"):
+        return
+
     installments = []
     asset = True
     if apps.is_installed("asset"):
@@ -92,6 +137,18 @@ def create_installments(sender, instance, created, **kwargs):
         installment_dict = instance.get_installments()
 
         if not payslips_with_deductions and not instance.settled:
+            # Nothing is paid yet, so the whole loan is still editable -
+            # keep the one-time payout allowance in sync with the (possibly
+            # changed) employee/amount/date/title before regenerating the
+            # installment deductions below, which already follow
+            # instance.employee_id via create_deductions().
+            if instance.allowance_id:
+                allowance = instance.allowance_id
+                allowance.title = instance.title
+                allowance.amount = instance.loan_amount
+                allowance.one_time_date = instance.provided_date
+                allowance.save()
+                allowance.specific_employees.set([instance.employee_id])
             Deduction.objects.filter(id__in=deductions).delete()
             for (
                 installment_date,

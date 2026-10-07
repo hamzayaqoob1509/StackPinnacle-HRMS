@@ -13,12 +13,30 @@
 {% endif %}
 
 <div class="oh-wrapper mt-4">
-    {% if employee.employee_work_info.shift_id %}
-        <span class="fw-bold" style="font-size: 17px">
-            {% if employee.employee_work_info.shift_id %}
-                {% trans "Current Shift" %} &nbsp : &nbsp {{employee.employee_work_info.shift_id}}
-            {% endif %}
-        </span>
+	{% if employee.employee_work_info.shift_id %}
+	<span class="fw-bold" style="font-size:17px;"> {% if employee.employee_work_info.shift_id %} {% trans "Current Shift" %} &nbsp : &nbsp {{employee.employee_work_info.shift_id}} {% endif %}</span>
+	<button style="display:inline-block;"
+			class="oh-btn oh-btn--secondary ms-3"
+			data-toggle="oh-modal-toggle"
+			data-target="#genericModal"
+			hx-get="{% url 'shift-request-reallocate' %}?emp_id={{emp_id}}"
+			hx-target="#genericModalBody"
+		>
+		<ion-icon name="add-sharp" class="mr-1 md hydrated" role="img" aria-label="{% trans 'add sharp' %}"></ion-icon>{% trans "Reallocate Shift." %}
+	</button>
+	{% endif %}
+
+  <div class="oh-tabs mt-3">
+    <ul class="oh-tabs__tablist">
+      <li class="oh-tabs__tab oh-tabs__tab--active" data-target="#shift_tab_1">
+        <div>
+          <img
+            src="{% static 'images/ui/work-from-home (1).png' %}"
+            alt=""
+            style="width: 25px; height: 25px; margin-right: 3px"
+          />
+          {% trans "Work type request" %}
+        </div>
         <button
             style="display: inline-block"
             class="oh-btn oh-btn--secondary ms-3"
@@ -31,7 +49,7 @@
                 name="add-sharp"
                 class="mr-1 md hydrated"
                 role="img"
-                aria-label="add sharp"
+                aria-label="{% trans 'add sharp' %}"
             ></ion-icon
             >{% trans "Reallocate Shift." %}
         </button>
@@ -53,7 +71,7 @@
                 </div>
                 <button
                     class="oh-btn oh-btn--secondary-outline oh-stop-prop oh-accordion-meta__btn p-2"
-                    title="Add"
+                    title="{% trans 'Add' %}"
                     hx-get="{% url 'work-type-request' %}?emp_id={{emp_id}}"
                     hx-target="#objectCreateModalTarget"
                     data-target="#objectCreateModal"
@@ -63,7 +81,7 @@
                         class="md hydrated"
                         name="add-outline"
                         role="img"
-                        aria-label="add outline"
+                        aria-label="{% trans 'add outline' %}"
                     ></ion-icon>
                 </button>
             </li>
@@ -89,7 +107,7 @@
                             class="md hydrated"
                             name="add-outline"
                             role="img"
-                            aria-label="add outline"
+                            aria-label="{% trans 'add outline' %}"
                         ></ion-icon>
                     </button>
                 {% endif%}
@@ -110,7 +128,7 @@
                 </div>
                 <button
                     class="oh-btn oh-btn--secondary-outline oh-stop-prop oh-accordion-meta__btn p-2"
-                    title="Add"
+                    title="{% trans 'Add' %}"
                     hx-get="{% url 'shift-request' %}?emp_id={{emp_id}}"
                     hx-target="#objectCreateModalTarget"
                     data-target="#objectCreateModal"
@@ -120,7 +138,7 @@
                         class="md hydrated"
                         name="add-outline"
                         role="img"
-                        aria-label="add outline"
+                        aria-label="{% trans 'add outline' %}"
                     ></ion-icon>
                 </button>
             </li>
@@ -136,7 +154,7 @@
                 {% if not request.GET.profile and perms.add_rotatingworktypeassign or request.user|is_reportingmanager %}
                     <button
                         class="oh-btn oh-btn--secondary-outline oh-stop-prop oh-accordion-meta__btn p-2"
-                        title="Add"
+                        title="{% trans 'Add' %}"
                         hx-get="{% url 'rotating-shift-assign-add' %}?emp_id={{emp_id}}"
                         hx-target="#objectCreateModalTarget"
                         data-target="#objectCreateModal"
@@ -146,7 +164,7 @@
                             class="md hydrated"
                             name="add-outline"
                             role="img"
-                            aria-label="add outline"
+                            aria-label="{% trans 'add outline' %}"
                         ></ion-icon>
                     </button>
                 {% endif %}
@@ -216,7 +234,7 @@
                                                         <img
                                                             src="https://ui-avatars.com/api/?name={{work_type_request.employee_id}}&amp;background=random"
                                                             class="oh-profile__image"
-                                                            alt="Username"
+                                                            alt="{% trans 'Employee' %}"
                                                         />
                                                     </div>
                                                     <span
@@ -298,7 +316,7 @@
                                                         {% csrf_token %}
                                                         <button
                                                             type="submit"
-                                                            class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                            class="oh-btn oh-btn--danger w-100"
                                                             title="{% trans 'Remove' %}"
                                                         >
                                                             <ion-icon
@@ -452,7 +470,7 @@
                                                     <img
                                                         src="https://ui-avatars.com/api/?name={{rshift.employee_id.employee_first_name}}+{{rshift.employee_id.employee_last_name}}&background=random"
                                                         class="oh-profile__image"
-                                                        alt="Username"
+                                                        alt="{% trans 'Employee' %}"
                                                     />
                                                 </div>
                                                 <span
@@ -559,7 +577,7 @@
                                                                     id=""
                                                                 />
                                                                 <button
-                                                                    class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                                    class="oh-btn oh-btn--danger w-100"
                                                                     title="{% trans 'Archive' %}"
                                                                 >
                                                                     <ion-icon
@@ -575,7 +593,7 @@
                                                                 style="width: 100%"
                                                             >
                                                                 <button
-                                                                    class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                                    class="oh-btn oh-btn--danger w-100"
                                                                     title="{% trans 'Un-Archive' %}"
                                                                 >
                                                                     <ion-icon
@@ -595,7 +613,7 @@
                                                             {% csrf_token %}
                                                             <button
                                                                 type="submit"
-                                                                class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                                class="oh-btn oh-btn--danger w-100"
                                                                 title="{% trans 'Remove' %}"
                                                             >
                                                                 <ion-icon
@@ -683,7 +701,7 @@
                                                     <img
                                                         src="https://ui-avatars.com/api/?name={{rwork_type.employee_id.employee_first_name}}+{{rwork_type.employee_id.employee_last_name}}&background=random"
                                                         class="oh-profile__image"
-                                                        alt="Username"
+                                                        alt="{% trans 'Employee' %}"
                                                     />
                                                 </div>
                                                 <span class="oh-profile__name oh-text--dark"
@@ -778,7 +796,7 @@
                                                                     style="width: 100%"
                                                                 >
                                                                     <button
-                                                                        class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                                        class="oh-btn oh-btn--danger w-100"
                                                                         title="{% trans 'Archive' %}"
                                                                     >
                                                                         <ion-icon name="archive"></ion-icon>
@@ -792,7 +810,7 @@
                                                                     style="width: 100%"
                                                                 >
                                                                     <button
-                                                                        class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                                        class="oh-btn oh-btn--danger w-100"
                                                                         title="{% trans 'Un-Archive' %}"
                                                                     >
                                                                         <ion-icon name="archive"></ion-icon>
@@ -810,7 +828,7 @@
                                                                 {% csrf_token %}
                                                                 <button
                                                                     type="submit"
-                                                                    class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                                    class="oh-btn oh-btn--danger w-100"
                                                                     title="{% trans 'Remove' %}"
                                                                 >
                                                                     <ion-icon
@@ -895,7 +913,7 @@
                                                         <img
                                                             src="https://ui-avatars.com/api/?name={{shift_request.employee_id}}&amp;background=random"
                                                             class="oh-profile__image"
-                                                            alt="Username"
+                                                            alt="{% trans 'Employee' %}"
                                                         />
                                                     </div>
                                                     <span class="oh-profile__name oh-text--dark"
@@ -972,7 +990,7 @@
                                                         {% csrf_token %}
                                                         <button
                                                             type="submit"
-                                                            class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                            class="oh-btn oh-btn--danger w-100"
                                                             title="{% trans 'Remove' %}"
                                                         >
                                                         <ion-icon name="trash-outline"></ion-icon>
@@ -998,7 +1016,7 @@
                                                         {% if shift_request.approved == False and shift_request.canceled == False %}
                                                             <a  href="{% url 'shift-request-approve' shift_request.id %}"
                                                                 title="{% trans 'Approve' %}"
-                                                                onclick="return confirm('{% trans "Do you want to approve this request?" %}')"
+                                                                onclick="return confirm('{% trans "Do you want to approve this request?"|escapejs %}')"
                                                                 class="oh-btn oh-btn--success">
                                                                 <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
                                                             </a>
@@ -1018,7 +1036,7 @@
                                                             <a
                                                                 href="{% url 'shift-request-cancel' shift_request.id %}"
                                                                 title="{% trans 'Reject' %}"
-                                                                onclick="return confirm('{% trans "Do you want to reject this request?" %}')"
+                                                                onclick="return confirm('{% trans "Do you want to reject this request?"|escapejs %}')"
                                                                 class="oh-btn oh-btn--danger">
                                                                 <ion-icon class="me-1" name="close-circle-outline"></ion-icon>
                                                             </a>
@@ -1084,7 +1102,7 @@
             >
                 {% trans "Update Shift Request" %}
             </h5>
-            <button class="oh-modal__close" aria-label="Close">
+            <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
                 <ion-icon name="close-outline"></ion-icon>
             </button>
         </div>
@@ -1108,7 +1126,7 @@
             <h5 class="oh-modal__dialog-title" id="shiftRequestModalLabel">
                 {% trans "Shift Request" %}
             </h5>
-            <button class="oh-modal__close" aria-label="Close">
+            <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
                 <ion-icon name="close-outline"></ion-icon>
             </button>
         </div>

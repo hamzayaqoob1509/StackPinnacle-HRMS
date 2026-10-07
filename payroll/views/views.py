@@ -4,17 +4,16 @@ views.py
 This module is used to define the method for the path in the urls
 """
 
+import io
 import json
 import os
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from itertools import groupby
 from urllib.parse import parse_qs
 
 import pandas as pd
-import io
-
-from xhtml2pdf import pisa
+from django.conf import settings as pay_settings
 from django.contrib import messages
 from django.db.models import ProtectedError, Q
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
@@ -23,14 +22,19 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
+from django.views.decorators.http import require_http_methods
+from xhtml2pdf import pisa
 
 from base.methods import (
     closest_numbers,
     eval_validate,
     export_data,
+    filter_own_and_subordinate_recordes,
     generate_colors,
     generate_pdf,
     get_key_instances,
+    get_session_company,
     sortby,
 )
 from base.models import Company
@@ -42,7 +46,7 @@ from horilla.decorators import (
     permission_required,
 )
 from horilla.group_by import group_by_queryset
-from horilla.horilla_settings import HORILLA_DATE_FORMATS
+from horilla.http.response import HorillaRedirect
 from notifications.signals import notify
 from payroll.context_processors import get_active_employees
 from payroll.filters import ContractFilter, ContractReGroup, PayslipFilter
@@ -74,13 +78,6 @@ status_choices = {
 }
 
 
-def get_language_code(request):
-    scale_x_text = _("Name of Employees")
-    scale_y_text = _("Amount")
-    response = {"scale_x_text": scale_x_text, "scale_y_text": scale_y_text}
-    return JsonResponse(response)
-
-
 @login_required
 @permission_required("payroll.add_contract")
 def contract_create(request):
@@ -90,13 +87,31 @@ def contract_create(request):
     from payroll.forms.forms import ContractForm
 
     form = ContractForm()
+    is_htmx = request.headers.get("HX-Request") is not None
     if request.method == "POST":
         form = ContractForm(request.POST, request.FILES)
         if form.is_valid():
             form.save()
             messages.success(request, _("Contract Created"))
-            return redirect(contract_view)
-    return render(request, "payroll/common/form.html", {"form": form})
+            if is_htmx:
+                response = HttpResponse("", status=200)
+                response["HX-Trigger"] = json.dumps(
+                    {"reloadPayrollContracts": {"target": "body"}}
+                )
+                return response
+            return redirect("view-contract")
+    template_name = (
+        "payroll/common/form_fragment.html" if is_htmx else "payroll/common/form.html"
+    )
+    return render(
+        request,
+        template_name,
+        {
+            "form": form,
+            "post_url": request.get_full_path(),
+            "back_url": reverse("contract-filter"),
+        },
+    )
 
 
 @login_required
@@ -117,21 +132,33 @@ def contract_update(request, contract_id, **kwargs):
     from payroll.forms.forms import ContractForm
 
     contract = Contract.objects.filter(id=contract_id).first()
+    is_htmx = request.headers.get("HX-Request") is not None
     if not contract:
         messages.info(request, _("The contract could not be found."))
-        return redirect(contract_view)
+        return redirect("view-contract")
     contract_form = ContractForm(instance=contract)
     if request.method == "POST":
         contract_form = ContractForm(request.POST, request.FILES, instance=contract)
         if contract_form.is_valid():
             contract_form.save()
             messages.success(request, _("Contract updated"))
-            return redirect(contract_view)
+            if is_htmx:
+                response = HttpResponse("", status=200)
+                response["HX-Trigger"] = json.dumps(
+                    {"reloadPayrollContracts": {"target": "body"}}
+                )
+                return response
+            return redirect(reverse("view-contract"))
+    template_name = (
+        "payroll/common/form_fragment.html" if is_htmx else "payroll/common/form.html"
+    )
     return render(
         request,
-        "payroll/common/form.html",
+        template_name,
         {
             "form": contract_form,
+            "post_url": request.get_full_path(),
+            "back_url": reverse("contract-filter"),
         },
     )
 
@@ -188,16 +215,20 @@ def contract_status_update(request, contract_id):
                 for error in errors:
                     messages.error(request, error)
         return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
+    return HttpResponse()
 
 
 @login_required
 @permission_required("payroll.change_contract")
 def bulk_contract_status_update(request):
     status = request.POST.get("status")
-    ids = eval_validate(request.POST.get("ids"))
+    ids = request.POST.get("ids")
+    ids = eval_validate(ids) if ids else []
     all_contracts = Contract.objects.all()
     contracts = all_contracts.filter(id__in=ids)
-
+    if not contracts.exists():
+        messages.info(request, _("No contracts selected."))
+        return redirect("contract-filter")
     for contract in contracts:
         save = True
         if status in ["active", "draft"]:
@@ -228,6 +259,7 @@ def bulk_contract_status_update(request):
 
 @login_required
 @permission_required("payroll.change_contract")
+@require_http_methods(["POST"])
 def update_contract_filing_status(request, contract_id):
     if request.method == "POST":
         contract = get_object_or_404(Contract, id=contract_id)
@@ -247,7 +279,7 @@ def update_contract_filing_status(request, contract_id):
                 request, _("You selected the wrong option for filing status.")
             )
         contract.save()
-        return redirect(contract_filter)
+        return redirect("contract-filter")
 
 
 @login_required
@@ -282,14 +314,14 @@ def contract_delete(request, contract_id):
                 urls = f"/payroll/single-contract-view/{next_instance}/"
                 params = f"?{previous_data}&instances_ids={instances_list}"
                 return redirect(urls + params)
-            return HttpResponse("<script>window.location.reload();</script>")
+            return HorillaRedirect(request)
         else:
             return redirect(f"/payroll/contract-filter?{request.GET.urlencode()}")
     except Contract.DoesNotExist:
         messages.error(request, _("Contract not found."))
     except ProtectedError:
         messages.error(request, _("You cannot delete this contract."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -426,14 +458,11 @@ def settings(request):
     """
     This method is used to render settings template
     """
-    instance = PayrollSettings.objects.first()
+    tracking_company = get_session_company(request)
+    instance, _created = PayrollSettings.objects.get_or_create(
+        company_id=tracking_company
+    )
     currency_form = PayrollSettingsForm(instance=instance)
-    selected_company_id = request.session.get("selected_company")
-
-    if selected_company_id == "all" or not selected_company_id:
-        companies = Company.objects.all()
-    else:
-        companies = Company.objects.filter(id=selected_company_id)
 
     if request.method == "POST":
 
@@ -442,16 +471,16 @@ def settings(request):
 
             currency_form.save()
             messages.success(request, _("Payroll settings updated."))
-            return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
-    return render(
-        request,
-        "payroll/settings/payroll_settings.html",
-        {
-            "currency_form": currency_form,
-            "companies": companies,
-            "selected_company_id": selected_company_id,
-        },
-    )
+            if request.headers.get("HX-Request"):
+                return HttpResponse("")
+            return HorillaRedirect(request)
+        else:
+            messages.error(request, _("There was an error updating the currency."))
+            if request.headers.get("HX-Request"):
+                return HttpResponse("", status=400)
+    if request.headers.get("HX-Request"):
+        return HttpResponse("", status=400)
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -463,6 +492,8 @@ def update_payslip_status(request, payslip_id):
     status = request.POST.get("status")
     view = request.POST.get("view")
     payslip = Payslip.objects.filter(id=payslip_id).first()
+    if not payslip:
+        return HorillaRedirect(request, message=_("Payslip not found."))
     if payslip:
         payslip.status = status
         payslip.save()
@@ -472,7 +503,7 @@ def update_payslip_status(request, payslip_id):
     if view:
         from .component_views import filter_payslip
 
-        return redirect(filter_payslip)
+        return redirect(reverse("payslip-list"))
     data = payslip.pay_head_data
     data["employee"] = payslip.employee_id
     data["payslip"] = payslip
@@ -483,6 +514,8 @@ def update_payslip_status(request, payslip_id):
     return render(request, "payroll/payslip/individual_payslip_summery.html", data)
 
 
+@login_required
+@hx_request_required
 def update_payslip_status_no_id(request):
     """
     This method is used to update the payslip confirmation status
@@ -499,45 +532,6 @@ def update_payslip_status_no_id(request):
             "message": f"{slips.count()} Payslips status updated.",
         }
     return JsonResponse(message)
-
-
-@login_required
-@permission_required("payroll.change_payslip")
-def bulk_update_payslip_status(request):
-    """
-    This method is used to update payslip status when generating payslip through
-    generate payslip method
-    """
-    json_data = request.GET["json_data"]
-    pay_data = json.loads(json_data)
-    status = request.GET["status"]
-
-    for json_entry in pay_data:
-        data = json.loads(json_entry)
-        emp_id = data["employee"]
-        employee = Employee.objects.get(id=emp_id)
-
-        payslip_kwargs = {
-            "employee_id": employee,
-            "start_date": data["start_date"],
-            "end_date": data["end_date"],
-        }
-        filtered_instance = Payslip.objects.filter(**payslip_kwargs).first()
-        instance = filtered_instance if filtered_instance is not None else Payslip()
-
-        instance.employee_id = employee
-        instance.start_date = data["start_date"]
-        instance.end_date = data["end_date"]
-        instance.status = status
-        instance.basic_pay = data["basic_pay"]
-        instance.contract_wage = data["contract_wage"]
-        instance.gross_pay = data["gross_pay"]
-        instance.deduction = data["total_deductions"]
-        instance.net_pay = data["net_pay"]
-        instance.pay_head_data = data
-        instance.save()
-
-    return JsonResponse({"type": "success", "message": "Payslips status updated"})
 
 
 @login_required
@@ -582,13 +576,12 @@ def view_payslip_pdf(request, payslip_id):
 
             month_start_name = start_date.strftime("%B %d, %Y")
             month_end_name = end_date.strftime("%B %d, %Y")
-
             # Formatted date for each format
-            for format_name, format_string in HORILLA_DATE_FORMATS.items():
+            for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_start_date = start_date.strftime(format_string)
 
-            for format_name, format_string in HORILLA_DATE_FORMATS.items():
+            for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_end_date = end_date.strftime(format_string)
             data["month_start_name"] = month_start_name
@@ -665,9 +658,15 @@ def delete_payslip(request, payslip_id):
         messages.error(request, _("Payslip not found."))
     except ProtectedError:
         messages.error(request, _("Something went wrong"))
+    if request.headers.get("HX-Request"):
+        response = HttpResponse("", status=200)
+        response["HX-Trigger"] = json.dumps(
+            {"reloadPayrollPayslips": {"target": "body"}}
+        )
+        return response
     if not Payslip.objects.filter():
-        return HttpResponse("<script>window.location.reload()</script>")
-    return redirect(filter_payslip)
+        return HorillaRedirect(request)
+    return redirect(reverse("payslip-list"))
 
 
 @login_required
@@ -677,7 +676,12 @@ def contract_info_initial(request):
     This is an ajax method to return json response to auto fill the contract
     form fields
     """
-    employee_id = request.GET["employee_id"]
+    employee_id = request.GET.get("employee_id")
+    if not employee_id:
+        messages.error(request, _("Missing required parameter"))
+        return JsonResponse(
+            {"error": "Missing required parameter: employee_id"}, status=400
+        )
     work_info = EmployeeWorkInformation.objects.filter(employee_id=employee_id).first()
     response_data = {
         "department": (
@@ -733,11 +737,18 @@ def dashboard_employee_chart(request):
     payroll dashboard employee chart data
     """
 
-    date = request.GET.get("period")
-    year = date.split("-")[0]
-    month = date.split("-")[1]
+    date = request.GET.get("period", datetime.now().strftime("%Y-%m"))
+    year, month = date.split("-")
     dataset = []
+    employee_label = []
+    list_of_employees = []
 
+    response = {
+        "dataset": dataset,
+        "labels": employee_label,
+        "employees": list_of_employees,
+        "message": _("No payslips generated for this month."),
+    }
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     if is_ajax and request.method == "GET":
         employee_list = Payslip.objects.filter(
@@ -781,7 +792,6 @@ def dashboard_employee_chart(request):
                 total_pay_with_status[dataset_label][label] for label in employees
             ]
 
-        employee_label = []
         for employee in employees:
             employee_label.append(
                 f"{employee.employee_first_name} {employee.employee_last_name}"
@@ -802,17 +812,17 @@ def dashboard_employee_chart(request):
             "employees": list_of_employees,
             "message": _("No payslips generated for this month."),
         }
-        return JsonResponse(response)
+    return JsonResponse(response)
 
 
+@login_required
 def payslip_details(request):
     """
     payroll dashboard payslip details data
     """
 
-    date = request.GET.get("period")
-    year = date.split("-")[0]
-    month = date.split("-")[1]
+    date = request.GET.get("period", datetime.now().strftime("%Y-%m"))
+    year, month = date.split("-")
     employee_list = []
     employee_list = Payslip.objects.filter(
         Q(start_date__month=month) & Q(start_date__year=year)
@@ -834,9 +844,8 @@ def dashboard_department_chart(request):
     payroll dashboard department chart data
     """
 
-    date = request.GET.get("period")
-    year = date.split("-")[0]
-    month = date.split("-")[1]
+    date = request.GET.get("period", datetime.now().strftime("%Y-%m"))
+    year, month = date.split("-")
     dataset = [
         {
             "label": "",
@@ -847,51 +856,50 @@ def dashboard_department_chart(request):
     department = []
     department_total = []
 
+    response = {
+        "dataset": dataset,
+        "labels": department,
+        "department_total": department_total,
+        "message": _("No payslips generated for this month."),
+    }
+
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     if is_ajax and request.method == "GET":
-        employee_list = Payslip.objects.filter(
-            Q(start_date__month=month) & Q(start_date__year=year)
+        payslips = Payslip.objects.filter(
+            start_date__month=month, start_date__year=year
         )
 
-        for employee in employee_list:
-            department.append(
-                employee.employee_id.employee_work_info.department_id.department
-            )
+        department_totals = defaultdict(float)
 
-        department = list(set(department))
-        for depart in department:
-            department_total.append({"department": depart, "amount": 0})
+        for slip in payslips:
+            try:
+                dept = slip.employee_id.get_department().department
+                department_totals[dept] += round(slip.net_pay, 2)
+            except Exception as e:
+                print(e)
 
-        for employee in employee_list:
-            employee_department = (
-                employee.employee_id.employee_work_info.department_id.department
-            )
+        departments = list(department_totals.keys())
 
-            for depart in department_total:
-                if depart["department"] == employee_department:
-                    depart["amount"] += round(employee.net_pay, 2)
+        department_total = [
+            {"department": dept, "amount": amount}
+            for dept, amount in department_totals.items()
+        ]
 
-        colors = generate_colors(len(department))
-
+        colors = generate_colors(len(departments))
         dataset = [
             {
                 "label": "",
-                "data": [],
+                "data": list(department_totals.values()),
                 "backgroundColor": colors,
             }
         ]
-
-        for depart_total, depart in zip(department_total, department):
-            if depart == depart_total["department"]:
-                dataset[0]["data"].append(depart_total["amount"])
-
         response = {
             "dataset": dataset,
-            "labels": department,
+            "labels": departments,
             "department_total": department_total,
             "message": _("No payslips generated for this month."),
         }
-        return JsonResponse(response)
+    return JsonResponse(response)
 
 
 def contract_ending(request):
@@ -929,6 +937,7 @@ def contract_ending(request):
     return JsonResponse(response)
 
 
+@login_required
 def payslip_export(request):
     """
     payroll dashboard exporting to excell data
@@ -1019,7 +1028,7 @@ def payslip_export(request):
                 employer_contribution = sum(
                     item["employer_contribution_amount"] for item in group
                 )
-            except:
+            except (KeyError, TypeError):
                 employer_contribution = 0
             if employer_contribution > 0:
                 table5_data.append(
@@ -1030,22 +1039,9 @@ def payslip_export(request):
                     }
                 )
 
-    emp = request.user.employee_get
+    date_format = request.user.employee_get.get_date_format()
     if employee_payslip_list:
         for payslip in employee_payslip_list:
-            # Taking the company_name of the user
-            info = EmployeeWorkInformation.objects.filter(employee_id=emp).first()
-
-            if info:
-                employee_company = info.company_id
-                company_name = Company.objects.filter(company=employee_company).first()
-                date_format = (
-                    company_name.date_format
-                    if company_name and company_name.date_format
-                    else "MMM. D, YYYY"
-                )
-            else:
-                date_format = "MMM. D, YYYY"
 
             start_date_str = str(payslip.start_date)
             end_date_str = str(payslip.end_date)
@@ -1053,12 +1049,11 @@ def payslip_export(request):
             # Convert the string to a datetime.date object
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-
-            for format_name, format_string in HORILLA_DATE_FORMATS.items():
+            for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_start_date = start_date.strftime(format_string)
 
-            for format_name, format_string in HORILLA_DATE_FORMATS.items():
+            for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_end_date = end_date.strftime(format_string)
 
@@ -1091,9 +1086,12 @@ def payslip_export(request):
         )
 
     for employee in employee_payslip_list:
-        department.append(
-            employee.employee_id.employee_work_info.department_id.department
-        )
+        try:
+            department.append(
+                employee.employee_id.employee_work_info.department_id.department
+            )
+        except Exception as e:
+            print(e)
 
     department = list(set(department))
 
@@ -1101,9 +1099,12 @@ def payslip_export(request):
         table2_data.append({"Department": depart, "Amount": 0})
 
     for employee in employee_payslip_list:
-        employee_department = (
-            employee.employee_id.employee_work_info.department_id.department
-        )
+        try:
+            employee_department = (
+                employee.employee_id.employee_work_info.department_id.department
+            )
+        except Exception as e:
+            print(e)
 
         for depart in table2_data:
             if depart["Department"] == employee_department:
@@ -1244,7 +1245,6 @@ def payslip_export(request):
     heading_format = workbook.add_format(
         {
             "bold": True,
-            "font_size": 14,
             "align": "center",
             "valign": "vcenter",
             "bg_color": "#eb7968",
@@ -1327,7 +1327,11 @@ def payslip_bulk_delete(request):
     """
     This method is used to bulk delete for Payslip
     """
-    ids = request.POST["ids"]
+    ids = request.POST.get("ids")
+    if not ids:
+        messages.error(request, _("Missing required parameters."))
+        return JsonResponse({"message": "Missing required parameters."}, status=400)
+
     ids = json.loads(ids)
     for id in ids:
         try:
@@ -1356,8 +1360,14 @@ def slip_group_name_update(request):
     """
     This method is used to update the group of the payslip
     """
-    new_name = request.POST["newName"]
-    group_name = request.POST["previousName"]
+    new_name = request.POST.get("newName")
+    group_name = request.POST.get("previousName")
+
+    if not new_name or not group_name:
+        return JsonResponse(
+            {"type": "error", "message": "Missing required parameters."}, status=400
+        )
+
     Payslip.objects.filter(group_name=group_name).update(group_name=new_name)
     return JsonResponse(
         {"type": "success", "message": "Batch name updated.", "new_name": new_name}
@@ -1395,7 +1405,10 @@ def contract_bulk_delete(request):
     """
     This method is used to bulk delete Contract
     """
-    ids = request.POST["ids"]
+    ids = request.POST.get("ids")
+    if not ids:
+        messages.error(request, _("No IDs provided for deletion."))
+        return JsonResponse({"message": "error."}, status=400)
     ids = json.loads(ids)
     for id in ids:
         try:
@@ -1446,15 +1459,13 @@ def _pdf_link_callback(uri, rel):
     Resolve URIs for xhtml2pdf: convert /media/ and /static/ URLs to
     absolute filesystem paths so the PDF engine never needs HTTP.
     """
-    from django.conf import settings
-
-    if uri.startswith(settings.MEDIA_URL):
+    if uri.startswith(pay_settings.MEDIA_URL):
         path = os.path.join(
-            settings.MEDIA_ROOT, uri[len(settings.MEDIA_URL):]
+            pay_settings.MEDIA_ROOT, uri[len(pay_settings.MEDIA_URL) :]
         )
-    elif uri.startswith(settings.STATIC_URL):
+    elif uri.startswith(pay_settings.STATIC_URL):
         path = os.path.join(
-            settings.STATIC_ROOT, uri[len(settings.STATIC_URL):]
+            pay_settings.STATIC_ROOT, uri[len(pay_settings.STATIC_URL) :]
         )
     else:
         return uri
@@ -1465,6 +1476,9 @@ def _pdf_link_callback(uri, rel):
 def generate_payslip_pdf(template_path, context, html=False):
     """
     Generate a PDF file from an HTML template and context data.
+
+    Uses xhtml2pdf rather than pdfkit: pdfkit needs the wkhtmltopdf binary,
+    which the Docker image does not ship.
 
     Args:
         template_path (str): The path to the HTML template.
@@ -1481,7 +1495,7 @@ def generate_payslip_pdf(template_path, context, html=False):
 
     try:
         buffer = io.BytesIO()
-        pdf = pisa.pisaDocument(
+        pisa.pisaDocument(
             io.BytesIO(html_content.encode("utf-8")),
             buffer,
             link_callback=_pdf_link_callback,
@@ -1496,6 +1510,7 @@ def generate_payslip_pdf(template_path, context, html=False):
         return HttpResponse(f"Error generating PDF: {str(e)}", status=500)
 
 
+@login_required
 def payslip_pdf(request, id):
     """
     Generate the payslip as a PDF and return it in an HttpResponse.
@@ -1520,11 +1535,11 @@ def payslip_pdf(request, id):
             employee = payslip.employee_id
 
             # Taking the company_name of the payslip employee
-            date_format = "MMM. D, YYYY"
             info = EmployeeWorkInformation.objects.filter(employee_id=employee)
+            date_format = "MMM. D, YYYY"
             if info.exists():
-                for work_info in info:
-                    employee_company = work_info.company_id
+                for data in info:
+                    employee_company = data.company_id
                 company_name = Company.objects.filter(company=employee_company)
                 emp_company = company_name.first()
 
@@ -1546,7 +1561,7 @@ def payslip_pdf(request, id):
             # Format the start and end dates
             formatted_start_date = start_date.strftime("%b. %-d, %Y")
             formatted_end_date = end_date.strftime("%b. %-d, %Y")
-            for format_name, format_string in HORILLA_DATE_FORMATS.items():
+            for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_start_date = start_date.strftime(format_string)
                     formatted_end_date = end_date.strftime(format_string)
@@ -1583,6 +1598,7 @@ def payslip_pdf(request, id):
 
             equalize_lists_length(data["allowances"], data["all_deductions"])
             data["zipped_data"] = zip(data["allowances"], data["all_deductions"])
+            data["request"] = request
             template_path = "payroll/payslip/payslip_pdf.html"
 
             return generate_payslip_pdf(template_path, context=data, html=False)
@@ -1591,15 +1607,17 @@ def payslip_pdf(request, id):
 
 
 @login_required
+@hx_request_required
 @permission_required("payroll.view_contract")
 def contract_select(request):
     page_number = request.GET.get("page")
+    contracts = Contract.objects.none()
 
     if page_number == "all":
-        employees = Contract.objects.all()
+        contracts = Contract.objects.all()
 
-    contract_ids = [str(emp.id) for emp in employees]
-    total_count = employees.count()
+    contract_ids = [str(contract.id) for contract in contracts]
+    total_count = contracts.count()
 
     context = {"contract_ids": contract_ids, "total_count": total_count}
 
@@ -1607,39 +1625,41 @@ def contract_select(request):
 
 
 @login_required
+@hx_request_required
 def contract_select_filter(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         contract_filter = ContractFilter(filters, queryset=Contract.objects.all())
 
         # Get the filtered queryset
-        filtered_employees = contract_filter.qs
+        filtered_contracts = contract_filter.qs
 
-        contract_ids = [str(emp.id) for emp in filtered_employees]
-        total_count = filtered_employees.count()
+        contract_ids = [str(contract.id) for contract in filtered_contracts]
+        total_count = filtered_contracts.count()
 
         context = {"contract_ids": contract_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
+@hx_request_required
 def payslip_select(request):
     page_number = request.GET.get("page")
+    payslip = Payslip.objects.none()
 
     if page_number == "all":
         if request.user.has_perm("payroll.view_payslip"):
-            employees = Payslip.objects.all()
+            payslip = Payslip.objects.all()
         else:
-            employees = Payslip.objects.filter(
-                employee_id__employee_user_id=request.user
-            )
+            payslip = Payslip.objects.filter(employee_id__employee_user_id=request.user)
 
-    payslip_ids = [str(emp.id) for emp in employees]
-    total_count = employees.count()
+    payslip_ids = [str(emp.id) for emp in payslip]
+    total_count = payslip.count()
 
     context = {"payslip_ids": payslip_ids, "total_count": total_count}
 
@@ -1647,10 +1667,12 @@ def payslip_select(request):
 
 
 @login_required
+@hx_request_required
 def payslip_select_filter(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         payslip_filter = PayslipFilter(filters, queryset=Payslip.objects.all())
@@ -1663,10 +1685,11 @@ def payslip_select_filter(request):
 
         context = {"payslip_ids": payslip_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
+@hx_request_required
 def create_payrollrequest_comment(request, payroll_id):
     """
     This method renders form and template to create Reimbursement request comments
@@ -1705,11 +1728,10 @@ def create_payrollrequest_comment(request, payroll_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb=f"{payroll.employee_id}'s reimbursement request has received a comment.",
-                        verb_ar=f"تلقى طلب استرداد نفقات {payroll.employee_id} تعليقًا.",
-                        verb_de=f"{payroll.employee_id}s Rückerstattungsantrag hat einen Kommentar erhalten.",
-                        verb_es=f"La solicitud de reembolso de gastos de {payroll.employee_id} ha recibido un comentario.",
-                        verb_fr=f"La demande de remboursement de frais de {payroll.employee_id} a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "%(employee)s's reimbursement request has received a comment."
+                        ),
+                        verb_params={"employee": str(payroll.employee_id)},
                         redirect=reverse("view-reimbursement"),
                         icon="chatbox-ellipses",
                     )
@@ -1721,11 +1743,9 @@ def create_payrollrequest_comment(request, payroll_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your reimbursement request has received a comment.",
-                        verb_ar="تلقى طلب استرداد نفقاتك تعليقًا.",
-                        verb_de="Ihr Rückerstattungsantrag hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de reembolso ha recibido un comentario.",
-                        verb_fr="Votre demande de remboursement a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "Your reimbursement request has received a comment."
+                        ),
                         redirect=reverse("view-reimbursement"),
                         icon="chatbox-ellipses",
                     )
@@ -1737,11 +1757,10 @@ def create_payrollrequest_comment(request, payroll_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb=f"{payroll.employee_id}'s reimbursement request has received a comment.",
-                        verb_ar=f"تلقى طلب استرداد نفقات {payroll.employee_id} تعليقًا.",
-                        verb_de=f"{payroll.employee_id}s Rückerstattungsantrag hat einen Kommentar erhalten.",
-                        verb_es=f"La solicitud de reembolso de gastos de {payroll.employee_id} ha recibido un comentario.",
-                        verb_fr=f"La demande de remboursement de frais de {payroll.employee_id} a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "%(employee)s's reimbursement request has received a comment."
+                        ),
+                        verb_params={"employee": str(payroll.employee_id)},
                         redirect=reverse("view-reimbursement"),
                         icon="chatbox-ellipses",
                     )
@@ -1750,11 +1769,9 @@ def create_payrollrequest_comment(request, payroll_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=rec,
-                    verb="Your reimbursement request has received a comment.",
-                    verb_ar="تلقى طلب استرداد نفقاتك تعليقًا.",
-                    verb_de="Ihr Rückerstattungsantrag hat einen Kommentar erhalten.",
-                    verb_es="Tu solicitud de reembolso ha recibido un comentario.",
-                    verb_fr="Votre demande de remboursement a reçu un commentaire.",
+                    verb=gettext_noop(
+                        "Your reimbursement request has received a comment."
+                    ),
                     redirect=reverse("view-reimbursement"),
                     icon="chatbox-ellipses",
                 )
@@ -1785,7 +1802,9 @@ def view_payrollrequest_comment(request, payroll_id):
         request_id=payroll_id
     ).order_by("-created_at")
 
-    req = Reimbursement.objects.get(id=payroll_id)
+    req = Reimbursement.objects.filter(id=payroll_id).first()
+    if not req:
+        return HttpResponse()
     no_comments = False
     if not comments.exists():
         no_comments = True
@@ -1818,11 +1837,34 @@ def delete_payrollrequest_comment(request, comment_id):
     """
     This method is used to delete Reimbursement request comments
     """
-    script = ""
+
     comment = ReimbursementrequestComment.objects.filter(id=comment_id)
+    if not comment.exists():
+        messages.error(request, _("Comment not found."))
+        return HorillaRedirect(request)
+    comment_obj = comment.first()
+
+    # Mirrors reimbursement_comment.html's delete-control condition, but
+    # scoped to the comment's specific parent Reimbursement instead of the
+    # template's coarse is_reportingmanager check (which only asks "does
+    # this user manage *someone*", not whether they manage the request's
+    # actual employee). filter_own_and_subordinate_recordes() checks: own
+    # record, subordinate-of-an-authorized-manager, or the global perm.
+    is_author = comment_obj.employee_id == request.user.employee_get
+    if not is_author:
+        authorized_requests = filter_own_and_subordinate_recordes(
+            request,
+            Reimbursement.objects.filter(pk=comment_obj.request_id_id),
+            "payroll.delete_reimbursementrequestcomment",
+        )
+        if not authorized_requests.exists():
+            messages.error(
+                request, _("You don't have permission to delete this comment.")
+            )
+            return HorillaRedirect(request)
+
     comment.delete()
-    messages.success(request, _("Comment deleted successfully!"))
-    return HttpResponse(script)
+    return HorillaRedirect(request, message=_("Comment deleted successfully!"))
 
 
 @login_required
@@ -1830,14 +1872,14 @@ def delete_reimbursement_comment_file(request):
     """
     Used to delete attachment
     """
-    script = ""
     ids = request.GET.getlist("ids")
+    if not ids:
+        return HorillaRedirect(request, message=_("No file IDs provided for deletion."))
     records = ReimbursementFile.objects.filter(id__in=ids)
-    if not request.user.has_perm("payroll.delete_reimbursmentfile"):
+    if not request.user.has_perm("payroll.delete_reimbursementfile"):
         records = records.filter(employee_id__employee_user_id=request.user)
     records.delete()
-    messages.success(request, _("File deleted successfully"))
-    return HttpResponse(script)
+    return HorillaRedirect(request, message=_("File deleted successfully"))
 
 
 @login_required
@@ -1846,9 +1888,19 @@ def initial_notice_period(request):
     """
     This method is used to set initial value notice period
     """
+    if not request.GET.get("notice_period"):
+        return HorillaRedirect(request, message=_("required parameter is missing"))
+
     notice_period = eval_validate(request.GET["notice_period"])
-    settings = PayrollGeneralSetting.objects.first()
-    settings = settings if settings else PayrollGeneralSetting()
+    selected_company = request.session.get("selected_company")
+    if selected_company and selected_company != "all":
+        settings = PayrollGeneralSetting.objects.filter(
+            company_id=selected_company
+        ).first()
+        settings = settings or PayrollGeneralSetting(company_id_id=selected_company)
+    else:
+        settings = PayrollGeneralSetting.objects.first()
+        settings = settings or PayrollGeneralSetting()
     settings.notice_period = max(notice_period, 0)
     settings.save()
     messages.success(
@@ -1856,14 +1908,14 @@ def initial_notice_period(request):
     )
     if request.META.get("HTTP_HX_REQUEST"):
         return HttpResponse()
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 # ===========================Auto payslip generate================================
 
 
 @login_required
-@permission_required("payroll.view_PayslipAutoGenerate")
+@permission_required("payroll.view_payslipautogenerate")
 def auto_payslip_settings_view(request):
     payslip_auto_generate = PayslipAutoGenerate.objects.all()
 
@@ -1872,12 +1924,16 @@ def auto_payslip_settings_view(request):
 
 
 @login_required
-@hx_request_required
-@permission_required("payroll.change_PayslipAutoGenerate")
+@permission_required("payroll.change_payslipautogenerate")
 def create_or_update_auto_payslip(request, auto_id=None):
+    # This endpoint returns only the modal form fragment; a genuine
+    # top-level browser navigation/reload should land on the real Payroll
+    # Settings page instead of showing the raw, unstyled fragment.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        return redirect(reverse("payroll-settings-view"))
     auto_payslip = None
     if auto_id:
-        auto_payslip = PayslipAutoGenerate.objects.get(id=auto_id)
+        auto_payslip = PayslipAutoGenerate.objects.filter(id=auto_id).first()
     form = PayslipAutoGenerateForm(instance=auto_payslip)
     if request.method == "POST":
         form = PayslipAutoGenerateForm(request.POST, instance=auto_payslip)
@@ -1886,17 +1942,20 @@ def create_or_update_auto_payslip(request, auto_id=None):
             company = (
                 auto_payslip.company_id if auto_payslip.company_id else "All company"
             )
+            action = _("updated") if auto_id else _("created")
             messages.success(
-                request, _(f"Payslip Auto generate for {company} created successfully ")
+                request,
+                _(f"Payslip Auto generate for {company} {action} successfully "),
             )
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     return render(
         request, "payroll/settings/auto_payslip_create_or_update.html", {"form": form}
     )
 
 
 @login_required
-@permission_required("payroll.change_PayslipAutoGenerate")
+@hx_request_required
+@permission_required("payroll.change_payslipautogenerate")
 def activate_auto_payslip_generate(request):
     """
     ajax function to update is active field in PayslipAutoGenerate.
@@ -1906,18 +1965,33 @@ def activate_auto_payslip_generate(request):
     """
     isChecked = request.POST.get("isChecked")
     autoId = request.POST.get("autoId")
-    payslip_auto = PayslipAutoGenerate.objects.get(id=autoId)
+    if not autoId or not isChecked:
+        return JsonResponse(
+            {
+                "type": "error",
+                "message": _("Invalid request. Missing required parameters."),
+            }
+        )
+    payslip_auto = PayslipAutoGenerate.objects.filter(id=autoId).first()
+    if not payslip_auto:
+        return JsonResponse(
+            {
+                "type": "error",
+                "message": _("Payslip auto generate setting not found."),
+            }
+        )
+
     if isChecked == "true":
         payslip_auto.auto_generate = True
         response = {
             "type": "success",
-            "message": _("Auto paslip generate activated successfully."),
+            "message": _("Auto payslip generate activated successfully."),
         }
     else:
         payslip_auto.auto_generate = False
         response = {
             "type": "success",
-            "message": _("Auto paslip generate deactivated successfully."),
+            "message": _("Auto payslip generate deactivated successfully."),
         }
     payslip_auto.save()
     return JsonResponse(response)
@@ -1925,7 +1999,7 @@ def activate_auto_payslip_generate(request):
 
 @login_required
 @hx_request_required
-@permission_required("payroll.delete_PayslipAutoGenerate")
+@permission_required("payroll.delete_payslipautogenerate")
 def delete_auto_payslip(request, auto_id):
     """
     Delete a PayslipAutoGenerate object.
@@ -1938,8 +2012,10 @@ def delete_auto_payslip(request, auto_id):
 
     """
     try:
+        count = PayslipAutoGenerate.objects.count()
         auto_payslip = PayslipAutoGenerate.objects.get(id=auto_id)
         if not auto_payslip.auto_generate:
+            delete_error = False
             company = (
                 auto_payslip.company_id if auto_payslip.company_id else "All company"
             )
@@ -1948,8 +2024,27 @@ def delete_auto_payslip(request, auto_id):
                 request, _(f"Payslip auto generate for {company} deleted successfully.")
             )
         else:
+            delete_error = True
             messages.info(request, _(f"Active 'Payslip auto generate' cannot delete."))
-        return HttpResponse("<script>window.location.reload();</script>")
     except PayslipAutoGenerate.DoesNotExist:
+        delete_error = True
         messages.error(request, _("Payslip auto generate not found."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    if delete_error or count == 1:
+        return HttpResponse("<script>$('.reload-record').click();</script>")
+    return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
+
+
+@login_required
+def payroll_tab(request, pk, **kwargs):
+    """
+    method for rendering payroll tab
+    """
+
+    employee = Employee.objects.get(id=pk)
+    return render(
+        request,
+        "tabs/payroll-tab.html",
+        {
+            "employee": employee,
+        },
+    )

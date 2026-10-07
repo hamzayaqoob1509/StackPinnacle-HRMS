@@ -1,12 +1,7 @@
-from django.contrib import messages
-from django.http import HttpResponse
+from django.utils.translation import gettext_lazy as _
 
-from project.methods import (
-    any_project_manager,
-    any_project_member,
-    any_task_manager,
-    any_task_member,
-)
+from horilla.http import HorillaRedirect
+from project.methods import any_project_manager, any_task_manager, any_task_member
 
 from .models import Project, ProjectStage, Task
 
@@ -27,13 +22,11 @@ def is_projectmanager_or_member_or_perms(function, perm):
         if (
             user.has_perm(perm)
             or any_project_manager(user)
-            or any_project_member(user)
             or any_task_manager(user)
             or any_task_member(user)
         ):
             return function(request, *args, **kwargs)
-        messages.info(request, "You don't have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
 
     return _function
 
@@ -49,12 +42,13 @@ def project_update_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is project member or not
         """
-        project = Project.objects.get(id=project_id)
+        project = Project.objects.filter(id=project_id).first()
+        if not project:
+            return HorillaRedirect(request, message=_("Project not found"))
         employee = request.user.employee_get
         if (
             request.user.has_perm("project.change_project")
             or employee in project.managers.all()
-            or employee in project.members.all()
             or any(
                 employee in task.task_managers.all() for task in project.task_set.all()
             )
@@ -63,8 +57,7 @@ def project_update_permission(function=None, *args, **kwargs):
             )
         ):
             return function(request, *args, project_id=project_id, **kwargs)
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
         # return function(request, *args, **kwargs)
 
     return check_project_member
@@ -81,14 +74,15 @@ def project_delete_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is project manager or not
         """
-        project = Project.objects.get(id=project_id)
+        project = Project.find(project_id)
+        if not project:
+            return HorillaRedirect(request, message=_("Project not found"))
         if (
             request.user.employee_get in project.managers.all()
             or request.user.is_superuser
         ):
             return function(request, *args, project_id=project_id, **kwargs)
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
 
     return is_project_manager
 
@@ -104,16 +98,25 @@ def project_stage_update_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is project stage member or not
         """
-        project = ProjectStage.objects.get(id=stage_id).project
+        stage = ProjectStage.objects.filter(id=stage_id).first()
+        if not stage:
+            return HorillaRedirect(request, message=_("Project stage not found"))
+        project = stage.project
         if (
             request.user.has_perm("project.change_project")
             or request.user.has_perm("project.change_task")
             or request.user.employee_get in project.managers.all()
-            or request.user.employee_get in project.members.all()
+            or any(
+                request.user.employee_get in task.task_managers.all()
+                for task in project.task_set.all()
+            )
+            or any(
+                request.user.employee_get in task.task_members.all()
+                for task in project.task_set.all()
+            )
         ):
             return function(request, *args, stage_id=stage_id, **kwargs)
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
         # return function(request, *args, **kwargs)
 
     return check_project_member
@@ -130,14 +133,16 @@ def project_stage_delete_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is project stage manager or not
         """
-        project = ProjectStage.objects.get(id=stage_id).project
+        stage = ProjectStage.objects.filter(id=stage_id).first()
+        if not stage:
+            return HorillaRedirect(request, message=_("Project stage not found"))
+        project = stage.project
         if (
             request.user.employee_get in project.managers.all()
             or request.user.is_superuser
         ):
             return function(request, *args, stage_id=stage_id, **kwargs)
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
 
     return is_project_manager
 
@@ -148,7 +153,9 @@ def task_update_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is task member or not
         """
-        task = Task.objects.get(id=task_id)
+        task = Task.find(task_id)
+        if not task:
+            return HorillaRedirect(request, message=_("Task not found"))
         project = task.project
 
         if (
@@ -157,12 +164,10 @@ def task_update_permission(function=None, *args, **kwargs):
             or request.user.employee_get in task.task_managers.all()
             or request.user.employee_get in task.task_members.all()
             or request.user.employee_get in project.managers.all()
-            or request.user.employee_get in project.members.all()
         ):
             return function(request, *args, task_id=task_id, **kwargs)
 
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
 
     return is_task_member
 
@@ -173,7 +178,9 @@ def task_delete_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is task manager or not
         """
-        task = Task.objects.get(id=task_id)
+        task = Task.find(task_id)
+        if not task:
+            return HorillaRedirect(request, message=_("Task not found"))
         project = task.project
 
         if (
@@ -183,7 +190,6 @@ def task_delete_permission(function=None, *args, **kwargs):
         ):
             return function(request, task_id=task_id)
 
-        messages.info(request, "You dont have permission.")
-        return HttpResponse("<script>window.location.reload()</script>")
+        return HorillaRedirect(request, message=_("You don't have permission."))
 
     return is_task_manager

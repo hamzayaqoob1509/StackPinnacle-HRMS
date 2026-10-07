@@ -1,9 +1,10 @@
-from django.http import HttpResponseRedirect
+from django.contrib import messages
 from django.shortcuts import render
-from pyexpat.errors import messages
+from django.utils.translation import gettext as _
 
 from base.methods import check_manager
 from helpdesk.models import Ticket
+from horilla.http.response import HorillaRedirect
 
 decorator_with_arguments = (
     lambda decorator: lambda *args, **kwargs: lambda func: decorator(
@@ -22,15 +23,21 @@ def ticket_owner_can_enter(function, perm: str, model: object, manager_access=Fa
     """
 
     def _function(request, *args, **kwargs):
-        instance_id = kwargs[list(kwargs.keys())[0]]
+        if kwargs:
+            instance_id = kwargs[list(kwargs.keys())[0]]
+        else:
+            # Some routes (e.g. comment-edit/) carry no URL kwargs and pass
+            # the instance id as a GET param instead, following the
+            # <model>_id naming convention.
+            instance_id = request.GET.get(f"{model.__name__.lower()}_id")
         if model == Employee:
             employee = Employee.objects.get(id=instance_id)
         else:
             try:
                 employee = model.objects.get(id=instance_id).employee_id
             except:
-                messages.error(request, ("Sorry, something went wrong!"))
-                return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+                messages.error(request, _("Sorry, something went wrong!"))
+                return HorillaRedirect(request)
         can_enter = (
             request.user.employee_get == employee
             or request.user.has_perm(perm)
@@ -42,8 +49,10 @@ def ticket_owner_can_enter(function, perm: str, model: object, manager_access=Fa
                 if manager_access
                 else False
             )
-            or Ticket.objects.filter(assigned_to__in=[request.user.employee_get])
-            or Ticket.objects.filter(created_by=request.user)
+            or Ticket.objects.filter(
+                id=instance_id, assigned_to__in=[request.user.employee_get]
+            )
+            or Ticket.objects.filter(id=instance_id, created_by=request.user)
         )
         if can_enter:
             return function(request, *args, **kwargs)

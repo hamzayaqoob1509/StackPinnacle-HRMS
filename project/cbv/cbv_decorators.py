@@ -1,10 +1,10 @@
 from django.contrib import messages
-from django.http import HttpResponseRedirect
+from django.utils.translation import gettext as _
 
 from horilla.horilla_middlewares import _thread_locals
+from horilla.http import HorillaRedirect
 from project.methods import (
     any_project_manager,
-    any_project_member,
     any_task_manager,
     any_task_member,
     has_subordinates,
@@ -33,12 +33,11 @@ def is_projectmanager_or_member_or_perms(function, perm):
         if (
             user.has_perm(perm)
             or any_project_manager(user)
-            or any_project_member(user)
             or any_task_manager(user)
             or any_task_member(user)
         ):
             return function(self, *args, **kwargs)
-        messages.info(request, "You don't have permission.")
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+        messages.info(request, _("You don't have permission."))
+        return HorillaRedirect(request)
 
     return _function

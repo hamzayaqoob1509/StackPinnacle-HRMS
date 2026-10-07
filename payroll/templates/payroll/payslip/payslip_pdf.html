@@ -241,6 +241,26 @@
             <span class="info-value">{{ employee.employee_bank_details.account_number }}</span>
           </td>
         </tr>
+        <tr>
+          <td>
+            <span class="info-label">{% trans "Paid Days" %}: </span>
+            <span class="info-value">{{ paid_days }}</span>
+          </td>
+          <td>
+            <span class="info-label">{% trans "LOP Days" %}: </span>
+            <span class="info-value">{{ unpaid_days }}</span>
+          </td>
+        </tr>
+        {% if partial_pay_days %}
+          <tr>
+            <td>
+              <span class="info-label">{% trans "Partially Paid Days" %}: </span>
+              <span class="info-value">{{ partial_pay_days }}{% if custom_leave_breakdown %}
+                ({% for entry in custom_leave_breakdown %}{{ entry.percentage|floatformat:0 }}%{% if not forloop.last %}, {% endif %}{% endfor %}){% endif %}</span>
+            </td>
+            <td></td>
+          </tr>
+        {% endif %}
       </table>
 
       <!-- Allowances -->
@@ -284,6 +304,15 @@
             <td>{% trans "Loss of Pay" %}</td>
             <td class="amount-col">{{ loss_of_pay|floatformat:2|currency_symbol_position }}</td>
           </tr>
+          {% if custom_leave_deduction %}
+            <tr>
+              <td style="padding-left: 20px; color: #c47d00;">
+                {% trans "Leave Payment Reduction" %}
+                <div style="color: #888; font-size: 10px;">{% blocktrans %}Partial deduction — {{ partial_pay_days }} day(s) on a partially paid leave type{% endblocktrans %}</div>
+              </td>
+              <td class="amount-col" style="color: #c47d00;">{{ custom_leave_deduction|floatformat:2|currency_symbol_position }}</td>
+            </tr>
+          {% endif %}
           {% for deduction in basic_pay_deductions %}
             <tr>
               <td>{{ deduction.title }}</td>
@@ -309,7 +338,7 @@
             </tr>
           {% endfor %}
           <tr>
-            <td>{% trans "Federal Tax" %}</td>
+            <td>{% trans "Income Tax" %}</td>
             <td class="amount-col">{{ federal_tax|floatformat:2|currency_symbol_position }}</td>
           </tr>
           {% for deduction in tax_deductions %}

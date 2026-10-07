@@ -1,10 +1,48 @@
 {% extends 'index.html' %} {% block content %} {% load static %} {% load i18n %}
+{% include 'generic/components.html' %}
+<style>
+    /* Status colors (red/blue/orange) stay distinct so device connection
+       state is still readable at a glance, but each is tinted toward the
+       company's selected theme color so they feel part of the same palette
+       instead of clashing with it. */
+    .notconnected--dot{
+        background-color: color-mix(in srgb, red 75%, var(--primary-600, #E54F38) 25%);
+      }
+      .sheduled--dot{
+        background-color: color-mix(in srgb, rgb(103, 171, 238) 75%, var(--primary-600, #E54F38) 25%);
+      }
+      .live--dot{
+        background-color: color-mix(in srgb, orange 75%, var(--primary-600, #E54F38) 25%);
+      }
+      .is_live-False{
+        border-left: 3.4px solid color-mix(in srgb, red 75%, var(--primary-600, #E54F38) 25%) !important;
+        border-radius: 4px 0 0 4px;
+      }
+      .is_scheduler-True{
+        border-left: 3.4px solid color-mix(in srgb, rgb(103, 171, 238) 75%, var(--primary-600, #E54F38) 25%) !important;
+        border-radius: 4px 0 0 4px;
+      }
+      .is_live-True{
+        border-left: 4px solid color-mix(in srgb, orange 75%, var(--primary-600, #E54F38) 25%) !important;
+        border-radius: 4    px 0 0 4px;
+      }
+    </style>
+    <div class="oh-modal" id="BiometricDeviceTestModal" role="dialog" aria-labelledby="BiometricDeviceTestModal"
+        aria-hidden="true">
+        <div class="oh-modal__dialog" style="max-width: 550px" id="BiometricDeviceTestFormTarget">
+            {% include "animation.html" %}
+        </div>
+    </div>
 <div class="oh-wrapper">
-    {% include 'biometric/nav_biometric_devices.html' %}
+    <div  hx-get="{% url "biometric-navbar" %}" hx-trigger="load">
+    </div>
+
+
+    {% comment %} {% include 'biometric/nav_biometric_devices.html' %} {% endcomment %}
     <div class="oh-checkpoint-badge mb-2" id="selectedDevices" data-ids="[]" data-clicked="" style="display: none">
     </div>
 
-    <div class="d-flex flex-row-reverse">
+    {% comment %} <div class="d-flex flex-row-reverse">
         <span class="m-3"
             onclick="$('[name=hired]').val('false'); $('[name=hired]').first().change(); $('.filterButton').click()"
             style="cursor: pointer">
@@ -23,13 +61,11 @@
             <span class="oh-dot oh-dot--small me-1" style="background-color: orange"></span>
             {% trans "Live Capture" %}
         </span>
-    </div>
+    </div> {% endcomment %}
+
     <div id="biometricDeviceList">
-        {% if devices %}
-            {% include 'biometric/card_biometric_devices.html' %}
-        {% else %}
-            {% include 'biometric/empty_view_biometric.html' %}
-        {% endif %}
+        <div class="oh-wrapper" hx-get="{% url "biometric-card-view" %}?is_active=True" hx-trigger="load" id="listContainer">
+        </div>
     </div>
     <div class="oh-modal" id="BiometricDeviceModal" role="dialog" aria-labelledby="BiometricDeviceModal"
         aria-hidden="true">

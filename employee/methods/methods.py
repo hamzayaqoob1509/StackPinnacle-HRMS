@@ -10,7 +10,6 @@ from itertools import chain, groupby
 
 import pandas as pd
 from django.apps import apps
-from django.contrib.auth.models import User
 from django.db import connection, models, transaction
 from django.utils.translation import gettext as _
 
@@ -25,6 +24,7 @@ from base.models import (
     WorkType,
 )
 from employee.models import Employee, EmployeeWorkInformation
+from horilla_auth.models import HorillaUser
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +81,10 @@ def normalize_phone(phone):
 
 
 def import_valid_date(date_value, field_label, errors_dict, error_key):
-    if pd.isna(date_value) or date_value is None or str(date_value).strip() == "":
+    if date_value is None or pd.isna(date_value) or str(date_value).strip() == "":
         return None
 
-    if isinstance(date_value, datetime):
+    if isinstance(date_value, (pd.Timestamp, datetime)):
         return date_value.date()
 
     date_str = str(date_value).strip()
@@ -124,16 +124,21 @@ def clean_badge_id(value):
         return str(value).strip()
 
 
-def convert_nan(field, dicts):
+def convert_nan(field, data):
+    import math
+
     """
-    This method is returns None or field value
+    Returns None if value is NaN or empty, otherwise returns the value.
     """
-    field_value = dicts.get(field)
-    try:
-        float(field_value)
+    value = data.get(field)
+
+    if value is None:
         return None
-    except ValueError:
-        return field_value
+
+    if isinstance(value, float) and math.isnan(value):
+        return None
+
+    return value
 
 
 def dynamic_prefix_sort(item):
@@ -175,13 +180,13 @@ def get_ordered_badge_ids():
         list(group) for _, group in groupby(sorted_data, key=dynamic_prefix_sort)
     ]
 
-    # Sort each subgroup alphabetically and numerically
-    for group in grouped_data:
-        group.sort()
-        filtered_group = [
-            item for item in group if any(char.isdigit() for char in item)
-        ]
-        filtered_group.sort(key=lambda x: int("".join(filter(str.isdigit, x))))
+    # Sort each subgroup numerically by the digits in the badge id, so e.g.
+    # "PEP100" correctly sorts after "PEP99" instead of before it as a string
+    for index, group in enumerate(grouped_data):
+        numeric_items = [item for item in group if any(char.isdigit() for char in item)]
+        non_numeric_items = [item for item in group if item not in numeric_items]
+        numeric_items.sort(key=lambda x: int("".join(filter(str.isdigit, x))))
+        grouped_data[index] = non_numeric_items + numeric_items
 
     # Create a list containing the first and last items from each group
     result = [[group[0], group[-1]] for group in grouped_data]
@@ -255,8 +260,13 @@ def process_employee_records(data_frame):
     email_regex = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
     phone_regex = re.compile(r"^\+?\d{10,15}$")
     allowed_genders = frozenset(choice[0] for choice in Employee.choice_gender)
-    existing_badge_ids = frozenset(Employee.objects.values_list("badge_id", flat=True))
-    existing_usernames = frozenset(User.objects.values_list("username", flat=True))
+    # Preload entire badge IDs for duplicate validation during import
+    existing_badge_ids = frozenset(
+        Employee.objects.entire().values_list("badge_id", flat=True)
+    )
+    existing_usernames = frozenset(
+        HorillaUser.objects.values_list("username", flat=True)
+    )
     existing_name_emails = frozenset(
         (fname, lname, email)
         for fname, lname, email in Employee.objects.values_list(
@@ -277,17 +287,19 @@ def process_employee_records(data_frame):
     for emp in employee_dicts:
         errors = {}
         save = True
+        gender = emp.get("Gender")
 
         email = str(emp.get("Email", "")).strip().lower()
         raw_phone = emp.get("Phone", "")
         phone = normalize_phone(raw_phone)
         badge_id = clean_badge_id(emp.get("Badge ID"))
-        first_name = convert_nan("First Name", emp)
-        last_name = convert_nan("Last Name", emp)
-        gender = str(emp.get("Gender") or "").strip().lower()
-        company = convert_nan("Company", emp)
-        basic_salary = convert_nan("Basic Salary", emp)
-        salary_hour = convert_nan("Salary Hour", emp)
+        first_name = emp.get("First Name")
+        last_name = emp.get("Last Name")
+        address = emp.get("Address")
+        gender = str(gender).strip().lower() if gender else None
+        company = emp.get("Company")
+        basic_salary = emp.get("Basic Salary")
+        salary_hour = emp.get("Salary Hour")
 
         # Date validation
         joining_date = import_valid_date(
@@ -326,11 +338,17 @@ def process_employee_records(data_frame):
             save = False
 
         # Badge ID validation
-        if badge_id in seen_badge_ids:
+        if not badge_id:
+            errors["Badge ID Error"] = "Badge ID cannot be empty."
+            save = False
+
+        elif badge_id in seen_badge_ids:
             errors["Badge ID Error"] = "An employee with this badge ID already exists."
             save = False
+
         else:
-            # To resolve Badge ID Type Mismatch (Float vs String)
+            # Ensure consistent type (convert to string if needed)
+            badge_id = str(badge_id).strip()
             emp["Badge ID"] = badge_id
             seen_badge_ids.add(badge_id)
 
@@ -400,18 +418,22 @@ def process_employee_records(data_frame):
 
 def bulk_create_user_import(success_lists):
     """
-    Creates new User instances in bulk from a list of dictionaries containing user data.
+    Creates new HorillaUser instances in bulk from a list of dictionaries containing user data.
 
     Returns:
-        list: A list of created User instances. If no new users are created, returns an empty list.
+        list: A list of created HorillaUser instances. If no new users are created, returns an empty list.
     """
     emails = [row["Email"] for row in success_lists]
     existing_usernames = (
-        set(User.objects.filter(username__in=emails).values_list("username", flat=True))
+        set(
+            HorillaUser.objects.filter(username__in=emails).values_list(
+                "username", flat=True
+            )
+        )
         if is_postgres
         else set(
             chain.from_iterable(
-                User.objects.filter(username__in=chunk).values_list(
+                HorillaUser.objects.filter(username__in=chunk).values_list(
                     "username", flat=True
                 )
                 for chunk in chunked(emails, 999)
@@ -420,7 +442,7 @@ def bulk_create_user_import(success_lists):
     )
 
     users_to_create = [
-        User(
+        HorillaUser(
             username=row["Email"],
             email=row["Email"],
             password=str(row["Phone"]).strip(),
@@ -433,7 +455,7 @@ def bulk_create_user_import(success_lists):
     created_users = []
     if users_to_create:
         with transaction.atomic():
-            created_users = User.objects.bulk_create(
+            created_users = HorillaUser.objects.bulk_create(
                 users_to_create, batch_size=None if is_postgres else 999
             )
     return created_users
@@ -450,10 +472,10 @@ def bulk_create_employee_import(success_lists):
     existing_users = {
         user.username: user
         for user in (
-            User.objects.filter(username__in=emails).only("id", "username")
+            HorillaUser.objects.filter(username__in=emails).only("id", "username")
             if is_postgres
             else chain.from_iterable(
-                User.objects.filter(username__in=chunk).only("id", "username")
+                HorillaUser.objects.filter(username__in=chunk).only("id", "username")
                 for chunk in chunked(emails, 999)
             )
         )
@@ -461,13 +483,14 @@ def bulk_create_employee_import(success_lists):
 
     employees_to_create = [
         Employee(
-            employee_user_id=existing_users[row["Email"]],
-            badge_id=row["Badge ID"],
-            employee_first_name=convert_nan("First Name", row),
-            employee_last_name=convert_nan("Last Name", row),
-            email=row["Email"],
-            phone=row["Phone"],
-            gender=row.get("Gender", "").lower(),
+            employee_user_id=existing_users[row.get("Email")],
+            badge_id=row.get("Badge ID"),
+            employee_first_name=row.get("First Name"),
+            employee_last_name=row.get("Last Name"),
+            address=row.get("Address"),
+            email=row.get("Email"),
+            phone=row.get("Phone"),
+            gender=row.get("Gender").lower() if row.get("Gender") else None,
         )
         for row in success_lists
         if row["Email"] in existing_users
@@ -521,9 +544,7 @@ def bulk_create_department_import(success_lists):
     Bulk creation of department instances based on the excel import of employees
     """
     departments_to_import = {
-        dept
-        for work_info in success_lists
-        if (dept := convert_nan("Department", work_info))
+        dept for work_info in success_lists if (dept := work_info.get("Department"))
     }
 
     existing_departments = set(Department.objects.values_list("department", flat=True))
@@ -547,9 +568,9 @@ def bulk_create_job_position_import(success_lists):
 
     # Step 1: Extract unique (job_position, department_name) pairs
     job_positions_to_import = {
-        (convert_nan("Job Position", item), convert_nan("Department", item))
+        (jp, dep)
         for item in success_lists
-        if convert_nan("Job Position", item) and convert_nan("Department", item)
+        if (jp := item.get("Job Position")) and (dep := item.get("Department"))
     }
 
     if not job_positions_to_import:
@@ -561,7 +582,7 @@ def bulk_create_job_position_import(success_lists):
 
     # Step 3: Filter out entries with unknown departments
     valid_pairs = [
-        (jp, department_lookup[dept])
+        (jp, department_lookup[dept].id)
         for jp, dept in job_positions_to_import
         if dept in department_lookup
     ]
@@ -578,7 +599,7 @@ def bulk_create_job_position_import(success_lists):
 
     # Step 5: Create list of new JobPosition instances
     new_positions = [
-        JobPosition(job_position=jp, department_id=dept_id)
+        JobPosition(job_position=jp, department_id_id=dept_id)
         for jp, dept_id in valid_pairs
         if (jp, dept_id) not in existing_pairs
     ]
@@ -599,20 +620,22 @@ def bulk_create_job_role_import(success_lists):
     job_roles_to_import = {
         (role, pos)
         for work_info in success_lists
-        if (role := convert_nan("Job Role", work_info))
-        and (pos := convert_nan("Job Position", work_info))
+        if (role := work_info.get("Job Role"))
+        and (pos := work_info.get("Job Position"))
     }
 
     # Prefetch existing data efficiently
     job_positions = JobPosition.objects.only("id", "job_position")
+    job_position_lookup = {jp.job_position: jp.id for jp in job_positions}
+
     existing_job_roles = set(JobRole.objects.values_list("job_role", "job_position_id"))
 
     # Create new job roles
     new_job_roles = [
-        JobRole(job_role=role, job_position_id=job_positions[pos].id)
+        JobRole(job_role=role, job_position_id_id=job_position_lookup[pos])
         for role, pos in job_roles_to_import
-        if pos in job_positions
-        and (role, job_positions[pos].id) not in existing_job_roles
+        if pos in job_position_lookup
+        and (role, job_position_lookup[pos]) not in existing_job_roles
     ]
 
     # Bulk create if there are new roles
@@ -629,7 +652,7 @@ def bulk_create_work_types(success_lists):
     """
     # Extract unique work types, filtering out None values
     work_types_to_import = {
-        wt for work_info in success_lists if (wt := convert_nan("Work Type", work_info))
+        wt for work_info in success_lists if (wt := work_info.get("Work Type"))
     }
 
     # Get existing work types in one optimized query
@@ -654,9 +677,7 @@ def bulk_create_shifts(success_lists):
     """
     # Extract unique shifts, filtering out None values
     shifts_to_import = {
-        shift
-        for work_info in success_lists
-        if (shift := convert_nan("Shift", work_info))
+        shift for work_info in success_lists if (shift := work_info.get("Shift"))
     }
 
     # Get existing shifts in one optimized query
@@ -680,27 +701,25 @@ def bulk_create_shifts(success_lists):
 
 def bulk_create_employee_types(success_lists):
     """
-    Bulk creation of employee type instances based on the excel import of employees
+    Bulk creation of EmployeeType instances based on imported employee data.
     """
-    # Extract unique employee types, filtering out None values
+
     employee_types_to_import = {
-        et
-        for work_info in success_lists
-        if (et := convert_nan("Employee Type", work_info))
+        et for row in success_lists if (et := row.get("Employee Type"))
     }
 
-    # Get existing employee types in one optimized query
+    if not employee_types_to_import:
+        return
+
     existing_employee_types = set(
         EmployeeType.objects.values_list("employee_type", flat=True)
     )
 
-    # Create new employee type objects
     new_employee_types = [
         EmployeeType(employee_type=et)
         for et in employee_types_to_import - existing_employee_types
     ]
 
-    # Bulk create if there are new types
     if new_employee_types:
         with transaction.atomic():
             EmployeeType.objects.bulk_create(
@@ -714,9 +733,6 @@ def create_contracts_in_thread(new_work_info_list, update_work_info_list):
     """
     from payroll.models.models import Contract
 
-    def get_or_none(value):
-        return value if value else None
-
     contracts_list = [
         Contract(
             contract_name=f"{work_info.employee_id}'s Contract",
@@ -724,11 +740,11 @@ def create_contracts_in_thread(new_work_info_list, update_work_info_list):
             contract_start_date=(
                 work_info.date_joining if work_info.date_joining else datetime.today()
             ),
-            department=get_or_none(work_info.department_id),
-            job_position=get_or_none(work_info.job_position_id),
-            job_role=get_or_none(work_info.job_role_id),
-            shift=get_or_none(work_info.shift_id),
-            work_type=get_or_none(work_info.work_type_id),
+            department=work_info.department_id,
+            job_position=work_info.job_position_id,
+            job_role=work_info.job_role_id,
+            shift=work_info.shift_id,
+            work_type=work_info.work_type_id,
             wage=work_info.basic_salary or 0,
         )
         for work_info in new_work_info_list + update_work_info_list
@@ -869,14 +885,10 @@ def bulk_create_work_info_import(success_lists):
             else None
         )
         basic_salary = (
-            convert_nan("Basic Salary", work_info)
-            if type(convert_nan("Basic Salary", work_info)) is int
-            else 0
+            work_info.get("Basic Salary") if work_info.get("Basic Salary") else 0
         )
         salary_hour = (
-            convert_nan("Salary Hour", work_info)
-            if type(convert_nan("Salary Hour", work_info)) is int
-            else 0
+            work_info.get("Salary Hour") if work_info.get("Salary Hour") else 0
         )
 
         if employee_work_info is None:

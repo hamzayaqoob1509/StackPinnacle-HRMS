@@ -10,8 +10,9 @@ permissions, which only administrators hold by default.
 
 from django.contrib import messages
 from django.http import Http404
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, render
 from django.utils.translation import gettext_lazy as _
+from django.views.decorators.http import require_http_methods
 
 from base.methods import paginator_qry
 from employee_handbook.forms import HandbookDocumentForm
@@ -127,13 +128,15 @@ def handbook_detail(request, pk):
 
 
 @login_required
+@hx_request_required
+@require_http_methods(["POST"])
 @permission_required("employee_handbook.delete_handbookdocument")
 def handbook_delete(request, pk):
-    """Delete a handbook entry."""
+    """Delete a handbook entry, then re-render the list."""
     document = HandbookDocument.objects.filter(pk=pk).first()
     if document:
         document.delete()
         messages.success(request, _("Handbook entry deleted."))
     else:
         messages.error(request, _("Handbook entry not found."))
-    return redirect("handbook-view")
+    return handbook_list(request)

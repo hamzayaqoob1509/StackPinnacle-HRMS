@@ -1,51 +1,8 @@
-{% load i18n %} {% load widget_tweaks %}
-<h2 class="oh-inner-sidebar-content__title">{% trans "Send Test Email" %}</h2>
-<form hx-post="{{ request.get_full_path }}"
-    hx-on="htmx:afterSwap: checkValidationErrors" hx-target="#mailServerModalBody">
-    {% csrf_token %}
-    {% for field in form %}
-        {% if field.field.widget.is_hidden %}
-            {{ field }}
-        {% endif %}
-    {% endfor %}
-    <div class="oh-general__tab-target oh-profile-section" id="test_email">
-        <div class="oh-profile-section__card">
-            <div class="row">
-                <div class="col-12">{{form.non_field_errors}}</div>
-                {% for field in form.visible_fields %}
-                    <div class="col-12" id="id_{{ field.name }}_parent_div">
-                        <label class="oh-label {% if field.field.required %} required-star{% endif %}"
-                            for="id_{{ field.name }}" title="{{ field.help_text|safe }}">
-                            {% trans field.label %}
-                        </label>
-                        {{ field|add_class:"oh-input w-100 form-control" }}
-                        {{field.errors}}
-                    </div>
-                {% endfor %}
-            </div>
-
-            <div class="oh-modal__dialog-footer p-0 mt-3">
-                <button type="submit" class="oh-btn oh-btn--secondary oh-btn--shadow">
-                    {% trans "Send Email" %}
-                </button>
-            </div>
-        </div>
-    </div>
-</form>
-<p>
-    {{send_test_mail_result}}
-</p>
-
-<div id="loading-overlay" class="loading-overlay d-none">
-    <dotlottie-player src="https://lottie.host/8d113289-1471-4cbc-8bab-33e90da32727/1hzz3KiKas.lottie"
-        background="transparent" speed="1" style="width: 300px; height: 400px;" loop autoplay>
-    </dotlottie-player>
-    <p class="loading-text">{% trans "Sending email..." %}</p>
-</div>
+{% load i18n widget_tweaks %}
 
 <style>
-    d-none {
-        display: none: !important
+    .d-none {
+        display: none !important;
     }
 
     /* Loading Overlay */
@@ -83,6 +40,50 @@
         }
     }
 </style>
+
+<h2 class="oh-inner-sidebar-content__title">{% trans "Send Test Email" %}</h2>
+<form hx-post="{{ request.get_full_path }}"
+    hx-on="htmx:afterSwap: checkValidationErrors" hx-target="#mailServerModalBody">
+    {% csrf_token %}
+    {% for field in form %}
+        {% if field.field.widget.is_hidden %}
+            {{ field }}
+        {% endif %}
+    {% endfor %}
+    <div class="oh-general__tab-target oh-profile-section" id="test_email">
+        <div class="oh-profile-section__card">
+            <div class="row">
+                <div class="col-12">{{form.non_field_errors}}</div>
+                {% for field in form.visible_fields %}
+                    <div class="col-12" id="id_{{ field.name }}_parent_div">
+                        <label class="oh-label {% if field.field.required %} required-star{% endif %}"
+                            for="id_{{ field.name }}" title="{{ field.help_text }}">
+                            {% trans field.label %}
+                        </label>
+                        {{ field|add_class:"oh-input w-100 form-control" }}
+                        {{field.errors}}
+                    </div>
+                {% endfor %}
+            </div>
+
+            <div class="oh-modal__dialog-footer p-0 mt-3">
+                <button type="submit" class="oh-btn oh-btn--secondary oh-btn--shadow">
+                    {% trans "Send Email" %}
+                </button>
+            </div>
+        </div>
+    </div>
+</form>
+<p>
+    {{send_test_mail_result}}
+</p>
+
+<div id="loading-overlay" class="loading-overlay d-none">
+    <dotlottie-player src="https://lottie.host/8d113289-1471-4cbc-8bab-33e90da32727/1hzz3KiKas.lottie"
+        background="transparent" speed="1" style="width: 300px; height: 400px;" loop autoplay>
+    </dotlottie-player>
+    <p class="loading-text">{% trans "Sending email..." %}</p>
+</div>
 
 <script>
     // Show the loading overlay immediately when the request starts

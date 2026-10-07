@@ -30,7 +30,7 @@
         <div class="oh-sticky-dropdown--header">
             <div class="oh-dropdown" x-data="{open: false}">
                 <button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-                        role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+                        role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
                 <div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
                     <ul class="oh-dropdown__items" id="payslipCells">
                     </ul>
@@ -87,7 +87,7 @@
                                 <div class="oh-profile oh-profile--md">
                                     <div class="oh-profile__avatar mr-1">
                                         <img src="{{payslip.employee_id.get_avatar}}" class="oh-profile__image"
-                                            alt="Mary Magdalene" />
+                                            alt="{{ payslip.employee_id }}" />
                                     </div>
                                     <span class="oh-profile__name oh-text--dark">{{payslip.employee_id}}</span>
                                 </div>
@@ -145,7 +145,7 @@
                                     {% if perms.payroll.delete_payslip %}
                                         <button hx-confirm="{% trans 'Are you sure you want to delete this payslip?' %}"
                                             hx-post="{% url 'delete-payslip' payslip.id %}" hx-target="#payslips-table"
-                                            class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-50"
+                                            class="oh-btn oh-btn--danger w-50"
                                             title="{% trans 'Remove' %}">
                                             <ion-icon name="trash-outline"></ion-icon>
                                         </button>

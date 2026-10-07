@@ -35,12 +35,14 @@ class ToggleColumnForm(forms.Form):
         columns,
         default_columns,
         hidden_fields: list,
+        toggle_labels: dict = None,
         *args,
         **kwargs,
     ):
         request = getattr(_thread_locals, "request", {})
         self.request = request
         super().__init__(*args, **kwargs)
+        toggle_labels = toggle_labels or {}
         for column in columns:
             initial = True
             if column[1] in hidden_fields:
@@ -48,8 +50,21 @@ class ToggleColumnForm(forms.Form):
             if not hidden_fields:
                 if default_columns and column not in default_columns:
                     initial = False
+            # First column is the primary/fixed column — always visible.
+            if columns and column == columns[0]:
+                initial = True
+            # column[0] doubles as the actual <th> header content (rendered
+            # unescaped in horilla_list_table.html), so for a column whose
+            # header is a whole HTML button/icon rather than plain text
+            # (e.g. a per-stage "+ Task" action column), it is NOT a usable
+            # checkbox label as-is -- stripping tags isn't enough either,
+            # since a <script> block's text content would leak through
+            # (the same class of bug index.js's htmx:afterSwap handler
+            # comment already documents for tooltips). `toggle_labels` lets
+            # a view supply a real short label per column key for exactly
+            # this case; every other column keeps using column[0] directly.
             self.fields[column[1]] = forms.BooleanField(
-                label=column[0], initial=initial
+                label=toggle_labels.get(column[1], column[0]), initial=initial
             )
 
     def as_list(self) -> SafeText:
@@ -125,6 +140,23 @@ class DynamicBulkUpdateForm(forms.Form):
         mappings = get_field_class_map(root_model, bulk_update_fields)
         self.request = getattribute(_thread_locals, "request")
 
+        # A bulk-update field keeps its plain model field name (e.g.
+        # "rotating_work_type_id"), so Django's default `id_%s` auto_id
+        # collides with any other form on the same page that happens to
+        # use the same field name -- e.g. the list's own filter panel,
+        # which is rendered alongside this modal rather than replacing it.
+        # Two live elements sharing one id means every id-based lookup
+        # (getElementById, jQuery's #id selectors, this page's select2
+        # init/destroy sweep included) only ever resolves the first one,
+        # so the *other* element keeps getting reinitialized out from
+        # under the user mid-interaction -- surfacing as the dropdown
+        # selection flickering/reverting right after a choice is made.
+        # Namespacing every field id to this form keeps it unique
+        # regardless of what else is on the page.
+        kwargs.setdefault(
+            "auto_id",
+            f"id_bulk_{root_model.__name__.lower() if root_model else 'form'}_%s",
+        )
         super().__init__(*args, **kwargs)
         for key, val in mappings.items():
             widget = FIELD_WIDGET_MAP.get(type(val))

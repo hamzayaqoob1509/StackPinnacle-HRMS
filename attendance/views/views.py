@@ -14,7 +14,7 @@ provide the main entry points for interacting with the application's functionali
 import logging
 import uuid
 
-from horilla.horilla_settings import DYNAMIC_URL_PATTERNS, HORILLA_DATE_FORMATS
+from horilla.http.response import HorillaRedirect
 from horilla.methods import remove_dynamic_url
 
 logger = logging.getLogger(__name__)
@@ -23,23 +23,20 @@ import calendar
 import contextlib
 import io
 import json
+import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
+from django.conf import settings
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.core.validators import validate_ipv46_address
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.forms import ValidationError
-from django.http import (
-    HttpResponse,
-    HttpResponseBadRequest,
-    HttpResponseRedirect,
-    JsonResponse,
-)
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -47,7 +44,10 @@ from django.utils import timezone as django_timezone
 from django.utils.timezone import now
 from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
+from PIL import Image
+from xlsxwriter.utility import xl_range
 
 from attendance.filters import (
     AttendanceActivityFilter,
@@ -111,10 +111,12 @@ from base.methods import (
     filtersubordinatesemployeemodel,
     get_key_instances,
     get_pagination,
+    get_session_company,
 )
 from base.models import (
     AttendanceAllowedIP,
     EmployeeShiftSchedule,
+    Holidays,
     TrackLateComeEarlyOut,
     WorkType,
 )
@@ -172,8 +174,9 @@ def profile_attendance_tab(request):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter("employee.view_employee")
-def attendance_tab(request, emp_id):
+def attendance_tab(request, pk):
     """
     This function is used to view attendance tab of an employee in individual view.
 
@@ -186,16 +189,16 @@ def attendance_tab(request, emp_id):
 
     requests = Attendance.objects.filter(
         is_validate_request=True,
-        employee_id=emp_id,
+        employee_id=pk,
     )
     attendances_ids = json.dumps([instance.id for instance in requests])
     validate_attendances = Attendance.objects.filter(
-        attendance_validated=False, employee_id=emp_id
+        attendance_validated=False, employee_id=pk
     )
     validate_attendances_ids = json.dumps(
         [instance.id for instance in validate_attendances]
     )
-    accounts = AttendanceOverTime.objects.filter(employee_id=emp_id)
+    accounts = AttendanceOverTime.objects.filter(employee_id=pk)
     accounts_ids = json.dumps([instance.id for instance in accounts])
 
     context = {
@@ -230,12 +233,7 @@ def attendance_create(request):
         if form.is_valid():
             form.save()
             messages.success(request, _("Attendance added."))
-            response = render(
-                request, "attendance/attendance/form.html", {"form": form}
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(request, "attendance/attendance/form.html", {"form": form})
 
 
@@ -272,6 +270,7 @@ def attendance_excel(_request):
 
 @login_required
 @permission_required("attendance.add_attendance")
+@require_http_methods(["POST"])
 def attendance_import(request):
     """
     Save the import of attendance data from an uploaded Excel file, validate the data,
@@ -309,6 +308,7 @@ def attendance_import(request):
 
 
 @login_required
+@hx_request_required
 def attendance_export(request):
     resolver_match = request.resolver_match
     if (
@@ -453,18 +453,26 @@ def attendance_update(request, obj_id):
             messages.success(request, _("Attendance Updated."))
             urlencode = request.GET.urlencode()
             modified_url = f"/attendance/attendance-view/?{urlencode}"
-            return HttpResponse(
-                f"""
-                    <script>
-                        window.location.reload();
-                    </script>
-                """
-            )
+            return HorillaRedirect(request)
     return render(
         request,
         "attendance/attendance/update_form.html",
         {"form": form, "urlencode": request.GET.urlencode(), "obj_id": obj_id},
     )
+
+
+def attendance_view_redirect(request):
+    """
+    Full page redirect for normal navigation; for HTMX requests (attendance-view),
+    trigger a client-side refresh of the list container without reloading the page.
+    """
+    if request.META.get("HTTP_HX_REQUEST"):
+        response = HttpResponse("", status=200)
+        response["HX-Trigger"] = json.dumps(
+            {"reloadAttendanceView": True, "showMessages": True}
+        )
+        return response
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -494,25 +502,25 @@ def attendance_delete(request, obj_id):
                     total_overtime = attendance_overtime_seconds - total_overtime
                 overtime.overtime = format_time(total_overtime)
                 overtime.save()
-            try:
-                attendance.delete()
-                messages.success(request, _("Attendance deleted."))
-            except ProtectedError as e:
-                model_verbose_names_set = set()
-                for obj in e.protected_objects:
-                    model_verbose_names_set.add(__(obj._meta.verbose_name.capitalize()))
-                model_names_str = ", ".join(model_verbose_names_set)
-                messages.error(
-                    request,
-                    _(
-                        ("An attendance entry for {} already exists.").format(
-                            model_names_str
-                        )
-                    ),
-                )
+        try:
+            attendance.delete()
+            messages.success(request, _("Attendance deleted."))
+        except ProtectedError as e:
+            model_verbose_names_set = set()
+            for obj in e.protected_objects:
+                model_verbose_names_set.add(__(obj._meta.verbose_name.capitalize()))
+            model_names_str = ", ".join(model_verbose_names_set)
+            messages.error(
+                request,
+                _(
+                    ("An attendance entry for {} already exists.").format(
+                        model_names_str
+                    )
+                ),
+            )
     except (Attendance.DoesNotExist, OverflowError):
         messages.error(request, _("Attendance Does not exists.."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return attendance_view_redirect(request)
 
 
 @login_required
@@ -562,10 +570,14 @@ def attendance_bulk_delete(request):
 
     # Build response messages
     if success_count:
-        messages.success(request, f"{success_count} attendances deleted successfully.")
+        messages.success(
+            request,
+            _("%(success_count)s attendances deleted successfully.")
+            % {"success_count": success_count},
+        )
     for error in error_messages:
         messages.error(request, error)
-    return redirect("/attendance/attendance-search")
+    return JsonResponse({"message": "Success"})
 
 
 @login_required
@@ -620,12 +632,7 @@ def attendance_overtime_create(request):
         if form.is_valid():
             form.save()
             messages.success(request, _("Attendance account added."))
-            response = render(
-                request, "attendance/attendance_account/form.html", {"form": form}
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(request, "attendance/attendance_account/form.html", {"form": form})
 
 
@@ -664,6 +671,7 @@ def attendance_overtime_view(request):
     )
 
 
+@login_required
 def attendance_account_export(request):
     if request.META.get("HTTP_HX_REQUEST") == "true":
         context = {
@@ -703,21 +711,14 @@ def attendance_overtime_update(request, obj_id):
         if form.is_valid():
             form.save()
             messages.success(request, _("Attendance account updated successfully."))
-            response = render(
-                request,
-                "attendance/attendance_account/update_form.html",
-                {"form": form},
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(
         request, "attendance/attendance_account/update_form.html", {"form": form}
     )
 
 
 @login_required
-@permission_required("attendance.delete_attendanceoverTime")
+@permission_required("attendance.delete_attendanceovertime")
 @require_http_methods(["POST"])
 def attendance_overtime_delete(request, obj_id):
     """
@@ -727,8 +728,10 @@ def attendance_overtime_delete(request, obj_id):
     """
     previous_data = request.GET.urlencode()
     hx_target = request.META.get("HTTP_HX_TARGET", None)
+    employee_id = None
     try:
         attendance = AttendanceOverTime.objects.get(id=obj_id)
+        employee_id = attendance.employee_id.id
         attendance.delete()
         if hx_target == "ot-table":
             messages.success(request, _("Hour account deleted."))
@@ -741,11 +744,24 @@ def attendance_overtime_delete(request, obj_id):
     if hx_target and hx_target == "ot-table":
         hour_account = AttendanceOverTime.objects.all()
         if hour_account.exists():
-            return redirect(f"/attendance/attendance-overtime-search?{previous_data}")
+            path = request.META.get("HTTP_HX_CURRENT_URL", None)
+            parsed_url = urlparse(path)
+            parsed_path = parsed_url.path.lstrip("/")
+            if parsed_path == "attendance/attendance-overtime-view/":
+                return redirect(
+                    f"/attendance/attendance-overtime-search?{previous_data}"
+                )
+            elif employee_id is not None:
+                return redirect(
+                    f"/attendance/attendance-overtime-individual-tab/{employee_id}/?deleted=true"
+                )
+            else:
+                return HorillaRedirect(request)
         else:
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     elif hx_target:
         return HttpResponse()
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -754,8 +770,7 @@ def attendance_account_bulk_delete(request):
     """
     This method is used to bulk delete for Payslip
     """
-    ids = request.POST["ids"]
-    ids = json.loads(ids)
+    ids = json.loads(request.POST.get("ids", "[]"))
     for id in ids:
         try:
             hour_account = AttendanceOverTime.objects.get(id=id)
@@ -774,6 +789,51 @@ def attendance_account_bulk_delete(request):
                 _("You cannot delete {hour_account}").format(hour_account=hour_account),
             )
     return JsonResponse({"message": "Success"})
+
+
+@login_required
+@hx_request_required
+def form_shift_dynamic_data(request):
+    """
+    This method is used to update the shift details to the form
+    """
+    shift_id = request.POST.get("shift_id")
+    attendance_date_str = request.POST.get("attendance_date")
+    today = datetime.now()
+    attendance_date = date(day=today.day, month=today.month, year=today.year)
+    if attendance_date_str is not None and attendance_date_str != "":
+        attendance_date = datetime.strptime(attendance_date_str, "%Y-%m-%d").date()
+    day = attendance_date.strftime("%A").lower()
+    schedule_today = EmployeeShiftSchedule.objects.filter(
+        shift_id__id=shift_id, day__day=day
+    ).first()
+    shift_start_time = ""
+    shift_end_time = ""
+    minimum_hour = "00:00"
+    attendance_clock_out_date = attendance_date
+    if schedule_today is not None:
+        shift_start_time = schedule_today.start_time
+        shift_end_time = schedule_today.end_time
+        minimum_hour = schedule_today.minimum_working_hour
+        if shift_end_time < shift_start_time:
+            attendance_clock_out_date = attendance_date + timedelta(days=1)
+    worked_hour = minimum_hour
+    if attendance_date == date(day=today.day, month=today.month, year=today.year):
+        shift_end_time = datetime.now().strftime("%H:%M")
+        worked_hour = "00:00"
+
+    minimum_hour = attendance_day_checking(str(attendance_date), minimum_hour)
+
+    return JsonResponse(
+        {
+            "shift_start_time": shift_start_time,
+            "shift_end_time": shift_end_time,
+            "checkin_date": attendance_date.strftime("%Y-%m-%d"),
+            "minimum_hour": minimum_hour,
+            "worked_hour": worked_hour,
+            "checkout_date": attendance_clock_out_date.strftime("%Y-%m-%d"),
+        }
+    )
 
 
 @login_required
@@ -849,7 +909,7 @@ def activity_single_view(request, obj_id):
 def attendance_activity_delete(request, obj_id):
     """
     This method is used to delete attendance activity
-    args:
+    args:attendance-activity-delete
         obj_id : attendance activity id
     """
     request_copy = request.GET.copy()
@@ -862,6 +922,7 @@ def attendance_activity_delete(request, obj_id):
         messages.error(request, _("Attendance activity Does not exists.."))
     except ProtectedError:
         messages.error(request, _("You cannot delete this activity"))
+
     if not request.GET.get("instances_ids"):
         return redirect(f"/attendance/attendance-activity-search?{previous_data}")
     else:
@@ -873,7 +934,7 @@ def attendance_activity_delete(request, obj_id):
             json.loads(instances_ids), obj_id
         )
         return redirect(
-            f"/attendance/attendance-activity-single-view/{next_instance}/?{previous_data}&instances_ids={instances_list}"
+            f"/attendance/attendance-activity-single-view/{next_instance}/?{previous_data}&instance_ids={instances_list}&deleted=true"
         )
 
 
@@ -1027,7 +1088,7 @@ def handle_activity_import_error(error_data):
     # Create a unique path for the error file download
     path_info = f"activity-error-sheet-{uuid.uuid4()}"
     urlpatterns.append(path(path_info, get_activity_error_sheet, name=path_info))
-    DYNAMIC_URL_PATTERNS.append(path_info)
+    settings.DYNAMIC_URL_PATTERNS.append(path_info)
 
     # Return the path information
     path_info = f"attendance/{path_info}"
@@ -1035,6 +1096,7 @@ def handle_activity_import_error(error_data):
 
 
 @login_required
+@hx_request_required
 @permission_required("attendance.add_attendanceactivity")
 def attendance_activity_import(request):
     if request.method == "POST":
@@ -1048,7 +1110,7 @@ def attendance_activity_import(request):
             context = {
                 "created_count": created_activity_count,
                 "error_count": len(import_error_dicts),
-                "model": _("Attendance Activity"),
+                "model": _("Check-in / Check-out Log"),
                 "path_info": path_info,
             }
             html = render_to_string("import_popup.html", context)
@@ -1059,6 +1121,7 @@ def attendance_activity_import(request):
 
 @login_required
 @permission_required("attendance.add_attendanceactivity")
+@require_http_methods(["GET"])
 def attendance_activity_import_excel(request):
     if request.method == "GET":
         data_frame = pd.DataFrame(
@@ -1106,19 +1169,25 @@ def attendance_activity_export(request):
 
 
 @login_required
+@hx_request_required
 def on_time_view(request):
     """
     This method render template to view all on come early out entries
     """
     total_attendances = AttendanceFilters(request.GET).qs
     ids_to_exclude = AttendanceLateComeEarlyOut.objects.filter(
-        attendance_id__id__in=[attendance.id for attendance in total_attendances],
+        attendance_id__in=total_attendances.values_list("id", flat=True),
         type="late_come",
-    ).values_list("attendance_id__id", flat=True)
-    # Exclude attendances with related objects in AttendanceLateComeEarlyOut
+    ).values_list("attendance_id", flat=True)
+    # Filter out late-come attendances
     total_attendances = total_attendances.exclude(id__in=ids_to_exclude)
+
+    paginator = Paginator(total_attendances, 50)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
     context = {
-        "attendances": total_attendances,
+        "attendances": page_obj.object_list,
     }
     return render(
         request, "attendance/attendance/attendance_on_time.html", context=context
@@ -1215,7 +1284,7 @@ def late_come_early_out_delete(request, obj_id):
             json.loads(instances_ids), obj_id
         )
         return redirect(
-            f"/attendance/late-in-early-out-single-view/{next_instance}/?{previous_data}&instances_ids={instances_list}"
+            f"/attendance/late-in-early-out-single-view/{next_instance}/?{previous_data}&instance_ids={instances_list}&deleted=true"
         )
 
 
@@ -1228,18 +1297,15 @@ def late_come_early_out_bulk_delete(request):
     """
     ids = request.POST["ids"]
     ids = json.loads(ids)
+    del_ids = []
     for attendance_id in ids:
         try:
             late_come = AttendanceLateComeEarlyOut.objects.get(id=attendance_id)
             late_come.delete()
-            messages.success(
-                request,
-                _("{employee} Late-in early-out deleted.").format(
-                    employee=late_come.employee_id
-                ),
-            )
+            del_ids.append(late_come)
         except (AttendanceLateComeEarlyOut.DoesNotExist, OverflowError, ValueError):
             messages.error(request, _("Attendance not found."))
+    messages.success(request, _("{} Late-in early-out deleted.".format(len(del_ids))))
     return JsonResponse({"message": "Success"})
 
 
@@ -1303,8 +1369,22 @@ def validate_bulk_attendance(request):
     validate_req_count = 0
     success_messages = []
     error_messages = []
+    filtered_ids = []
 
     for obj_id in ids:
+        try:
+            attendance = Attendance.objects.get(id=obj_id)
+            if attendance.employee_id.id != request.user.employee_get.id:
+                filtered_ids.append(obj_id)
+        except Attendance.DoesNotExist:
+            error_messages.append(_("Attendance not found"))
+        except (OverflowError, ValueError):
+            error_messages.append(_("Invalid attendance ID"))
+
+    if request.user.is_superuser:
+        filtered_ids = ids
+
+    for obj_id in filtered_ids:
         try:
             attendance = Attendance.objects.get(id=obj_id)
 
@@ -1317,6 +1397,16 @@ def validate_bulk_attendance(request):
                 continue
 
             attendance.attendance_validated = True
+            # Recalculate worked hours from attendance activities before validation
+            # to ensure Hours Account reflects actual worked time.
+            # Fixes: https://github.com/horilla/horilla-hr/issues/1055
+            if (
+                not attendance.attendance_worked_hour
+                or attendance.attendance_worked_hour == "00:00"
+            ):
+                at_work_seconds = attendance.get_at_work_from_activities()
+                if at_work_seconds > 0:
+                    attendance.attendance_worked_hour = format_time(at_work_seconds)
             attendance.save()
             validate_req_count += 1
 
@@ -1324,11 +1414,10 @@ def validate_bulk_attendance(request):
             notify.send(
                 request.user.employee_get,
                 recipient=attendance.employee_id.employee_user_id,
-                verb=f"Your attendance for the date {attendance.attendance_date} is validated",
-                verb_ar=f"تم التحقق من حضورك في تاريخ {attendance.attendance_date}",
-                verb_de=f"Ihre Anwesenheit für das Datum {attendance.attendance_date} wurde bestätigt",
-                verb_es=f"Se ha validado su asistencia para la fecha {attendance.attendance_date}",
-                verb_fr=f"Votre présence pour la date {attendance.attendance_date} est validée",
+                verb=gettext_noop(
+                    "Your attendance for the date %(attendance_date)s is validated"
+                ),
+                verb_params={"attendance_date": str(attendance.attendance_date)},
                 redirect=reverse("view-my-attendance") + f"?id={attendance.id}",
                 icon="checkmark",
             )
@@ -1362,33 +1451,48 @@ def validate_this_attendance(request, obj_id):
     """
     try:
         attendance = Attendance.objects.get(id=obj_id)
+        if not request.user.is_superuser:
+            if attendance.employee_id.id == request.user.employee_get.id:
+                messages.error(request, _("You cannot validate your own attendance."))
+                return attendance_view_redirect(request)
         attendance.attendance_validated = True
+        # Recalculate worked hours from attendance activities before validation
+        # to ensure Hours Account reflects actual worked time.
+        # Fixes: https://github.com/horilla/horilla-hr/issues/1055
+        if (
+            not attendance.attendance_worked_hour
+            or attendance.attendance_worked_hour == "00:00"
+        ):
+            at_work_seconds = attendance.get_at_work_from_activities()
+            if at_work_seconds > 0:
+                attendance.attendance_worked_hour = format_time(at_work_seconds)
         attendance.save()
         urlencode = request.GET.urlencode()
         modified_url = f"/attendance/attendance-view/?{urlencode}"
         messages.success(
             request,
             (
-                f"{attendance.employee_id} {attendance.attendance_date.strftime('%d %b %Y') }"
-                + " "
-                + _("Attendance validated.")
+                _("%(employee)s %(date)s Attendance validated.")
+                % {
+                    "employee": attendance.employee_id,
+                    "date": attendance.attendance_date.strftime("%d %b %Y"),
+                }
             ),
         )
         notify.send(
             request.user.employee_get,
             recipient=attendance.employee_id.employee_user_id,
-            verb=f"Your attendance for the date {attendance.attendance_date} is validated",
-            verb_ar=f"تم تحقيق حضورك في تاريخ {attendance.attendance_date}",
-            verb_de=f"Deine Anwesenheit für das Datum {attendance.attendance_date} ist bestätigt.",
-            verb_es=f"Se valida tu asistencia para la fecha {attendance.attendance_date}.",
-            verb_fr=f"Votre présence pour la date {attendance.attendance_date} est validée.",
+            verb=gettext_noop(
+                "Your attendance for the date %(attendance_date)s is validated"
+            ),
+            verb_params={"attendance_date": str(attendance.attendance_date)},
             redirect=reverse("view-my-attendance") + f"?id={attendance.id}",
             icon="checkmark",
         )
     except (Attendance.DoesNotExist, ValueError):
         messages.error(request, _("Attendance not found"))
 
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return attendance_view_redirect(request)
 
 
 @login_required
@@ -1399,7 +1503,12 @@ def revalidate_this_attendance(request, obj_id):
         id  : attendance id
     """
 
-    attendance = Attendance.objects.get(id=obj_id)
+    attendance = Attendance.find(obj_id)
+    if not attendance:
+        return HorillaRedirect(
+            request, message=_("No Attendance found matching the query.")
+        )
+
     if is_reportingmanger(request, attendance) or request.user.has_perm(
         "attendance.change_attendance"
     ):
@@ -1408,28 +1517,24 @@ def revalidate_this_attendance(request, obj_id):
         with contextlib.suppress(Exception):
             notify.send(
                 request.user.employee_get,
-                recipient=(
-                    attendance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                recipient=attendance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                verb=gettext_noop(
+                    "%(employee)s requested revalidation for %(attendance_date)s attendance"
                 ),
-                verb=f"{attendance.employee_id} requested revalidation for \
-                    {attendance.attendance_date} attendance",
-                verb_ar=f"{attendance.employee_id} طلب إعادة\
-                      التحقق من حضور تاريخ {attendance.attendance_date}",
-                verb_de=f"{attendance.employee_id} beantragte eine Neubewertung der \
-                    Teilnahme am {attendance.attendance_date}",
-                verb_es=f"{attendance.employee_id} solicitó la validación nuevamente \
-                    para la asistencia del {attendance.attendance_date}",
-                verb_fr=f"{attendance.employee_id} a demandé une revalidation pour la \
-                    présence du {attendance.attendance_date}",
+                verb_params={
+                    "employee": str(attendance.employee_id),
+                    "attendance_date": str(attendance.attendance_date),
+                },
                 redirect=reverse("view-my-attendance") + f"?id={attendance.id}",
                 icon="refresh",
             )
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+        return HorillaRedirect(request)
     return HttpResponse("You Cannot Request for others attendance")
 
 
 @login_required
 @manager_can_enter("attendance.change_attendance")
+@require_http_methods(["GET", "POST"])
 def approve_overtime(request, obj_id):
     """
     This method is used to approve attendance overtime
@@ -1438,34 +1543,36 @@ def approve_overtime(request, obj_id):
     """
     try:
         attendance = Attendance.objects.get(id=obj_id)
+        if not request.user.is_superuser:
+            if attendance.employee_id.id == request.user.employee_get.id:
+                messages.error(request, _("You cannot approve your own overtime."))
+                return attendance_view_redirect(request)
         attendance.attendance_overtime_approve = True
         attendance.save()
         urlencode = request.GET.urlencode()
         modified_url = f"/attendance/attendance-view/?{urlencode}"
         messages.success(
             request,
-            f"{attendance.employee_id}'s {attendance.attendance_date.strftime('%d %b %Y')} overtime approved",
+            _("%(employee)s's %(date)s overtime approved")
+            % {
+                "employee": attendance.employee_id,
+                "date": attendance.attendance_date.strftime("%d %b %Y"),
+            },
         )
         with contextlib.suppress(Exception):
             notify.send(
                 request.user.employee_get,
                 recipient=attendance.employee_id.employee_user_id,
-                verb=f"Your {attendance.attendance_date}'s attendance \
-                    overtime approved.",
-                verb_ar=f"تمت الموافقة على إضافة ساعات العمل الإضافية لتاريخ \
-                    {attendance.attendance_date}.",
-                verb_de=f"Die Überstunden für den {attendance.attendance_date}\
-                      wurden genehmigt.",
-                verb_es=f"Se ha aprobado el tiempo extra de asistencia para el \
-                    {attendance.attendance_date}.",
-                verb_fr=f"Les heures supplémentaires pour la date\
-                      {attendance.attendance_date} ont été approuvées.",
+                verb=gettext_noop(
+                    "Your %(attendance_date)s's attendance overtime approved."
+                ),
+                verb_params={"attendance_date": str(attendance.attendance_date)},
                 redirect=reverse("attendance-overtime-view") + f"?id={attendance.id}",
                 icon="checkmark",
             )
     except (Attendance.DoesNotExist, OverflowError):
         messages.error(request, _("Attendance not found"))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return attendance_view_redirect(request)
 
 
 @login_required
@@ -1474,36 +1581,44 @@ def approve_bulk_overtime(request):
     """
     This method is used to approve bulk of attendance
     """
-    ids = request.POST["ids"]
-    ids = json.loads(ids)
+    ids = json.loads(request.POST.get("ids", "[]"))
+    otapprove_ids = []
+    filtered_ids = []
     for attendance_id in ids:
+        try:
+            attendance = Attendance.objects.get(id=attendance_id)
+            if attendance.employee_id.employee_user_id != request.user:
+                filtered_ids.append(attendance_id)
+        except (Attendance.DoesNotExist, OverflowError, ValueError):
+            messages.error(request, _("Attendance not found"))
+    if request.user.is_superuser:
+        filtered_ids = ids
+    for attendance_id in filtered_ids:
         try:
             attendance = Attendance.objects.get(id=attendance_id)
             attendance.attendance_overtime_approve = True
             attendance.save()
-            messages.success(request, _("Overtime approved"))
+            otapprove_ids.append(attendance)
             notify.send(
                 request.user.employee_get,
                 recipient=attendance.employee_id.employee_user_id,
-                verb=f"Overtime approved for\
-                      {attendance.attendance_date}'s attendance",
-                verb_ar=f"تمت الموافقة على العمل الإضافي لحضور تاريخ \
-                    {attendance.attendance_date}",
-                verb_de=f"Überstunden für die Anwesenheit am \
-                    {attendance.attendance_date} genehmigt",
-                verb_es=f"Horas extra aprobadas para la asistencia del \
-                    {attendance.attendance_date}",
-                verb_fr=f"Heures supplémentaires approuvées pour la présence du \
-                    {attendance.attendance_date}",
+                verb=gettext_noop(
+                    "Overtime approved for %(attendance_date)s's attendance"
+                ),
+                verb_params={"attendance_date": str(attendance.attendance_date)},
                 redirect=reverse("attendance-overtime-view") + f"?id={attendance.id}",
                 icon="checkmark",
             )
         except (Attendance.DoesNotExist, OverflowError, ValueError):
             messages.error(request, _("Attendance not found"))
+    if otapprove_ids:
+        messages.success(request, _(" {} Overtime approved".format(len(otapprove_ids))))
+
     return JsonResponse({"message": "Success"})
 
 
 @login_required
+@hx_request_required
 # @manager_can_enter("attendance.change_attendance")
 def attendance_add_to_batch(request):
     """
@@ -1512,7 +1627,10 @@ def attendance_add_to_batch(request):
     batches = BatchAttendance.objects.all()
     ids = request.GET.getlist("ids")
     if request.method == "POST":
-        ids = request.GET["ids"]
+        ids = request.GET.get("ids")
+        if not ids:
+            messages.error(request, _("Something went wrong."))
+            return HorillaRedirect(request)
         # Remove brackets and quotes, then split and convert to integers
         int_ids = [int(x.strip().strip("'")) for x in ids.strip("[]").split(",")]
         batch_id = request.POST.get("batch_attendance_id")
@@ -1526,12 +1644,12 @@ def attendance_add_to_batch(request):
                 except Exception as e:
                     logger.error(e)
                     messages.error(request, _("Something went wrong."))
-                    return HttpResponse("<script>window.location.reload()</script>")
+                    return HorillaRedirect(request)
             messages.success(request, _(f"Attendances added to {batch}."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
         else:
             messages.error(request, _("Something went wrong."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     return render(
         request,
         "attendance/attendance/attendance_add_batch.html",
@@ -1547,14 +1665,27 @@ def update_fields_based_shift(request):
 
     employee_ids = (
         request.GET.get("employee_id")
-        if hx_target == "attendanceUpdateForm" or hx_target == "attendanceRequestDiv"
+        if hx_target
+        in [
+            "attendanceUpdate",
+            "attendanceRequest",
+            "attendanceUpdateFormFields",
+            "attendanceFormFields",
+            "attendanceRequestDiv",
+        ]
         else request.GET.getlist("employee_id")
     )
     employee_queryset = (
         (
             Employee.objects.get(id=employee_ids)
-            if hx_target == "attendanceUpdateForm"
-            or hx_target == "attendanceRequestDiv"
+            if hx_target
+            in [
+                "attendanceUpdate",
+                "attendanceUpdateFormFields",
+                "attendanceRequest",
+                "attendanceRequestDiv",
+                "attendanceFormFields",
+            ]
             else Employee.objects.filter(id__in=employee_ids)
         )
         if employee_ids
@@ -1592,7 +1723,8 @@ def update_fields_based_shift(request):
     else:
         worked_hour = minimum_hour
 
-    minimum_hour = attendance_day_checking(str(attendance_date), minimum_hour)
+    employee = employee_queryset if isinstance(employee_queryset, Employee) else None
+    minimum_hour = attendance_day_checking(str(attendance_date), minimum_hour, employee)
 
     initial_data = {
         "work_type_id": WorkType.find(request.GET.get("work_type_id")),
@@ -1612,10 +1744,10 @@ def update_fields_based_shift(request):
     }
     form = (
         AttendanceUpdateForm(initial=initial_data)
-        if hx_target == "attendanceUpdateForm"
+        if hx_target in ["attendanceUpdate", "attendanceUpdateFormFields"]
         else (
             NewRequestForm(initial=initial_data)
-            if hx_target == "attendanceRequestDiv"
+            if hx_target in ["attendanceRequest", "attendanceRequestDiv"]
             else AttendanceForm(initial=initial_data)
         )
     )
@@ -1671,13 +1803,20 @@ def update_worked_hour_field(request):
 
 
 @login_required
+@hx_request_required
 def form_date_checking(request):
-    attendance_date_str = request.POST["attendance_date"]
     minimum_hour = "00:00"
+    attendance_date_str = request.POST.get("attendance_date")
+    if not attendance_date_str:
+        return JsonResponse(
+            {
+                "minimum_hour": minimum_hour,
+            }
+        )
     # Converting to date type.
     attendance_date = datetime.strptime(attendance_date_str, "%Y-%m-%d").date()
 
-    if request.POST["shift_id"]:
+    if request.POST.get("shift_id"):
         shift_id = request.POST["shift_id"]
         day = attendance_date.strftime("%A").lower()
         schedule_today = EmployeeShiftSchedule.objects.filter(
@@ -1709,7 +1848,11 @@ def user_request_one_view(request, id):
     Returns:
     GET : return one user attendance request view template
     """
-    attendance_request = Attendance.objects.get(id=id)
+    attendance_request = Attendance.find(id)
+    if not attendance_request:
+        return HorillaRedirect(
+            request, message=_("No Attendance found matching the query.")
+        )
 
     at_work_seconds = attendance_request.at_work_second
     hours_at_work = at_work_seconds // 3600
@@ -1750,6 +1893,7 @@ def get_attendance_activities(request, obj_id):
 
 
 @login_required
+@hx_request_required
 def hour_attendance_select(request):
     page_number = request.GET.get("page")
     context = {}
@@ -1773,18 +1917,20 @@ def hour_attendance_select(request):
 
 
 @login_required
+@hx_request_required
 def hour_attendance_select_filter(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         if request.user.has_perm("attendance.view_attendanceovertime"):
-            employee_filter = AttendanceOverTimeFilter(
+            attendance_filter = AttendanceOverTimeFilter(
                 filters, queryset=AttendanceOverTime.objects.all()
             )
         else:
-            employee_filter = AttendanceOverTimeFilter(
+            attendance_filter = AttendanceOverTimeFilter(
                 filters,
                 queryset=AttendanceOverTime.objects.filter(
                     employee_id__employee_user_id=request.user
@@ -1795,51 +1941,55 @@ def hour_attendance_select_filter(request):
             )
 
         # Get the filtered queryset
-        filtered_employees = employee_filter.qs
+        filtered_attendance = attendance_filter.qs
 
-        employee_ids = [str(emp.id) for emp in filtered_employees]
-        total_count = filtered_employees.count()
+        attendance_ids = [str(attendance.id) for attendance in filtered_attendance]
+        total_count = filtered_attendance.count()
 
-        context = {"employee_ids": employee_ids, "total_count": total_count}
+        context = {"employee_ids": attendance_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
+@hx_request_required
 def activity_attendance_select(request):
     page_number = request.GET.get("page")
+    activity = AttendanceActivity.objects.all()
 
     if page_number == "all":
         if request.user.has_perm("attendance.view_attendanceovertime"):
-            employees = AttendanceActivity.objects.all()
+            activity = AttendanceActivity.objects.all()
         else:
-            employees = AttendanceActivity.objects.filter(
-                employee_id__employee_user_id=request.user
+            activity = AttendanceActivity.objects.filter(
+                employee_id=request.user.employee_get
             ) | AttendanceActivity.objects.filter(
-                employee_id__employee_work_info__reporting_manager_id__employee_user_id=request.user
+                employee_id__employee_work_info__reporting_manager_id=request.user.employee_get
             )
 
-    employee_ids = [str(emp.id) for emp in employees]
-    total_count = employees.count()
+    activity_ids = [str(act.id) for act in activity]
+    total_count = activity.count()
 
-    context = {"employee_ids": employee_ids, "total_count": total_count}
+    context = {"employee_ids": activity_ids, "total_count": total_count}
 
     return JsonResponse(context, safe=False)
 
 
 @login_required
+@hx_request_required
 def activity_attendance_select_filter(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         if request.user.has_perm("attendance.view_attendanceovertime"):
-            employee_filter = AttendanceActivityFilter(
+            activity_filter = AttendanceActivityFilter(
                 filters, queryset=AttendanceActivity.objects.all()
             )
         else:
-            employee_filter = AttendanceActivityFilter(
+            activity_filter = AttendanceActivityFilter(
                 filters,
                 queryset=AttendanceActivity.objects.filter(
                     employee_id__employee_user_id=request.user
@@ -1850,51 +2000,55 @@ def activity_attendance_select_filter(request):
             )
 
         # Get the filtered queryset
-        filtered_employees = employee_filter.qs
+        filtered_activity = activity_filter.qs
 
-        employee_ids = [str(emp.id) for emp in filtered_employees]
-        total_count = filtered_employees.count()
+        activity_ids = [str(emp.id) for emp in filtered_activity]
+        total_count = filtered_activity.count()
 
-        context = {"employee_ids": employee_ids, "total_count": total_count}
+        context = {"employee_ids": activity_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
+@hx_request_required
 def latecome_attendance_select(request):
     page_number = request.GET.get("page")
+    late_objs = AttendanceLateComeEarlyOut.objects.none()
 
     if page_number == "all":
         if request.user.has_perm("attendance.view_attendancelatecomeearlyout"):
-            employees = AttendanceLateComeEarlyOut.objects.all()
+            late_objs = AttendanceLateComeEarlyOut.objects.all()
         else:
-            employees = AttendanceLateComeEarlyOut.objects.filter(
+            late_objs = AttendanceLateComeEarlyOut.objects.filter(
                 employee_id__employee_user_id=request.user
             ) | AttendanceLateComeEarlyOut.objects.filter(
                 employee_id__employee_work_info__reporting_manager_id__employee_user_id=request.user
             )
 
-    employee_ids = [str(emp.id) for emp in employees]
-    total_count = employees.count()
+    late_ids = [str(emp.id) for emp in late_objs]
+    total_count = late_objs.count()
 
-    context = {"employee_ids": employee_ids, "total_count": total_count}
+    context = {"employee_ids": late_ids, "total_count": total_count}
 
     return JsonResponse(context, safe=False)
 
 
 @login_required
+@hx_request_required
 def latecome_attendance_select_filter(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         if request.user.has_perm("attendance.view_attendancelatecomeearlyout"):
-            employee_filter = LateComeEarlyOutFilter(
+            late_filter = LateComeEarlyOutFilter(
                 filters, queryset=AttendanceLateComeEarlyOut.objects.all()
             )
         else:
-            employee_filter = LateComeEarlyOutFilter(
+            late_filter = LateComeEarlyOutFilter(
                 filters,
                 queryset=AttendanceLateComeEarlyOut.objects.filter(
                     employee_id__employee_user_id=request.user
@@ -1905,18 +2059,17 @@ def latecome_attendance_select_filter(request):
             )
 
         # Get the filtered queryset
-        filtered_employees = employee_filter.qs
+        filtered_obj = late_filter.qs
 
-        employee_ids = [str(emp.id) for emp in filtered_employees]
-        total_count = filtered_employees.count()
+        late_ids = [str(emp.id) for emp in filtered_obj]
+        total_count = filtered_obj.count()
 
-        context = {"employee_ids": employee_ids, "total_count": total_count}
+        context = {"employee_ids": late_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
-@hx_request_required
 @permission_required("attendance.add_gracetime")
 def create_grace_time(request):
     """
@@ -1928,7 +2081,20 @@ def create_grace_time(request):
     Returns:
     GET : return grace time form template
     """
-    is_default = eval_validate(request.GET.get("default"))
+    # This endpoint returns only the modal form fragment; a genuine
+    # top-level browser navigation/reload should land on the real Grace
+    # Time settings page instead of showing the raw, unstyled fragment.
+    # Sec-Fetch-Mode is set by the browser itself for a real navigation
+    # and can't be spoofed by an htmx fetch() call, unlike HX-Request alone.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        redirect_url = reverse("grace-time-view")
+        query_string = request.GET.urlencode()
+        if query_string:
+            redirect_url = f"{redirect_url}?{query_string}"
+        return redirect(redirect_url)
+    is_default = False
+    if request.GET.get("default"):
+        is_default = eval_validate(request.GET.get("default"))
     form = GraceTimeForm(initial={"is_default": is_default})
     if request.method == "POST":
         form = GraceTimeForm(request.POST)
@@ -1940,7 +2106,7 @@ def create_grace_time(request):
                 shift.grace_time_id = gracetime
                 shift.save()
             messages.success(request, _("Grace time created successfully."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     return render(
         request,
         "attendance/grace_time/grace_time_form.html",
@@ -1953,6 +2119,7 @@ def create_grace_time(request):
 @permission_required("base.change_employeeshift")
 def assign_shift(request, grace_id):
     gracetime = GraceTime.objects.filter(id=grace_id).first() if grace_id else None
+
     if gracetime:
         form = GraceTimeAssignForm()
         if request.method == "POST":
@@ -1964,12 +2131,14 @@ def assign_shift(request, grace_id):
                     shift.grace_time_id = gracetime
                     shift.save()
                 messages.success(request, _("Grace time added to shifts successfully."))
-                return HttpResponse("<script>window.location.reload()</script>")
+                return HorillaRedirect(request)
         return render(
             request,
             "attendance/grace_time/assign_shift.html",
             {"form": form, "grace_time": gracetime},
         )
+    messages.error(request, _("Grace time not found."))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1985,7 +2154,9 @@ def update_grace_time(request, grace_id):
     Returns:
     GET : return grace time form template
     """
-    grace_time = GraceTime.objects.get(id=grace_id)
+    grace_time = GraceTime.objects.filter(id=grace_id).first()
+    if not grace_time:
+        return HttpResponse()
     form = GraceTimeForm(instance=grace_time)
     if request.method == "POST":
         form = GraceTimeForm(request.POST, instance=grace_time)
@@ -1993,7 +2164,7 @@ def update_grace_time(request, grace_id):
             instance = form.save(commit=False)
             instance.save()
             messages.success(request, _("Grace time updated successfully."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     context = {
         "form": form,
         "grace_id": grace_id,
@@ -2016,22 +2187,37 @@ def delete_grace_time(request, grace_id):
     GET : return grace time form template
     """
     try:
-        GraceTime.objects.get(id=grace_id).delete()
+        delete_error = False
+        default_grace_time_count = GraceTime.objects.filter(is_default=True).count()
+        grace_time_count = GraceTime.objects.filter(is_default=False).count()
+        grace_time = GraceTime.objects.get(id=grace_id)
+        grace_time_type = grace_time.is_default
+        grace_time.delete()
         messages.success(request, _("Grace time deleted successfully."))
     except GraceTime.DoesNotExist:
-        messages.error(request, _("Grace Time Does not exists.."))
+        delete_error = True
+        messages.error(request, _("Grace time does not exist."))
+        return HorillaRedirect(request)
     except ProtectedError:
+        delete_error = True
         messages.error(request, _("Related datas exists."))
-    context = {
-        "condition": AttendanceValidationCondition.objects.first(),
-        "default_grace_time": GraceTime.objects.filter(is_default=True).first(),
-        "grace_times": GraceTime.objects.all().exclude(is_default=True),
-    }
-
-    return render(request, "attendance/grace_time/grace_time_table.html", context)
+    if delete_error:
+        if grace_time_type:
+            return HttpResponse(
+                "<script>$('#default-containerReload').click();</script>"
+            )
+        return HttpResponse("<script>$('#gracetime-containerReload').click();</script>")
+    elif default_grace_time_count == 1 and grace_time_type:
+        return HttpResponse(
+            "<script>$('#default-containerReload').click();$('.defaultGraceNav').click();</script>"
+        )
+    elif grace_time_count == 1 and not grace_time_type:
+        return HttpResponse("<script>$('#gracetime-containerReload').click();</script>")
+    return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
 
 @login_required
+@hx_request_required
 @permission_required("attendance.update_gracetime")
 def update_isactive_gracetime(request):
     """
@@ -2040,26 +2226,28 @@ def update_isactive_gracetime(request):
     - isChecked: Boolean value representing the state of grace time,
     - gracetimeId: Id of GraceTime object
     """
-    isChecked = request.POST.get("isChecked")
+    isChecked = bool(request.POST.get("isChecked"))
     gracetimeId = request.POST.get("gracetimeId")
-    gracetime = GraceTime.objects.get(id=gracetimeId)
-    if isChecked == "true":
-        gracetime.is_active = True
-        response = {
-            "type": "success",
-            "message": _("Gracetime activated successfully."),
-        }
+    if not gracetimeId:
+        messages.error(request, _("GraceTime ID missing"))
+        return HttpResponse("")
+
+    gracetime = GraceTime.objects.filter(id=gracetimeId).first()
+    if not gracetime:
+        messages.error(request, _("GraceTime not found"))
+        return HttpResponse("")
+
+    gracetime.is_active = isChecked
+    if isChecked:
+        messages.success(request, _("Gracetime activated successfully."))
     else:
-        gracetime.is_active = False
-        response = {
-            "type": "success",
-            "message": _("Gracetime deactivated successfully."),
-        }
+        messages.success(request, _("Gracetime deactivated successfully."))
     gracetime.save()
-    return JsonResponse(response)
+    return HttpResponse("")
 
 
 @login_required
+@hx_request_required
 @permission_required("attendance.update_gracetime")
 def update_gracetime_clock_in_clock_out(request):
     """
@@ -2068,52 +2256,52 @@ def update_gracetime_clock_in_clock_out(request):
     - isChecked: Boolean value representing the state of grace time,
     - gracetimeId: Id of PayslipAutoGenerate object
     """
-    isChecked = request.POST.get("isChecked")
     gracetimeId = request.POST.get("gracetimeId")
+    if not gracetimeId:
+        messages.error(request, _("GraceTime ID missing"))
+        return HttpResponse("")
+
+    isChecked = bool(request.POST.get("isChecked"))
     update = request.POST.get("update")
-    garcetime = GraceTime.objects.get(id=gracetimeId)
+    gracetime = GraceTime.objects.filter(id=gracetimeId).first()
+    if not gracetime:
+        messages.error(request, _("GraceTime not found"))
+        return HttpResponse("")
+
     if update == "clock_in":
-        if isChecked == "true":
-            garcetime.allowed_clock_in = True
-            response = {
-                "type": "success",
-                "message": _("Gracetime applicable on clock-In successfully."),
-            }
+        gracetime.allowed_clock_in = isChecked
+        if isChecked:
+            messages.success(request, _("Gracetime added to clock-in successfully."))
         else:
-            garcetime.allowed_clock_in = False
-            response = {
-                "type": "success",
-                "message": _("Gracetime unapplicable on clock-In  successfully."),
-            }
+            messages.success(
+                request, _("Gracetime removed from clock-in successfully.")
+            )
     elif update == "clock_out":
-        if isChecked == "true":
-            garcetime.allowed_clock_out = True
-            response = {
-                "type": "success",
-                "message": _("Gracetime applicable on clock-out successfully."),
-            }
+        gracetime.allowed_clock_out = isChecked
+        if isChecked:
+            messages.success(request, _("Gracetime added to clock-out successfully."))
         else:
-            garcetime.allowed_clock_out = False
-            response = {
-                "type": "success",
-                "message": _("Gracetime unapplicable on clock-out successfully."),
-            }
+            messages.success(
+                request, _("Gracetime removed from clock-out successfully.")
+            )
     else:
-        response = {
-            "type": "error",
-            "message": _("Something went wrong ."),
-        }
-    garcetime.save()
-    return JsonResponse(response)
+        messages.error(request, _("Something went wrong ."))
+        return HttpResponse("")
+    gracetime.save()
+    return HttpResponse("")
 
 
 @login_required
+@hx_request_required
 def create_attendancerequest_comment(request, attendance_id):
     """
     This method renders form and template to create Attendance request comments
     """
     previous_data = request.GET.urlencode()
     attendance = Attendance.objects.filter(id=attendance_id).first()
+    if not attendance:
+        return HorillaRedirect(request, message=_("Attendance not found."))
+
     emp = request.user.employee_get
     form = AttendanceRequestCommentForm(
         initial={"employee_id": emp.id, "request_id": attendance_id}
@@ -2150,11 +2338,10 @@ def create_attendancerequest_comment(request, attendance_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{attendance.employee_id}'s attendance request has received a comment.",
-                            verb_ar=f"تلقت طلب الحضور {attendance.employee_id} تعليقًا.",
-                            verb_de=f"{attendance.employee_id}s Anfrage zur Anwesenheit hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de asistencia de {attendance.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de présence de {attendance.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's attendance request has received a comment."
+                            ),
+                            verb_params={"employee": str(attendance.employee_id)},
                             redirect=reverse("request-attendance-view")
                             + f"?id={attendance.id}",
                             icon="chatbox-ellipses",
@@ -2167,11 +2354,9 @@ def create_attendancerequest_comment(request, attendance_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb="Your attendance request has received a comment.",
-                            verb_ar="تلقى طلب الحضور الخاص بك تعليقًا.",
-                            verb_de="Ihr Antrag auf Anwesenheit hat einen Kommentar erhalten.",
-                            verb_es="Tu solicitud de asistencia ha recibido un comentario.",
-                            verb_fr="Votre demande de présence a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "Your attendance request has received a comment."
+                            ),
                             redirect=reverse("request-attendance-view")
                             + f"?id={attendance.id}",
                             icon="chatbox-ellipses",
@@ -2184,11 +2369,10 @@ def create_attendancerequest_comment(request, attendance_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{attendance.employee_id}'s attendance request has received a comment.",
-                            verb_ar=f"تلقت طلب الحضور {attendance.employee_id} تعليقًا.",
-                            verb_de=f"{attendance.employee_id}s Anfrage zur Anwesenheit hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de asistencia de {attendance.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de présence de {attendance.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's attendance request has received a comment."
+                            ),
+                            verb_params={"employee": str(attendance.employee_id)},
                             redirect=reverse("request-attendance-view")
                             + f"?id={attendance.id}",
                             icon="chatbox-ellipses",
@@ -2198,11 +2382,9 @@ def create_attendancerequest_comment(request, attendance_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your attendance request has received a comment.",
-                        verb_ar="تلقى طلب الحضور الخاص بك تعليقًا.",
-                        verb_de="Ihr Antrag auf Anwesenheit hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de asistencia ha recibido un comentario.",
-                        verb_fr="Votre demande de présence a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "Your attendance request has received a comment."
+                        ),
                         redirect=reverse("request-attendance-view")
                         + f"?id={attendance.id}",
                         icon="chatbox-ellipses",
@@ -2228,6 +2410,7 @@ def create_attendancerequest_comment(request, attendance_id):
 
 
 @login_required
+@hx_request_required
 def view_attendancerequest_comment(request, attendance_id):
     """
     This method is used to show Attendance request comments
@@ -2259,18 +2442,48 @@ def view_attendancerequest_comment(request, attendance_id):
 
 
 @login_required
+@hx_request_required
 def delete_attendancerequest_comment(request, comment_id):
     """
     This method is used to delete Attendance request comments
     """
+    comment = AttendanceRequestComment.find(comment_id)
+    if not comment:
+        return HorillaRedirect(
+            request, message=_("No Comment found matching the query.")
+        )
+
+    # Authorize against the comment's parent attendance request using the
+    # same scope request_attendance_view() uses to list requests: the
+    # requester's own record, a subordinate's record they're an authorized
+    # manager over, or any record if they hold the global view permission.
+    # Comment creation isn't restricted to just the owner/manager (see the
+    # notify.send() branches above this view), so deletion can't be
+    # narrowed to "comment author only" without blocking legitimate
+    # moderation by an authorized manager/HR.
+    authorized_requests = filtersubordinates(
+        request=request,
+        perm="attendance.view_attendance",
+        queryset=Attendance.objects.filter(pk=comment.request_id_id),
+    )
+    authorized_requests = authorized_requests | Attendance.objects.filter(
+        pk=comment.request_id_id,
+        employee_id__employee_user_id=request.user,
+    )
+    if not authorized_requests.exists():
+        return HorillaRedirect(
+            request,
+            message=_("You don't have permission to delete this comment."),
+        )
+
     script = ""
-    comment = AttendanceRequestComment.objects.get(id=comment_id)
     comment.delete()
     messages.success(request, _("Comment deleted successfully!"))
     return HttpResponse(script)
 
 
 @login_required
+@hx_request_required
 def delete_comment_file(request):
     """
     Used to delete attachment
@@ -2283,12 +2496,15 @@ def delete_comment_file(request):
 
 
 @login_required
+@manager_can_enter("attendance.view_attendance")
 def work_records(request):
     today = date.today()
     previous_data = request.GET.urlencode()
+    employee_filter_form = EmployeeFilter(request.GET)
     context = {
         "current_date": today,
         "pd": previous_data,
+        "f": employee_filter_form,
     }
     return render(
         request, "attendance/work_record/work_record_view.html", context=context
@@ -2296,14 +2512,36 @@ def work_records(request):
 
 
 @login_required
+@manager_can_enter("attendance.view_attendance")
 @hx_request_required
 def work_records_change_month(request):
     previous_data = request.GET.urlencode()
     employee_filter_form = EmployeeFilter(request.GET or None)
+    # This same instance renders employee_filters.html a SECOND time here
+    # (inside work_record_list.html's own Export modal) -- work_record_
+    # view.html (the outer page) already renders it once for the browse
+    # filter panel, and Django's default auto_id ("id_%s") has no
+    # per-request salt, so both ended up emitting the exact same field
+    # ids. Company/Department/etc are AJAX-loaded Select2 comboboxes now
+    # (EmployeeFilter.ajax_fields), and select2 keys its own generated
+    # markup off the underlying element's id -- with two elements sharing
+    # one id, the browse panel's copy silently never finished
+    # initializing (confirmed live: it stayed plain .oh-select-ajax while
+    # the modal's copy became select2-hidden-accessible). auto_id (not
+    # `prefix`) only changes the rendered id= attribute, not the field
+    # `name`, so request.GET binding here and in the separate
+    # work-record-export view (which builds its own fresh, unprefixed
+    # EmployeeFilter(request.GET)) are both untouched.
+    employee_filter_form.form.auto_id = "id_wrexport_%s"
 
     employees = filtersubordinatesemployeemodel(
         request, employee_filter_form.qs, "attendance.view_attendance"
     )
+
+    all_employees = employees
+
+    paginator_emp = Paginator(employees, 20)
+    page_emp = paginator_emp.get_page(request.GET.get("page"))
 
     month_str = request.GET.get("month", f"{date.today().year}-{date.today().month}")
     try:
@@ -2311,74 +2549,287 @@ def work_records_change_month(request):
     except ValueError:
         year, month = date.today().year, date.today().month
 
-    employees = [request.user.employee_get] + list(employees)
+    employees = [request.user.employee_get] + list(page_emp.object_list)
 
-    month_dates = [
-        datetime(year, month, day).date()
-        for week in calendar.monthcalendar(year, month)
-        for day in week
-        if day
-    ]
+    start_date_str = request.GET.get("start_date")
+    end_date_str = request.GET.get("end_date")
+
+    if start_date_str or end_date_str:
+        # Initialize as None
+        start_date = None
+        end_date = None
+
+        # Try parsing the start date
+        if start_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                start_date = None
+
+        # Try parsing the end date
+        if end_date_str:
+            try:
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                end_date = None
+
+        # Default end_date to today if missing or invalid
+        if not end_date:
+            today = date.today()
+            last_day = calendar.monthrange(today.year, today.month)[1]
+            end_date = date(today.year, today.month, last_day)
+
+        # Default start_date to first day of end_date's month if missing or invalid
+        if not start_date:
+            start_date = date(year=end_date.year, month=end_date.month, day=1)
+
+        # Ensure start_date is not after end_date
+        if start_date > end_date:
+            # Optional: raise error or swap, depending on your use case
+            start_date = date(year=end_date.year, month=end_date.month, day=1)
+
+        # Generate list of dates between start_date and end_date (inclusive)
+        month_dates = []
+        current_date = start_date
+        while current_date <= end_date:
+            month_dates.append(current_date)
+            current_date += timedelta(days=1)
+    else:
+        month_dates = [
+            datetime(year, month, day).date()
+            for week in calendar.monthcalendar(year, month)
+            for day in week
+            if day
+        ]
 
     work_records = WorkRecords.objects.filter(
-        date__in=month_dates, employee_id__in=employees
+        date__in=month_dates, employee_id__in=page_emp.object_list
     ).select_related("employee_id", "shift_id", "attendance_id")
 
     work_records_dict = {(wr.employee_id.id, wr.date): wr for wr in work_records}
 
-    data = {
+    work_record_table = {
         employee: [
             work_records_dict.get((employee.id, current_date))
             for current_date in month_dates
         ]
-        for employee in employees
+        for employee in all_employees
     }
 
-    paginator = Paginator(list(data.items()), get_pagination())
+    paginated_table = list(work_record_table.items())
+
+    paginator = Paginator(paginated_table, 20)
     page = paginator.get_page(request.GET.get("page"))
+
+    specific_employee_holidays = {}
+    specific_dates = set()
+    for h in Holidays.objects.filter(
+        is_specific=True, start_date__month=month, start_date__year=year
+    ).prefetch_related("employees"):
+        specific_dates.add(h.start_date)
+        for emp in h.employees.all():
+            specific_employee_holidays.setdefault(emp.pk, set()).add(h.start_date)
 
     context = {
         "current_month_dates_list": month_dates,
-        "leave_dates": monthly_leave_days(month, year),
+        "leave_dates": [
+            d for d in monthly_leave_days(month, year) if d not in specific_dates
+        ],
+        "specific_employee_holidays": specific_employee_holidays,
         "data": page,
         "pd": previous_data,
         "current_date": date.today(),
         "f": employee_filter_form,
+        "month_str": month_str,
     }
 
     return render(request, "attendance/work_record/work_record_list.html", context)
 
 
+#  Matches the labels employee_filters.html already shows next to each of
+#  these fields, so the "Applied Filters" summary reads the same way the
+#  filter form does instead of a raw, auto-derived field name.
+_FILTER_LABELS = {
+    "employee_first_name": "First Name",
+    "employee_last_name": "Last Name",
+    "email": "Email",
+    "phone": "Phone",
+    "gender": "Gender",
+    "country": "Country",
+    "department": "Department",
+    "employee_work_info__company_id": "Company",
+    "employee_work_info__department_id": "Department",
+    "employee_work_info__shift_id": "Shift",
+    "employee_work_info__tags": "Employee Tag",
+    "employee_work_info__reporting_manager_id": "Reporting Manager",
+    "employee_work_info__job_position_id": "Job Position",
+    "employee_work_info__work_type_id": "Work Type",
+    "working_today": "Currently Working",
+    "employee_user_id__groups": "Groups",
+    "is_active": "Is Active",
+    "employee_user_id__user_permissions": "Permissions",
+}
+
+
+def _build_applied_filters_summary(filterset, request_get):
+    """
+    Build a human readable "Field Equals Value" summary of the filters
+    actually applied in request_get, for display in exported reports.
+    """
+    ignored_keys = {
+        "month",
+        "start_date",
+        "end_date",
+        "csrfmiddlewaretoken",
+        "field",
+        "orderby",
+        "sortby",
+        "page",
+    }
+    parts = []
+    for key, bound_filter in filterset.filters.items():
+        if key in ignored_keys or key not in request_get:
+            continue
+        values = [value for value in request_get.getlist(key) if value]
+        if not values:
+            continue
+        label = _FILTER_LABELS.get(key, key.replace("_", " ").title())
+        queryset = getattr(bound_filter.field, "queryset", None)
+        # NullBooleanField (used for tri-state filters like "Working
+        # Today") keeps its choices on the widget, not the field itself.
+        choices = dict(
+            getattr(bound_filter.field, "choices", None)
+            or getattr(bound_filter.field.widget, "choices", [])
+            or []
+        )
+        display_values = []
+        for value in values:
+            if queryset is not None:
+                # Drop values that don't resolve to a real object (stale or
+                # tampered-with query params) instead of showing a raw,
+                # meaningless id.
+                obj = queryset.filter(pk=value).first()
+                if obj:
+                    display_values.append(str(obj))
+            elif choices:
+                # Same idea for choice fields: skip values outside the
+                # known choice set rather than showing them as-is. Also
+                # skip NullBooleanSelect-style fields' default "Unknown"
+                # option -- <select> elements always submit some value, so
+                # an untouched tri-state filter (e.g. "Working Today")
+                # still shows up in request.GET as its blank/default
+                # choice even though the user never applied it.
+                if value in choices:
+                    display_text = str(choices[value])
+                    if display_text.strip().lower() != "unknown":
+                        display_values.append(display_text)
+            else:
+                display_values.append(value)
+        if not display_values:
+            continue
+        parts.append(f"{label} Equals {', '.join(display_values)}")
+    return "; ".join(parts)
+
+
 @login_required
 @permission_required("attendance.view_workrecords")
 def work_record_export(request):
+
     try:
-        month = int(request.GET.get("month") or date.today().month)
-        year = int(request.GET.get("year") or date.today().year)
+        month_str = request.GET.get("month")
+        if month_str:
+            year, month = map(int, month_str.split("-"))
+        else:
+            today = date.today()
+            year, month = today.year, today.month
     except ValueError:
         return HttpResponseBadRequest("Invalid month or year parameter.")
 
     employees = EmployeeFilter(request.GET).qs
     records = WorkRecords.objects.filter(date__month=month, date__year=year)
-    num_days = calendar.monthrange(year, month)[1]
-    all_date_objects = [date(year, month, day) for day in range(1, num_days + 1)]
-    leave_dates = set(monthly_leave_days(month, year))
+    # all_date_objects = [date(year, month, day) for day in range(1, num_days + 1)]
+
+    start_date_str = request.GET.get("start_date")
+    end_date_str = request.GET.get("end_date")
+
+    # Initialize as None
+    start_date = None
+    end_date = None
+
+    # Try parsing the start date
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            start_date = None
+
+    # Try parsing the end date
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            end_date = None
+
+    # Default end_date to the last day of the selected month (from the
+    # "month" filter) if missing or invalid, instead of always today's date
+    # -- otherwise the calendar columns would ignore the selected month.
+    if not end_date:
+        last_day_of_month = calendar.monthrange(year, month)[1]
+        end_date = date(year=year, month=month, day=last_day_of_month)
+
+    # Default start_date to the first day of the selected month if missing
+    # or invalid.
+    if not start_date:
+        start_date = date(year=year, month=month, day=1)
+
+    # Ensure start_date is not after end_date
+    if start_date > end_date:
+        # Optional: raise error or swap, depending on your use case
+        start_date = date(year=end_date.year, month=end_date.month, day=1)
+
+    # Generate list of dates between start_date and end_date (inclusive)
+    all_date_objects = []
+    current_date = start_date
+    while current_date <= end_date:
+        all_date_objects.append(current_date)
+        current_date += timedelta(days=1)
+    _export_specific_dates = set(
+        Holidays.objects.filter(
+            is_specific=True, start_date__month=month, start_date__year=year
+        ).values_list("start_date", flat=True)
+    )
+    leave_dates = {
+        d for d in monthly_leave_days(month, year) if d not in _export_specific_dates
+    }
+
+    specific_employee_holidays = {}
+    for h in Holidays.objects.filter(
+        is_specific=True, start_date__month=month, start_date__year=year
+    ).prefetch_related("employees"):
+        for emp in h.employees.all():
+            specific_employee_holidays.setdefault(emp.pk, set()).add(h.start_date)
 
     record_lookup = defaultdict(lambda: "ABS")
     for record in records:
-        if record.date <= date.today():
-            record_key = (record.employee_id, record.date)
-            record_lookup[record_key] = record.work_record_type
+        # Previously skipped records dated after today, which silently
+        # dropped real, already-known statuses (e.g. an approved future
+        # leave) from the lookup entirely. The day <= date.today() check
+        # below already decides how each day should render; this loop just
+        # needs every record available for it to consult.
+        record_key = (record.employee_id, record.date)
+        record_lookup[record_key] = record.work_record_type
 
     date_format = request.user.employee_get.get_date_format()
-    format_string = HORILLA_DATE_FORMATS.get(date_format)
+    format_string = settings.HORILLA_DATE_FORMATS.get(date_format)
     formatted_dates = [day.strftime(format_string) for day in all_date_objects]
     data_rows = []
 
     for employee in employees:
         row_data = {"Employee": employee}
+        emp_specific_holidays = specific_employee_holidays.get(employee.pk, set())
         for day, formatted_day in zip(all_date_objects, formatted_dates):
-            if not day in leave_dates and day < date.today():
+            is_holiday_day = day in leave_dates or day in emp_specific_holidays
+            if not is_holiday_day and day <= date.today():
                 row_data[formatted_day] = record_lookup.get((employee, day), "DFT")
             else:
                 data = record_lookup.get((employee, day), "")
@@ -2388,12 +2839,140 @@ def work_record_export(request):
     columns = ["Employee"] + formatted_dates
     df = pd.DataFrame(data_rows, columns=columns)
 
+    export_format = request.GET.get("format", "xlsx")
+    file_name = request.GET.get("file_name") or "Daily Work Status"
+
+    if export_format == "csv":
+        csv_output = io.StringIO()
+        df.to_csv(csv_output, index=False)
+        response = HttpResponse(csv_output.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{file_name}.csv"'
+        return response
+
+    company = getattr(request, "selected_company_instance", None)
+    logo_path = getattr(company, "icon", "") if company else ""
+    company_title = getattr(company, "company", "") if company else ""
+    company_address = getattr(company, "address", "") if company else ""
+    company_location = (
+        ", ".join(
+            part
+            for part in [
+                getattr(company, "country", ""),
+                getattr(company, "state", ""),
+                getattr(company, "city", ""),
+            ]
+            if part
+        )
+        if company
+        else ""
+    )
+    company_zip = getattr(company, "zip", "") if company else ""
+    date_range = f"{start_date} TO {end_date}"
+    applied_filters = _build_applied_filters_summary(
+        EmployeeFilter(request.GET), request.GET
+    )
+    # now() is UTC-internal (USE_TZ=True); localtime() converts it to the
+    # active/configured TIME_ZONE before formatting, otherwise the
+    # "Generated on" timestamp always shows raw UTC.
+    generated_on = django_timezone.localtime(now()).strftime("%d/%m/%Y %I:%M:%S %p")
+
+    # Row layout (0-indexed): 0-3 company block, 4 blank, 5 applied filters,
+    # 6 blank, 7 generated-on, 8 blank, 9 date range, 10 data header row.
+    DATA_HEADER_ROW = 10
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Sheet1")
+        df.to_excel(
+            writer, index=False, sheet_name="Sheet1", startrow=DATA_HEADER_ROW
+        )  # leave space for header
         workbook = writer.book
         worksheet = writer.sheets["Sheet1"]
 
+        total_columns = len(df.columns)
+
+        # --- Header Formats ---
+        company_format = workbook.add_format({"bold": True, "font_size": 14})
+        address_format = workbook.add_format({"font_size": 10})
+        filters_format = workbook.add_format(
+            {
+                "bold": True,
+                "font_size": 10,
+                "bg_color": "#FFF2CC",
+                "valign": "vcenter",
+            }
+        )
+        generated_format = workbook.add_format({"italic": True, "font_size": 9})
+        date_format = workbook.add_format({"italic": True, "font_size": 11})
+        data_header_format = workbook.add_format(
+            {
+                "bold": True,
+                "font_color": "#ffffff",
+                "bg_color": "#404040",
+                "border": 1,
+                "align": "center",
+                "valign": "vcenter",
+            }
+        )
+
+        # --- Company block: logo top-left, name/address beside it ---
+        worksheet.write(0, 1, company_title or "", company_format)
+        worksheet.write(1, 1, company_address or "", address_format)
+        worksheet.write(2, 1, company_location or "", address_format)
+        worksheet.write(
+            3, 1, f"ZIP: {company_zip}" if company_zip else "", address_format
+        )
+
+        # Merge column A across the company block's rows so a taller logo
+        # has enough room to render fully instead of being clipped to a
+        # single row's height.
+        worksheet.merge_range(0, 0, 2, 0, "")
+
+        logo_full_path = (
+            str(os.path.join(settings.MEDIA_ROOT, str(logo_path)))
+            if logo_path
+            else None
+        )
+
+        if logo_full_path and os.path.exists(logo_full_path):
+            try:
+                # A fixed scale factor sizes the logo relative to its own
+                # source resolution, so it renders at a different size for
+                # every company depending on what they uploaded. Scale
+                # against the actual pixel dimensions instead, so the logo
+                # always comes out at roughly the same size in the sheet.
+                target_size = 60
+                with Image.open(logo_full_path) as img:
+                    width, height = img.size
+                scale = min(target_size / width, target_size / height)
+                worksheet.insert_image(
+                    "A1",
+                    logo_full_path,
+                    {"x_scale": scale, "y_scale": scale},
+                )
+            except Exception as e:
+                print(f"Logo insert failed: {e}")
+
+        # --- Applied Filters banner ---
+        if applied_filters:
+            worksheet.merge_range(
+                xl_range(5, 0, 5, total_columns - 1),
+                f"Applied Filters: {applied_filters}",
+                filters_format,
+            )
+
+        # --- Generated on ---
+        worksheet.write(7, 0, f"Generated on: {generated_on}", generated_format)
+
+        # --- Date range ---
+        worksheet.merge_range(
+            xl_range(9, 0, 9, total_columns - 1), date_range or "", date_format
+        )
+
+        # --- Data header row styling ---
+        for col_idx, col in enumerate(df.columns):
+            worksheet.write(DATA_HEADER_ROW, col_idx, col, data_header_format)
+
+        # --- Cell formats for codes ---
         formats = {
             "ABS": workbook.add_format(
                 {"bg_color": "#808080", "font_color": "#ffffff"}
@@ -2412,14 +2991,24 @@ def work_record_export(request):
             ),
         }
 
-        for row_idx, row in enumerate(df.itertuples(index=False), start=1):
-            for col_idx, cell_value in enumerate(row[1:], start=1):
+        # --- Apply cell formats ---
+        for row_idx, row in enumerate(
+            df.itertuples(index=False), start=DATA_HEADER_ROW + 1
+        ):  # data starts right after the data header row
+            for col_idx, cell_value in enumerate(row):
                 if cell_value in formats:
                     worksheet.write(row_idx, col_idx, cell_value, formats[cell_value])
 
+        # --- Auto column width ---
         for col_idx, col in enumerate(df.columns):
-            max_len = max(df[col].astype(str).map(len).max(), len(col))
-            worksheet.set_column(col_idx, col_idx, max_len)
+            # .max() on an empty column (no rows, e.g. filters matched no
+            # employees) returns NaN, which later crashes xlsxwriter when
+            # positioning the logo image against that column's width.
+            content_len = df[col].astype(str).map(len).max()
+            if pd.isna(content_len):
+                content_len = 0
+            max_len = max(content_len, len(col))
+            worksheet.set_column(col_idx, col_idx, min(max_len + 2, 50))
 
     output.seek(0)
 
@@ -2427,7 +3016,7 @@ def work_record_export(request):
         output.read(),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    response["Content-Disposition"] = 'attachment; filename="work_record_export.xlsx"'
+    response["Content-Disposition"] = f'attachment; filename="{file_name}.xlsx"'
     return response
 
 
@@ -2436,29 +3025,51 @@ def work_record_export(request):
 @permission_required("attendance.add_attendancegeneralsetting")
 def enable_timerunner(request):
     """
-    This method is used to enable/disable the timerunner feature
+    Enable/disable Time Runner for the currently selected company, then refresh
+    the navbar Check-In/Out control so the live timer appears immediately.
+    When the company switcher is on "all", apply the change to every
+    AttendanceGeneralSetting row (global + per-company).
     """
+    company = get_session_company(request)
+    enabled = "time_runner" in request.GET.keys()
+    if company is None:
+        # "All companies" — keep every tenant row in sync so the navbar timer
+        # works no matter which company an employee belongs to.
+        updated = AttendanceGeneralSetting.objects.entire().update(time_runner=enabled)
+        if not updated:
+            AttendanceGeneralSetting(company_id=None, time_runner=enabled).save()
+    else:
+        settings_qs = AttendanceGeneralSetting.objects.filter(company_id=company)
+        if settings_qs.exists():
+            settings_qs.update(time_runner=enabled)
+        else:
+            AttendanceGeneralSetting(company_id=company, time_runner=enabled).save()
 
-    time_runner = AttendanceGeneralSetting.objects.first()
-    time_runner = time_runner if time_runner else AttendanceGeneralSetting()
-    time_runner.time_runner = "time_runner" in request.GET.keys()
-    time_runner.save()
-    return HttpResponse("success")
+    message = _("enabled") if enabled else _("disabled")
+    messages.success(
+        request, _("Time Runner has been {} successfully.").format(message)
+    )
+
+    # Retarget so the settings toggle form is left alone, while the navbar
+    # attendance button re-renders with/without the live timer.
+    response = render(
+        request,
+        "attendance/components/in_out_component.html",
+        {"run": 1},
+    )
+    response["HX-Retarget"] = "#attendance-activity-container"
+    response["HX-Reswap"] = "innerHTML"
+    return response
 
 
 @login_required
 @permission_required("base.view_tracklatecomeearlyout")
 def track_late_come_early_out(request):
     """
-    Renders the form to track late arrivals and early departures in attendance.
+    This standalone page has been merged into the "Attendance Rule" settings
+    page; direct access now redirects there.
     """
-    tracking = TrackLateComeEarlyOut.objects.first()
-    form = TrackLateComeEarlyOutForm(
-        initial={"is_enable": tracking.is_enable} if tracking else {}
-    )
-    return render(
-        request, "attendance/late_come_early_out/tracking.html", {"form": form}
-    )
+    return redirect("attendance-rule-view")
 
 
 @login_required
@@ -2468,28 +3079,34 @@ def enable_disable_tracking_late_come_early_out(request):
     Enables or disables the tracking of late arrivals and early departures in attendance.
     """
     if request.method == "POST":
+        from base.models import Company
+
         enable = bool(request.POST.get("is_enable"))
-        tracking, created = TrackLateComeEarlyOut.objects.get_or_create()
+        selected_company = request.session.get("selected_company")
+        if selected_company == "all":
+            company = None
+        else:
+            company = Company.objects.filter(id=selected_company).first()
+
+        tracking, created = TrackLateComeEarlyOut.objects.get_or_create(
+            company_id=company
+        )
         tracking.is_enable = enable
         tracking.save()
         message = _("enabled") if enable else _("disabled")
         messages.success(
             request, _("Tracking late come early out {} successfully").format(message)
         )
-    return HttpResponse("<script>window.location.reload()</script>")
+    return HorillaRedirect(request)
 
 
 @login_required
 def check_in_check_out_setting(request):
     """
-    Check in check out setting
+    This standalone page has been merged into the "Attendance Rule" settings
+    page; direct access now redirects there.
     """
-    attendance_settings = AttendanceGeneralSetting.objects.all()
-    return render(
-        request,
-        "attendance/settings/check_in_check_out_enable_form.html",
-        {"attendance_settings": attendance_settings},
-    )
+    return redirect("attendance-rule-view")
 
 
 @login_required
@@ -2521,21 +3138,55 @@ def enable_disable_check_in(request):
 
 @login_required
 @permission_required("attendance.view_attendancevalidationcondition")
+def time_policies_settings_view(request):
+    """
+    Legacy "Time Policies" settings page. Moved to the Attendance sidebar as
+    its own tabbed page; redirect direct visits there.
+    """
+    return redirect("grace-time-view")
+
+
+@login_required
+@permission_required("attendance.view_attendancevalidationcondition")
 def grace_time_view(request):
     """
-    This method view attendance validation conditions.
+    Legacy standalone Grace Time settings page. Moved to the Attendance
+    sidebar as its own tabbed page; redirect direct visits there.
+    """
+    return redirect("grace-time-view")
+
+
+@login_required
+@permission_required("attendance.view_attendancevalidationcondition")
+def grace_time_page_view(request):
+    """
+    Time Policies sidebar page with Grace Time and Validation Condition tabs.
+    """
+    return render(request, "attendance/grace_time/grace_time.html")
+
+
+@login_required
+@hx_request_required
+@permission_required("attendance.view_attendancevalidationcondition")
+def grace_time_list_tab(request):
+    """
+    HTMX tab body for the Grace Time tab.
+    """
+    return render(request, "attendance/grace_time/grace_time_table.html")
+
+
+@login_required
+@hx_request_required
+@permission_required("attendance.view_attendancevalidationcondition")
+def grace_time_validation_condition_tab(request):
+    """
+    HTMX tab body for the Validation Condition tab.
     """
     condition = AttendanceValidationCondition.objects.first()
-    default_grace_time = GraceTime.objects.filter(is_default=True).first()
-    grace_times = GraceTime.objects.all().exclude(is_default=True)
     return render(
         request,
-        "attendance/grace_time/grace_time.html",
-        {
-            "condition": condition,
-            "default_grace_time": default_grace_time,
-            "grace_times": grace_times,
-        },
+        "attendance/grace_time/validation_condition_tab.html",
+        {"condition": condition},
     )
 
 
@@ -2543,19 +3194,14 @@ def grace_time_view(request):
 @permission_required("attendance.view_attendancevalidationcondition")
 def validation_condition_view(request):
     """
-    This method view attendance validation conditions.
+    Legacy standalone Attendance Break Point settings page. Moved to the
+    Attendance sidebar as its own tabbed page; redirect direct visits there.
     """
-
-    condition = AttendanceValidationCondition.objects.first()
-    default_grace_time = GraceTime.objects.filter(is_default=True).first()
-    return render(
-        request,
-        "attendance/break_point/condition.html",
-        {"condition": condition, "default_grace_time": default_grace_time},
-    )
+    return redirect("grace-time-view")
 
 
 @login_required
+@hx_request_required
 @permission_required("attendance.add_attendancevalidationcondition")
 def validation_condition_create(request):
     """
@@ -2585,7 +3231,9 @@ def validation_condition_update(request, obj_id):
     Args:
         obj_id : validation condition instance id
     """
-    condition = AttendanceValidationCondition.objects.get(id=obj_id)
+    condition = AttendanceValidationCondition.objects.filter(id=obj_id).first()
+    if not condition:
+        return HttpResponse()
     form = AttendanceValidationConditionForm(instance=condition)
     if request.method == "POST":
         form = AttendanceValidationConditionForm(request.POST, instance=condition)
@@ -2603,37 +3251,72 @@ def validation_condition_update(request, obj_id):
 @permission_required("attendance.add_attendance")
 def allowed_ips(request):
     """
-    This function is used to view the allowed ips
+    The standalone IP restriction page has been merged into the "Attendance
+    Rule" settings page; direct access now redirects there. (Still used as the
+    landing target after create/edit/delete of allowed IPs.)
     """
-    allowed_ips = AttendanceAllowedIP.objects.first()
-    return render(
-        request,
-        "attendance/ip_restriction/ip_restriction.html",
-        {"allowed_ips": allowed_ips},
-    )
+    return redirect("attendance-rule-view")
 
 
 @login_required
 @permission_required("attendance.add_attendance")
+@require_http_methods(["POST"])
 def enable_ip_restriction(request):
     """
-    This function is used to enable the allowed ips
+    This function is used to toggle IP restriction for the active company.
     """
-    form = AttendanceAllowedIPForm()
-    if request.method == "POST":
-        ip_restiction = AttendanceAllowedIP.objects.first()
+    company = get_session_company(request)
+    obj, _created = AttendanceAllowedIP.objects.get_or_create(company_id=company)
+    is_enabled = True if request.POST.get("is_enabled") == "on" else False
+    obj.is_enabled = is_enabled
+    obj.save()
+    return HorillaRedirect(request)
 
-        if not ip_restiction:
-            ip_restiction = AttendanceAllowedIP.objects.create(is_enabled=True)
-            return HttpResponse("<script>window.location.reload()</script>")
 
-        if not ip_restiction.is_enabled:
-            ip_restiction.is_enabled = True
-        elif ip_restiction.is_enabled:
-            ip_restiction.is_enabled = False
+@login_required
+def attendance_rule_settings_view(request):
+    """
+    Merged "Attendance Rule" settings page that groups four attendance
+    settings under a single header: Track Late Come & Early Out, Check In/Out,
+    Biometric Attendance and IP Restriction. Each section reuses its existing
+    toggle endpoint; this view only gathers the current state of each.
+    """
+    from base.models import BiometricAttendance
 
-        ip_restiction.save()
-        return HttpResponse("<script>window.location.reload()</script>")
+    company = get_session_company(request)
+
+    tracking = TrackLateComeEarlyOut.objects.filter(company_id=company).first()
+
+    setting, _created = AttendanceGeneralSetting.objects.get_or_create(
+        company_id=company
+    )
+    attendance_general_settings = [setting]
+    show_company = len(attendance_general_settings) > 1
+
+    biometric = BiometricAttendance.objects.filter(company_id=company).first()
+
+    allowed_ips = AttendanceAllowedIP.objects.filter(company_id=company).first()
+
+    facedetection = None
+    from django.apps import apps
+
+    if apps.is_installed("facedetection"):
+        from facedetection.models import FaceDetection
+
+        facedetection = FaceDetection.objects.filter(company_id=company).first()
+
+    return render(
+        request,
+        "attendance/settings/attendance_rule.html",
+        {
+            "tracking": tracking,
+            "attendance_general_settings": attendance_general_settings,
+            "show_company": show_company,
+            "biometric": biometric,
+            "allowed_ips": allowed_ips,
+            "facedetection": facedetection,
+        },
+    )
 
 
 def validate_ip_address(self, value):
@@ -2646,52 +3329,48 @@ def validate_ip_address(self, value):
     try:
         validate_ipv46_address(value)
     except ValidationError:
-        raise ValidationError("Enter a valid IPv4 or IPv6 address.")
+        raise ValidationError(_("Enter a valid IPv4 or IPv6 address."))
     return value
 
 
 @login_required
+@hx_request_required
 @permission_required("attendance.add_attendance")
 def create_allowed_ips(request):
     """
-    This function is used to create the allowed IPs.
+    This function is used to create the allowed IPs for the active company.
     """
+    company = get_session_company(request)
     if request.method == "POST":
         form = AttendanceAllowedIPForm(request.POST)
         if form.is_valid():
             ip_addresses = form.cleaned_data.get("ip_addresses")
-            allowed_ips = AttendanceAllowedIP.objects.first()
-            if allowed_ips:
-                existing_ips = set(allowed_ips.additional_data.get("allowed_ips", []))
-                new_ips = set(ip_addresses)
-                duplicates = new_ips.intersection(existing_ips)
-
-                if duplicates:
-                    messages.error(
-                        request, f"IP addresses already exist: {', '.join(duplicates)}"
-                    )
-
-                non_duplicates = new_ips - duplicates
-
-                if non_duplicates:
-                    allowed_ips.additional_data["allowed_ips"] = list(
-                        existing_ips.union(non_duplicates)
-                    )
-                    allowed_ips.save()
-                    messages.success(request, "IP addresses saved successfully")
-                else:
-                    messages.info(
-                        request,
-                        "All provided IP addresses are already in the allowed list.",
-                    )
-
-            else:
-                AttendanceAllowedIP.objects.create(
-                    is_enabled=True, additional_data={"allowed_ips": ip_addresses}
+            obj, _created = AttendanceAllowedIP.objects.get_or_create(
+                company_id=company,
+                defaults={"additional_data": {"allowed_ips": []}, "is_enabled": True},
+            )
+            if not obj.additional_data:
+                obj.additional_data = {"allowed_ips": []}
+            existing_ips = set(obj.additional_data.get("allowed_ips", []))
+            new_ips = set(ip_addresses)
+            duplicates = new_ips & existing_ips
+            if duplicates:
+                messages.error(
+                    request,
+                    _("IP addresses already exist: %(ips)s")
+                    % {"ips": ", ".join(duplicates)},
                 )
-                messages.success(request, "IP addresses saved successfully")
-
-            return HttpResponse("<script>window.location.reload()</script>")
+            non_duplicates = new_ips - duplicates
+            if non_duplicates:
+                obj.additional_data["allowed_ips"] = list(existing_ips | non_duplicates)
+                obj.save()
+                messages.success(request, _("IP addresses saved successfully"))
+            else:
+                messages.info(
+                    request,
+                    _("All provided IP addresses are already in the allowed list."),
+                )
+            return HorillaRedirect(request)
     else:
         form = AttendanceAllowedIPForm()
 
@@ -2704,21 +3383,21 @@ def create_allowed_ips(request):
 @permission_required("attendance.delete_attendance")
 def delete_allowed_ips(request):
     """
-    This function is used to delete the allowed ips
+    This function is used to delete the allowed ips for the active company.
     """
+    company = get_session_company(request)
     try:
         ids = request.GET.getlist("id")
-        allowed_ips = AttendanceAllowedIP.objects.first()
-        ips = allowed_ips.additional_data["allowed_ips"]
-        for id in ids:
-            ips.pop(eval_validate(id))
-
-        allowed_ips.additional_data["allowed_ips"] = ips
-        allowed_ips.save()
-
-        messages.success(request, "IP address removed successfully")
-    except:
-        messages.error(request, "Invalid id")
+        obj = AttendanceAllowedIP.objects.filter(company_id=company).first()
+        if obj:
+            ips = (obj.additional_data or {}).get("allowed_ips", [])
+            for id in ids:
+                ips.pop(eval_validate(id))
+            obj.additional_data["allowed_ips"] = ips
+            obj.save()
+        messages.success(request, _("IP address removed successfully"))
+    except Exception:
+        messages.error(request, _("Invalid id"))
     return redirect("allowed-ips")
 
 
@@ -2726,15 +3405,16 @@ def delete_allowed_ips(request):
 @permission_required("attendance.change_attendance")
 def edit_allowed_ips(request):
     """
-    This function is used to edit the allowed IPs.
+    This function is used to edit the allowed IPs for the active company.
     """
-    allowed_ips = AttendanceAllowedIP.objects.first()
-    if not allowed_ips:
-        messages.error(request, "No allowed IPs found.")
+    company = get_session_company(request)
+    obj = AttendanceAllowedIP.objects.filter(company_id=company).first()
+    if not obj:
+        messages.error(request, _("No allowed IPs found."))
         return redirect("allowed-ips")
 
-    ips = allowed_ips.additional_data.get("allowed_ips", [])
-    id = request.GET.get("id")
+    ips = (obj.additional_data or {}).get("allowed_ips", [])
+    id = request.GET.get("id", request.POST.get("id"))
 
     try:
         id = int(id)
@@ -2748,22 +3428,19 @@ def edit_allowed_ips(request):
             form = AttendanceAllowedIPForm(request.POST)
             if form.is_valid():
                 new_ip = form.cleaned_data["ip_addresses"][0]
-
-                existing_ips = set(allowed_ips.additional_data.get("allowed_ips", []))
-
+                existing_ips = set(ips)
                 if new_ip in existing_ips:
-                    messages.error(request, "IP address already exists.")
+                    messages.error(request, _("IP address already exists."))
                 else:
                     existing_ips.discard(initial_ip)
                     existing_ips.add(new_ip)
-
-                    allowed_ips.additional_data["allowed_ips"] = list(existing_ips)
-                    allowed_ips.save()
-                    messages.success(request, "IP address updated successfully")
-                return HttpResponse("<script>window.location.reload()</script>")
+                    obj.additional_data["allowed_ips"] = list(existing_ips)
+                    obj.save()
+                    messages.success(request, _("IP address updated successfully"))
+                return HorillaRedirect(request)
 
     except (ValueError, IndexError):
-        messages.error(request, "Invalid ID provided.")
+        messages.error(request, _("Invalid ID provided."))
 
     return render(
         request,

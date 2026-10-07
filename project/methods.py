@@ -1,12 +1,11 @@
 import random
 
-from django.contrib import messages
 from django.core.paginator import Paginator
-from django.http import HttpResponse, HttpResponseRedirect
-from django.shortcuts import render
+from django.utils.translation import gettext_lazy as _
 
 from base.methods import get_pagination, get_subordinates
 from employee.models import Employee
+from horilla.http import HorillaRedirect
 from project.models import Project, Task, TimeSheet
 
 decorator_with_arguments = (
@@ -69,17 +68,24 @@ def generate_colors(num_colors):
     return colors
 
 
+def employees_for_project(project):
+    """
+    Employees eligible to be selected as managers/members for the given
+    project. Restricted to the project's own company; projects without a
+    company assignment (legacy data) are left unrestricted.
+    """
+    if not project:
+        return Employee.objects.none()
+    if project.company_id:
+        return Employee.objects.filter(
+            employee_work_info__company_id=project.company_id
+        )
+    return Employee.objects.all()
+
+
 def any_project_manager(user):
     employee = user.employee_get
     if employee.project_managers.all().exists():
-        return True
-    else:
-        return False
-
-
-def any_project_member(user):
-    employee = user.employee_get
-    if employee.project_members.all().exists():
         return True
     else:
         return False
@@ -111,13 +117,11 @@ def is_projectmanager_or_member_or_perms(function, perm):
         if (
             user.has_perm(perm)
             or any_project_manager(user)
-            or any_project_member(user)
             or any_task_manager(user)
             or any_task_member(user)
         ):
             return function(request, *args, **kwargs)
-        messages.info(request, "You don't have permission.")
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+        return HorillaRedirect(request, message=_("You don't have permission."))
 
     return _function
 
@@ -126,10 +130,13 @@ def is_task_member(request, task_id):
     """
     This method is used to check the employee is task member or not
     """
+    task = Task.find(task_id)
+    if not task:
+        return False  # Task not found, treat as not a member
     if (
         request.user.has_perm("project.change_task")
-        or request.user.employee_get in Task.objects.get(id=task_id).task_managers.all()
-        or request.user.employee_get in Task.objects.get(id=task_id).task_members.all()
+        or request.user.employee_get in task.task_managers.all()
+        or request.user.employee_get in task.task_members.all()
     ):
         return True
     return False
@@ -139,20 +146,25 @@ def is_task_manager(request, task_id):
     """
     This method is used to check the employee is task member or not
     """
+    task = Task.find(task_id)
+    if not task:
+        return False  # Task not found, treat as not a manager
     if (
         request.user.has_perm("project.delete_task")
-        or request.user.employee_get in Task.objects.get(id=task_id).task_managers.all()
+        or request.user.employee_get in task.task_managers.all()
     ):
         return True
     return False
 
 
 def time_sheet_update_permissions(request, time_sheet_id):
+    timesheet = TimeSheet.find(time_sheet_id)
+    if not timesheet:
+        return False  # Timesheet not found, treat as no permission
     if (
         request.user.has_perm("project.change_timesheet")
-        or request.user.employee_get
-        == TimeSheet.objects.get(id=time_sheet_id).employee_id
-        or TimeSheet.objects.get(id=time_sheet_id).employee_id
+        or request.user.employee_get == timesheet.employee_id
+        or timesheet.employee_id
         in Employee.objects.filter(
             employee_work_info__reporting_manager_id=request.user.employee_get
         )
@@ -186,7 +198,6 @@ def get_all_project_members_and_managers():
         all_ids.update(
             manager.id for manager in project.managers.all()
         )  # Add manager ID
-        all_ids.update(member.id for member in project.members.all())  # Add member IDs
 
     for task in all_tasks:
         all_ids.update(
@@ -224,16 +235,3 @@ def is_project_manager_or_super_user(request, project):
     return (
         request.user.employee_get in project.managers.all() or request.user.is_superuser
     )
-
-
-def you_dont_have_permission(request):
-    """
-    Method to return you dont have permission
-    """
-    messages.info(request, "You dont have permission.")
-    previous_url = request.META.get("HTTP_REFERER", "/")
-    key = "HTTP_HX_REQUEST"
-    if key in request.META.keys():
-        return render(request, "decorator_404.html")
-    script = f'<script>window.location.href = "{previous_url}"</script>'
-    return HttpResponse(script)

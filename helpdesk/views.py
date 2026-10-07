@@ -2,7 +2,6 @@ import json
 import logging
 import os
 from datetime import datetime
-from distutils.util import strtobool
 from operator import itemgetter
 from urllib.parse import parse_qs
 
@@ -10,15 +9,18 @@ from django.conf import settings
 from django.contrib import messages
 from django.core import serializers
 from django.db.models import ProtectedError
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from base.forms import TagsForm
 from base.methods import (
+    closest_numbers,
     filtersubordinates,
     get_key_instances,
     is_reportingmanager,
@@ -26,7 +28,7 @@ from base.methods import (
     sortby,
 )
 from base.models import Department, JobPosition, Tags
-from employee.models import Employee
+from employee.models import Employee, EmployeeWorkInformation
 from employee.views import get_content_type
 from helpdesk.decorators import ticket_owner_can_enter
 from helpdesk.filter import (
@@ -65,14 +67,33 @@ from horilla.decorators import (
     hx_request_required,
     login_required,
     manager_can_enter,
+    owner_can_enter,
     permission_required,
 )
 from horilla.group_by import group_by_queryset
+from horilla.http.response import HorillaRedirect
+from horilla.methods import handle_no_permission
 from notifications.signals import notify
+
+BLOCKED_EXTENSIONS = {
+    ".html",
+    ".htm",
+    ".js",
+    ".svg",
+    ".xml",
+    ".php",
+    ".py",
+    ".sh",
+    ".exe",
+}
 
 logger = logging.getLogger(__name__)
 
 # Create your views here.
+
+
+def strtobool(val):
+    return str(val).lower() in ("y", "yes", "t", "true", "on", "1")
 
 
 @login_required
@@ -162,9 +183,14 @@ def faq_category_delete(request, id):
         faq.delete()
         messages.success(request, _("The FAQ category has been deleted successfully."))
         return HttpResponse("")
+
+    except FAQCategory.DoesNotExist:
+        message = _("No FAQ category found matching the query.")
+
     except ProtectedError:
-        messages.error(request, _("You cannot delete this FAQ category."))
-    return HttpResponse("<script>window.location.reload()</script>")
+        message = _("You cannot delete this FAQ category.")
+
+    return HorillaRedirect(request, message=message)
 
 
 @login_required
@@ -209,10 +235,13 @@ def faq_view(request, obj_id, **kwargs):
     if not faq_category:
         messages.info(request, _("No FAQ found for the given category."))
         return redirect(faq_category_view)
+    previous_data = request.GET.urlencode()
+    faqs = paginator_qry(faqs, request.GET.get("page"))
     context = {
         "faqs": faqs,
         "f": FAQFilter(request.GET),
         "cat_id": obj_id,
+        "pd": previous_data,
         "create_tag_f": TagsForm(),
     }
 
@@ -280,7 +309,6 @@ def faq_update(request, obj_id):
 
 
 @login_required
-@hx_request_required
 def faq_search(request):
     """
     This function is responsible for search and filter the FAQ.
@@ -292,7 +320,15 @@ def faq_search(request):
     GET : return faq filter form template
     POST : return faq view
     """
-    id = request.GET.get("cat_id", "")
+    # A genuine top-level navigation/reload should land on the real FAQ page,
+    # not this list/filter fragment.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        redirect_url = reverse("faq-category-view")
+        query_string = request.GET.urlencode()
+        if query_string:
+            redirect_url = f"{redirect_url}?{query_string}"
+        return redirect(redirect_url)
+    id = request.GET.get("cat_id") or 0
     category = request.GET.get("category", "")
     previous_data = request.GET.urlencode()
     query = request.GET.get("search", "")
@@ -313,12 +349,14 @@ def faq_search(request):
     if category:
         data_dict.pop("category")
 
+    faqs = paginator_qry(faqs, request.GET.get("page"))
     context = {
         "faqs": faqs,
         "f": FAQFilter(request.GET),
         "pd": previous_data,
         "filter_dict": data_dict,
         "query": query,
+        "cat_id": id,
     }
     return render(request, "helpdesk/faq/faq_list.html", context)
 
@@ -342,16 +380,19 @@ def faq_filter(request, id):
     faqs = faqs.filter(category=id)
     data_dict = parse_qs(previous_data)
     get_key_instances(FAQ, data_dict)
+    faqs = paginator_qry(faqs, request.GET.get("page"))
     context = {
         "faqs": faqs,
         "f": FAQFilter(request.GET),
         "pd": previous_data,
+        "cat_id": id,
         "filter_dict": data_dict,
     }
     return render(request, "helpdesk/faq/faq_list.html", context)
 
 
 @login_required
+@hx_request_required
 def faq_suggestion(request):
     faqs = FAQFilter(request.GET).qs
     data_list = list(faqs.values())
@@ -366,15 +407,19 @@ def faq_suggestion(request):
 def faq_delete(request, id):
     try:
         faq = FAQ.objects.get(id=id)
-        cat_id = faq.category.id
         faq.delete()
         messages.success(
             request, _('The FAQ "{}" has been deleted successfully.').format(faq)
         )
         return HttpResponse("")
+
+    except FAQ.DoesNotExist:
+        message = _("No FAQ found matching the query.")
+
     except ProtectedError:
-        messages.error(request, _("You cannot delete this FAQ."))
-    return HttpResponse("<script>window.location.reload()</script>")
+        message = _("You cannot delete this FAQ.")
+
+    return HorillaRedirect(request, message=message)
 
 
 @login_required
@@ -484,15 +529,11 @@ def ticket_create(request):
             notify.send(
                 request.user.employee_get,
                 recipient=assignees,
-                verb="You have been assigned to a new Ticket",
-                verb_ar="لقد تم تعيينك لتذكرة جديدة",
-                verb_de="Ihnen wurde ein neues Ticket zugewiesen",
-                verb_es="Se te ha asignado un nuevo ticket",
-                verb_fr="Un nouveau ticket vous a été attribué",
+                verb=gettext_noop("You have been assigned to a new Ticket"),
                 icon="infinite",
                 redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
             )
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     context = {
         "form": form,
         "t_type_form": TicketTypeForm(),
@@ -531,7 +572,7 @@ def ticket_update(request, ticket_id):
                     attachment_instance = Attachment(file=attachment, ticket=ticket)
                     attachment_instance.save()
                 messages.success(request, _("The Ticket updated successfully."))
-                return HttpResponse("<script>window.location.reload()</script>")
+                return HorillaRedirect(request)
         context = {
             "form": form,
             "ticket_id": ticket_id,
@@ -539,17 +580,7 @@ def ticket_update(request, ticket_id):
         }
         return render(request, "helpdesk/ticket/ticket_form.html", context)
     else:
-        messages.info(request, _("You don't have permission."))
-
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return handle_no_permission(request)
 
 
 @login_required
@@ -564,7 +595,11 @@ def ticket_archive(request, ticket_id):
         return Ticket view
     """
 
-    ticket = Ticket.objects.get(id=ticket_id)
+    ticket = Ticket.find(ticket_id)
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
 
     # Check if the user has permission or is the employee or their reporting manager
     if (
@@ -577,28 +612,57 @@ def ticket_archive(request, ticket_id):
         ticket.is_active = not ticket.is_active
         ticket.save()
 
-        if ticket.is_active:
-            messages.success(request, _("The Ticket un-archived successfully."))
-        else:
-            messages.success(request, _("The Ticket archived successfully."))
+        messsage = (
+            _("The Ticket un-archived successfully.")
+            if ticket.is_active
+            else _("The Ticket archived successfully.")
+        )
+        messages.success(request, messsage)
 
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
-
-    else:
-        messages.info(request, _("You don't have permission."))
-
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return HorillaRedirect(request)
+    return handle_no_permission(request)
 
 
 @login_required
+@ticket_owner_can_enter(perm="helpdesk.change_ticket", model=Ticket)
+def ticket_status_change(request, ticket_id):
+    if request.method != "POST":
+        messages.error(request, _("Invalid request method."))
+        return HttpResponse("error")
+    ticket = Ticket.objects.get(id=ticket_id)
+    status = request.POST.get("status")
+    ticket.status = status
+    if ticket.status == "resolved":
+        ticket.resolved_date = datetime.today()
+    ticket.save()
+
+    employees = ticket.assigned_to.all()
+    assignees = [employee.employee_user_id for employee in employees]
+    assignees.append(ticket.employee_id.employee_user_id)
+    if hasattr(ticket.get_raised_on_object(), "dept_manager"):
+        if ticket.get_raised_on_object().dept_manager.all():
+            manager = ticket.get_raised_on_object().dept_manager.all().first().manager
+            assignees.append(manager.employee_user_id)
+    notify.send(
+        request.user.employee_get,
+        recipient=assignees,
+        verb=gettext_noop("The status of the ticket has been changed to %(status)s."),
+        verb_params={"status": str(ticket.status)},
+        icon="infinite",
+        redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+    )
+    mail_thread = TicketSendThread(
+        request,
+        ticket,
+        type="status_change",
+    )
+    mail_thread.start()
+    messages.success(request, _("The Ticket status updated successfully."))
+    return HttpResponse("success")
+
+
+@login_required
+@hx_request_required
 # @ticket_owner_can_enter(perm="helpdesk.change_ticket", model=Ticket)
 def change_ticket_status(request, ticket_id):
     """
@@ -611,17 +675,26 @@ def change_ticket_status(request, ticket_id):
     Returns:
         return Ticket view
     """
-    ticket = Ticket.objects.get(id=ticket_id)
+    ticket = Ticket.find(ticket_id)
+    if not ticket:
+        response = {
+            "type": "danger",
+            "message": _("No Ticket found matching the query."),
+        }
+        return JsonResponse(response)
+
     pre_status = ticket.get_status_display()
     status = request.POST.get("status")
     user = request.user.employee_get
-    if ticket.status != status:
-        if (
-            user == ticket.employee_id
-            or user in ticket.assigned_to.all()
-            or request.user.has_perm("helpdesk.change_ticket")
-        ):
+    if (
+        user == ticket.employee_id
+        or user in ticket.assigned_to.all()
+        or request.user.has_perm("helpdesk.change_ticket")
+    ):
+        if ticket.status != status:
             ticket.status = status
+            if ticket.status == "resolved":
+                ticket.resolved_date = datetime.today()
             ticket.save()
             time = datetime.now()
             time = time.strftime("%b. %d, %Y, %I:%M %p")
@@ -645,11 +718,10 @@ def change_ticket_status(request, ticket_id):
             notify.send(
                 request.user.employee_get,
                 recipient=assignees,
-                verb=f"The status of the ticket has been changed to {ticket.status}.",
-                verb_ar="تم تغيير حالة التذكرة.",
-                verb_de="Der Status des Tickets wurde geändert.",
-                verb_es="El estado del ticket ha sido cambiado.",
-                verb_fr="Le statut du ticket a été modifié.",
+                verb=gettext_noop(
+                    "The status of the ticket has been changed to %(status)s."
+                ),
+                verb_params={"status": str(ticket.status)},
                 icon="infinite",
                 redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
             )
@@ -660,13 +732,13 @@ def change_ticket_status(request, ticket_id):
             )
             mail_thread.start()
         else:
-            response = {
-                "type": "danger",
-                "message": _("You Don't have the permission."),
-            }
+            response = {"errors": "noChange"}
+    else:
+        response = {
+            "type": "danger",
+            "message": _("You Don't have the permission."),
+        }
 
-    if ticket.status == "resolved":
-        ticket.resolved_date = datetime.today()
     return JsonResponse(response)
 
 
@@ -704,11 +776,7 @@ def ticket_delete(request, ticket_id):
             notify.send(
                 request.user.employee_get,
                 recipient=assignees,
-                verb=f"The ticket has been deleted.",
-                verb_ar="تم حذف التذكرة.",
-                verb_de="Das Ticket wurde gelöscht",
-                verb_es="El billete ha sido eliminado.",
-                verb_fr="Le ticket a été supprimé.",
+                verb=gettext_noop("The ticket has been deleted."),
                 icon="infinite",
                 redirect=reverse("ticket-view"),
             )
@@ -721,7 +789,7 @@ def ticket_delete(request, ticket_id):
             messages.error(request, _('The ticket is not in the "New" status'))
     except ProtectedError:
         messages.error(request, _("You cannot delete this Ticket."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 def get_allocated_tickets(request):
@@ -853,7 +921,12 @@ def ticket_filter(request):
 
 @login_required
 def ticket_detail(request, ticket_id, **kwargs):
-    ticket = Ticket.objects.get(id=ticket_id)
+    ticket = Ticket.find(ticket_id)
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
     if (
         request.user.has_perm("helpdesk.view_ticket")
         or ticket.employee_id.get_reporting_manager() == request.user.employee_get
@@ -885,14 +958,16 @@ def ticket_detail(request, ticket_id, **kwargs):
         sorted_activity_list = sorted(activity_list, key=itemgetter("date"))
 
         color = "success"
-        remaining_days = ticket.deadline - today
-        remaining = f"Due in {remaining_days.days} days"
-        if remaining_days.days < 0:
-            remaining = f"{abs(remaining_days.days)} days overdue"
-            color = "danger"
-        elif remaining_days.days == 0:
-            remaining = "Due Today"
-            color = "warning"
+        remaining = ""
+        if ticket.deadline:
+            remaining_days = ticket.deadline - today
+            remaining = f"Due in {remaining_days.days} days"
+            if remaining_days.days < 0:
+                remaining = f"{abs(remaining_days.days)} days overdue"
+                color = "danger"
+            elif remaining_days.days == 0:
+                remaining = "Due Today"
+                color = "warning"
 
         rating = ""
         if ticket.priority == "low":
@@ -901,6 +976,10 @@ def ticket_detail(request, ticket_id, **kwargs):
             rating = "2"
         else:
             rating = "3"
+
+        value = request.session.get("ordered_ids_ticket", [])
+        ids = list(map(int, value))
+        prev_id, next_id = closest_numbers(ids, ticket_id)
 
         context = {
             "ticket": ticket,
@@ -914,24 +993,22 @@ def ticket_detail(request, ticket_id, **kwargs):
             "color": color,
             "remaining": remaining,
             "rating": rating,
+            "prev_id": prev_id,
+            "next_id": next_id,
         }
         return render(request, "helpdesk/ticket/ticket_detail.html", context=context)
     else:
-        messages.info(request, _("You don't have permission."))
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return handle_no_permission(request)
 
 
 @login_required
 def ticket_individual_view(request, ticket_id):
-    ticket = Ticket.objects.filter(id=ticket_id).first()
+    ticket = Ticket.find(ticket_id)
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
     context = {
         "ticket": ticket,
     }
@@ -942,9 +1019,15 @@ def ticket_individual_view(request, ticket_id):
 
 @login_required
 def view_ticket_claim_request(request, ticket_id):
-    ticket = Ticket.objects.filter(id=ticket_id).first()
+    ticket = Ticket.find(ticket_id)
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
     if (
         request.user.has_perm("helpdesk.change_claimrequest")
+        or request.user.has_perm("helpdesk.view_claimrequest")
         or request.user.has_perm("helpdesk.change_ticket")
         or is_department_manager(request, ticket)
     ):
@@ -954,16 +1037,7 @@ def view_ticket_claim_request(request, ticket_id):
         }
         return render(request, "helpdesk/ticket/ticket_claim_requests.html", context)
     else:
-        messages.info(request, _("You don't have permission."))
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return handle_no_permission(request)
 
 
 @login_required
@@ -972,7 +1046,12 @@ def ticket_update_tag(request):
     method to update the tags of ticket
     """
     data = request.GET
-    ticket = Ticket.objects.get(id=data["ticketId"])
+    ticket = Ticket.find(data.get("ticketId"))
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
     if (
         request.user.has_perm("helpdesk.view_ticket")
         or request.user.employee_get == ticket.employee_id
@@ -989,22 +1068,15 @@ def ticket_update_tag(request):
         }
         return JsonResponse(response)
     else:
-        messages.info(request, _("You don't have permission."))
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return handle_no_permission(request)
 
 
 @login_required
 @hx_request_required
 def ticket_change_raised_on(request, ticket_id):
-    ticket = Ticket.objects.get(id=ticket_id)
+    ticket = Ticket.objects.filter(id=ticket_id).first()
+    if not ticket:
+        return HttpResponse()
     if (
         request.user.has_perm("helpdesk.view_ticket")
         or request.user.employee_get == ticket.employee_id
@@ -1022,22 +1094,15 @@ def ticket_change_raised_on(request, ticket_id):
             {"form": form, "ticket_id": ticket_id},
         )
     else:
-        messages.info(request, _("You don't have permission."))
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return handle_no_permission(request)
 
 
 @login_required
 @hx_request_required
 def ticket_change_assignees(request, ticket_id):
-    ticket = Ticket.objects.get(id=ticket_id)
+    ticket = Ticket.objects.filter(id=ticket_id).first()
+    if not ticket:
+        return HttpResponse()
     if request.user.has_perm("helpdesk.change_ticket") or is_department_manager(
         request, ticket
     ):
@@ -1072,7 +1137,7 @@ def ticket_change_assignees(request, ticket_id):
                 mail_thread.start()
 
                 messages.success(request, _("Assinees updated for the Ticket"))
-                return HttpResponse("<script>window.location.reload()</script>")
+                return HorillaRedirect(request)
 
         return render(
             request,
@@ -1080,19 +1145,11 @@ def ticket_change_assignees(request, ticket_id):
             {"form": form, "ticket_id": ticket_id},
         )
     else:
-        messages.info(request, _("You don't have permission."))
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return handle_no_permission(request)
 
 
 @login_required
+@require_http_methods(["POST"])
 def create_tag(request):
     """
     This is an ajax method to return json response to create tag in the change tag form.
@@ -1115,14 +1172,15 @@ def create_tag(request):
 
 
 @login_required
+@hx_request_required
 def remove_tag(request):
     """
     This is an ajax method to  remove tag from a ticket.
     """
 
     data = request.GET
-    ticket_id = data["ticket_id"]
-    tag_id = data["tag_id"]
+    ticket_id = data.get("ticket_id")
+    tag_id = data.get("tag_id")
     try:
         ticket = Ticket.objects.get(id=ticket_id)
         tag = Tags.objects.get(id=tag_id)
@@ -1130,14 +1188,38 @@ def remove_tag(request):
         # message = messages.success(request,_("Success"))
         message = _("success")
         type = "success"
-    except:
+    except (Ticket.DoesNotExist, Tags.DoesNotExist):
+        # Narrowed from a bare except, which silently swallowed genuine tags.remove() failures too.
+        logger.warning("tag removal failed: ticket_id=%r tag_id=%r", ticket_id, tag_id)
         message = messages.error(request, _("Failed"))
+        type = "failed"
 
     return JsonResponse({"message": message, "type": type})
 
 
+def can_access_ticket(request, ticket):
+    """
+    Check if the current user is authorized to access the given ticket.
+    """
+    if ticket is None:
+        return False
+    employee = request.user.employee_get
+    return (
+        request.user.has_perm("helpdesk.view_ticket")
+        or employee == ticket.employee_id
+        or employee in ticket.assigned_to.all()
+        or ticket.employee_id.get_reporting_manager() == employee
+        or is_department_manager(request, ticket)
+        or (
+            ticket.assigning_type == "individual"
+            and employee == ticket.get_raised_on_object()
+        )
+    )
+
+
 @login_required
 @hx_request_required
+@ticket_owner_can_enter(perm="helpdesk.view_ticket", model=Ticket)
 def view_ticket_document(request, doc_id):
     """
     This function used to view the uploaded document in the modal.
@@ -1149,7 +1231,20 @@ def view_ticket_document(request, doc_id):
     Returns: return view_file template
     """
 
-    document_obj = Attachment.objects.filter(id=doc_id).first()
+    document_obj = Attachment.find(doc_id)
+    if document_obj is None:
+        return HorillaRedirect(
+            request, message=_("No Attachment found matching the query.")
+        )
+
+    ticket = document_obj.ticket or (
+        document_obj.comment.ticket if document_obj.comment else None
+    )
+    if not can_access_ticket(request, ticket):
+        return HorillaRedirect(
+            request, message=_("You do not have permission to view the documents.")
+        )
+
     context = {
         "document": document_obj,
     }
@@ -1173,6 +1268,7 @@ def view_ticket_document(request, doc_id):
 
 @login_required
 @hx_request_required
+@ticket_owner_can_enter(perm="helpdesk.view_ticket", model=Ticket)
 def delete_ticket_document(request, doc_id):
     """
     This function used to delete the uploaded document in the modal.
@@ -1182,65 +1278,135 @@ def delete_ticket_document(request, doc_id):
     id (int): The id of the document.
 
     """
-    Attachment.objects.get(id=doc_id).delete()
+    document_obj = Attachment.find(doc_id)
+    if document_obj is None:
+        return HorillaRedirect(
+            request, message=_("No Attachment found matching the query.")
+        )
+
+    ticket = document_obj.ticket or (
+        document_obj.comment.ticket if document_obj.comment else None
+    )
+    if not can_access_ticket(request, ticket):
+        return HorillaRedirect(
+            request, message=_("You do not have permission to delete the documents.")
+        )
+
+    document_obj.delete()
     messages.success(request, _("Document has been deleted."))
-    return HttpResponse("<script>window.location.reload()</script>")
+    return HorillaRedirect(request)
 
 
 @login_required
+@hx_request_required
+@ticket_owner_can_enter(perm="helpdesk.add_comment", model=Ticket)
 def comment_create(request, ticket_id):
-    """ "
+    """
     This method is used to create comment to a ticket
     """
     if request.method == "POST":
         ticket = Ticket.objects.get(id=ticket_id)
         c_form = CommentForm(request.POST)
+
         if c_form.is_valid():
+            comment_text = c_form.cleaned_data.get("comment", "").strip()
+            files = request.FILES.getlist("file")
+
+            valid_files = []
+            blocked_files = []
+
+            for file in files:
+                ext = os.path.splitext(file.name)[1].lower()
+                if ext in BLOCKED_EXTENSIONS:
+                    blocked_files.append(ext)
+                else:
+                    valid_files.append(file)
+
+            # NOTHING valid → do NOT create comment
+            if not comment_text and not valid_files:
+                if blocked_files:
+                    messages.error(
+                        request,
+                        _("File type(s) %(ext)s are not allowed.")
+                        % {"ext": ", ".join(set(blocked_files))},
+                    )
+                else:
+                    messages.error(
+                        request, _("Please add a comment or upload at least one file.")
+                    )
+
+                return redirect(ticket_detail, ticket_id=ticket_id)
+
+            # NOW it's safe to create comment
             comment = c_form.save(commit=False)
             comment.employee_id = request.user.employee_get
             comment.ticket = ticket
             comment.save()
-            if request.FILES:
-                f_form = AttachmentForm(request.FILES)
-                if f_form.is_valid():
-                    files = request.FILES.getlist("file")
-                    for file in files:
-                        a_form = AttachmentForm(
-                            {"file": file, "comment": comment, "ticket": ticket}
-                        )
-                        a_form.save()
+
+            for file in valid_files:
+                Attachment.objects.create(
+                    file=file,
+                    comment=comment,
+                    ticket=ticket,
+                )
+
             messages.success(request, _("A new comment has been created."))
-    return redirect(ticket_detail, ticket_id=ticket_id)
+
+    return HttpResponse(
+        "<script>$('.reload-record').click();$('#reloadMessagesButton').click();</script>"
+    )
 
 
 @login_required
+@hx_request_required
+@ticket_owner_can_enter(perm="helpdesk.change_comment", model=Comment)
 def comment_edit(request):
-    comment_id = request.POST.get("comment_id")
+    comment_id = request.GET.get("comment_id")
     new_comment = request.POST.get("new_comment")
-    if len(new_comment) > 1:
+
+    if new_comment and len(new_comment) > 1:
         comment = Comment.objects.get(id=comment_id)
+
+        if not (
+            request.user.has_perm("helpdesk.change_claimrequest")
+            or request.user.has_perm("helpdesk.change_ticket")
+            or comment.ticket.employee_id == request.user.employee_get
+            or is_department_manager(request, comment.ticket)
+        ):
+            return HttpResponse(
+                "<script>$('.reload-record').click();$('#reloadMessagesButton').click();</script>"
+            )
+
         comment.comment = new_comment
         comment.save()
         messages.success(request, _("The comment updated successfully."))
 
     else:
-        messages.error(request, _("The comment needs to be atleast 2 charactors."))
+        messages.error(request, _("The comment needs to be at least 2 characters."))
     response = {
         "errors": "no_error",
     }
-    return JsonResponse(response)
+
+    return HttpResponse(
+        "<script>$('.reload-record').click();$('#reloadMessagesButton').click();</script>"
+    )
 
 
 @login_required
-@permission_required("helpdesk.delete_comment")
+@ticket_owner_can_enter(perm="helpdesk.delete_comment", model=Comment)
 def comment_delete(request, comment_id):
-    comment = Comment.objects.filter(id=comment_id).first()
+    comment = Comment.find(comment_id)
+    if not comment:
+        return HorillaRedirect(
+            request, message=_("No Comment found matching the query.")
+        )
+
     employee = comment.employee_id
     comment.delete()
     messages.success(
         request, _("{}'s comment has been deleted successfully.").format(employee)
     )
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -1249,7 +1415,8 @@ def get_raised_on(request):
     This is an ajax method to return list for raised on field.
     """
     data = request.GET
-    assigning_type = data["assigning_type"]
+    assigning_type = data.get("assigning_type")
+    raised_on = []
 
     if assigning_type == "department":
         # Retrieve data from the Department model and format it as a list of dictionaries
@@ -1280,17 +1447,50 @@ def get_raised_on(request):
 @login_required
 def claim_ticket(request, id):
     """
-    This is a function to create a claim request for requested employee
+    This is a function for an employee to claim an unassigned ticket -
+    assigns them to the ticket immediately, no approval needed.
     """
-    ticket = Ticket.objects.get(id=id)
-    if not ClaimRequest.objects.filter(
-        employee_id=request.user.employee_get, ticket_id=ticket
-    ).exists():
-        ClaimRequest(employee_id=request.user.employee_get, ticket_id=ticket).save()
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    ticket = Ticket.find(id)
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
+    employee = request.user.employee_get
+    if employee not in ticket.assigned_to.all():
+        ticket.assigned_to.add(employee)
+        ticket.save()
+        try:
+            notify.send(
+                employee,
+                recipient=employee.employee_user_id,
+                verb=gettext_noop("You have been assigned to a new Ticket-%(ticket)s."),
+                verb_params={"ticket": str(ticket)},
+                icon="infinite",
+                redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+            )
+        except Exception as e:
+            logger.error(e)
+        if ticket.employee_id != employee:
+            try:
+                notify.send(
+                    employee,
+                    recipient=ticket.employee_id.employee_user_id,
+                    verb=gettext_noop(
+                        "%(employee)s assigned to your ticket - %(ticket)s."
+                    ),
+                    verb_params={"employee": str(employee), "ticket": str(ticket)},
+                    icon="infinite",
+                    redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+                )
+            except Exception as e:
+                logger.error(e)
+        messages.success(request, _("Ticket claimed successfully."))
+    return HorillaRedirect(request)
 
 
 @login_required
+@ticket_owner_can_enter(perm="helpdesk.change_ticket", model=ClaimRequest)
 def approve_claim_request(request, req_id):
     """
     Function for approve claim request and send notifications to the responsibles.
@@ -1299,12 +1499,20 @@ def approve_claim_request(request, req_id):
     if not claim_request:
         return HttpResponse("Invalid claim request", status=404)
 
+    ticket = claim_request.ticket_id
+    employee = claim_request.employee_id
+
+    if not (
+        request.user.has_perm("helpdesk.change_claimrequest")
+        or request.user.has_perm("helpdesk.change_ticket")
+        or is_department_manager(request, ticket)
+    ):
+        return handle_no_permission(request)
+
     approve = strtobool(
         request.GET.get("approve", "False")
     )  # Safely convert to boolean
 
-    ticket = claim_request.ticket_id
-    employee = claim_request.employee_id
     refresh = False
     if approve:
         # message
@@ -1317,27 +1525,31 @@ def approve_claim_request(request, req_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=employee.employee_user_id,
-                    verb=f"You have been assigned to a new Ticket-{ticket}.",
-                    verb_ar=f"لقد تم تعيينك لتذكرة جديدة {ticket}.",
-                    verb_de=f"Ihnen wurde ein neues Ticket {ticket} zugewiesen.",
-                    verb_es=f"Se te ha asignado un nuevo ticket {ticket}.",
-                    verb_fr=f"Un nouveau ticket {ticket} vous a été attribué.",
+                    verb=gettext_noop(
+                        "You have been assigned to a new Ticket-%(ticket)s."
+                    ),
+                    verb_params={"ticket": str(ticket)},
                     icon="infinite",
                     redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
                 )
             except Exception as e:
                 logger.error(e)
-            if not ticket.employee_id == ticket.created_by.employee_get:
-                for emp in [ticket.created_by.employee_get, ticket.employee_id]:
+            # created_by can be None (SET_NULL) for tickets not created through a request,
+            # or whose creator was since deleted; notify the raiser alone in that case.
+            raiser = ticket.created_by.employee_get if ticket.created_by else None
+            if raiser is not None and raiser != ticket.employee_id:
+                for emp in [raiser, ticket.employee_id]:
                     try:
                         notify.send(
                             request.user.employee_get,
                             recipient=emp.employee_user_id,
-                            verb=f"{employee} assigned to your ticket - {ticket}.",
-                            verb_ar=f"تم تعيين {employee} إلى تذكرتك - {ticket}.",
-                            verb_de=f"{employee} wurde Ihrem Ticket {ticket} zugewiesen.",
-                            verb_es=f"{employee} ha sido asignado a tu ticket - {ticket}.",
-                            verb_fr=f"{employee} a été assigné à votre ticket - {ticket}.",
+                            verb=gettext_noop(
+                                "%(employee)s assigned to your ticket - %(ticket)s."
+                            ),
+                            verb_params={
+                                "employee": str(employee),
+                                "ticket": str(ticket),
+                            },
                             icon="infinite",
                             redirect=reverse(
                                 "ticket-detail", kwargs={"ticket_id": ticket.id}
@@ -1349,11 +1561,10 @@ def approve_claim_request(request, req_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=ticket.employee_id.employee_user_id,
-                    verb=f"{employee} assigned to your ticket - {ticket}.",
-                    verb_ar=f"تم تعيين {employee} إلى تذكرتك - {ticket}.",
-                    verb_de=f"{employee} wurde Ihrem Ticket {ticket} zugewiesen.",
-                    verb_es=f"{employee} ha sido asignado a tu ticket - {ticket}.",
-                    verb_fr=f"{employee} a été assigné à votre ticket - {ticket}.",
+                    verb=gettext_noop(
+                        "%(employee)s assigned to your ticket - %(ticket)s."
+                    ),
+                    verb_params={"employee": str(employee), "ticket": str(ticket)},
                     icon="infinite",
                     redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
                 )
@@ -1370,11 +1581,10 @@ def approve_claim_request(request, req_id):
             notify.send(
                 request.user.employee_get,
                 recipient=employee.employee_user_id,
-                verb=f"Your claim request is rejected for Ticket-{ticket}",
-                verb_ar=f"تم رفض طلبك للمطالبة بالتذكرة {ticket}.",
-                verb_de=f"Ihre Anspruchsanfrage für Ticket-{ticket} wurde abgelehnt.",
-                verb_es=f"Tu solicitud de reclamación ha sido rechazada para el ticket {ticket}.",
-                verb_fr=f"Votre demande de réclamation pour le ticket {ticket} a été rejetée.",
+                verb=gettext_noop(
+                    "Your claim request is rejected for Ticket-%(ticket)s"
+                ),
+                verb_params={"ticket": str(ticket)},
                 icon="infinite",
             )
     ticket.save()
@@ -1390,6 +1600,7 @@ def approve_claim_request(request, req_id):
 
 
 @login_required
+@hx_request_required
 def tickets_select_filter(request):
     """
     This method is used to return all the ids of the filtered tickets
@@ -1399,6 +1610,7 @@ def tickets_select_filter(request):
     filters = json.loads(filtered) if filtered else {}
     table = request.GET.get("tableName")
     user = request.user.employee_get
+    context = {}
 
     tickets_filter = TicketFilter(
         filters, queryset=Ticket.objects.filter(is_active=True)
@@ -1422,7 +1634,7 @@ def tickets_select_filter(request):
 
         context = {"ticket_ids": ticket_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
@@ -1431,7 +1643,7 @@ def tickets_bulk_archive(request):
     """
     This is a ajax method used to archive bulk of Ticket instances
     """
-    ids = request.POST["ids"]
+    ids = request.POST.get("ids", "[]")
     ids = json.loads(ids)
     is_active = False
     if request.GET.get("is_active") == "True":
@@ -1442,8 +1654,16 @@ def tickets_bulk_archive(request):
         ticket.save()
     messages.success(request, _("The Ticket updated successfully."))
     previous_url = request.META.get("HTTP_REFERER", "/")
-    script = f'<script>window.location.href = "{previous_url}"</script>'
-    return HttpResponse(script)
+
+    # Prevent XSS / open redirect
+    if not url_has_allowed_host_and_scheme(
+        previous_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        previous_url = "/"
+
+    return redirect(previous_url)
 
 
 @login_required
@@ -1453,7 +1673,7 @@ def tickets_bulk_delete(request):
     """
     This is a ajax method used to delete bulk of Ticket instances
     """
-    ids = request.POST["ids"]
+    ids = request.POST.get("ids", "[]")
     ids = json.loads(ids)
     for ticket_id in ids:
         try:
@@ -1476,11 +1696,7 @@ def tickets_bulk_delete(request):
             notify.send(
                 request.user.employee_get,
                 recipient=assignees,
-                verb=f"The ticket has been deleted.",
-                verb_ar="تم حذف التذكرة.",
-                verb_de="Das Ticket wurde gelöscht",
-                verb_es="El billete ha sido eliminado.",
-                verb_fr="Le ticket a été supprimé.",
+                verb=gettext_noop("The ticket has been deleted."),
                 icon="infinite",
                 redirect=reverse("ticket-view"),
             )
@@ -1492,12 +1708,21 @@ def tickets_bulk_delete(request):
         except ProtectedError:
             messages.error(request, _("You cannot delete this Ticket."))
     previous_url = request.META.get("HTTP_REFERER", "/")
-    script = f'<script>window.location.href = "{previous_url}"</script>'
-    return HttpResponse(script)
+
+    # Prevent XSS / open redirect
+    if not url_has_allowed_host_and_scheme(
+        previous_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        previous_url = "/"
+
+    return redirect(previous_url)
 
 
 @login_required
 @hx_request_required
+@permission_required("helpdesk.add_departmentmanager")
 def create_department_manager(request):
     form = DepartmentManagerCreateForm()
     if request.method == "POST":
@@ -1506,7 +1731,7 @@ def create_department_manager(request):
             form.save()
             messages.success(request, _("The department manager created successfully."))
 
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     context = {
         "form": form,
     }
@@ -1515,15 +1740,18 @@ def create_department_manager(request):
 
 @login_required
 @hx_request_required
+@permission_required("helpdesk.change_departmentmanager")
 def update_department_manager(request, dep_id):
-    department_manager = DepartmentManager.objects.get(id=dep_id)
+    department_manager = DepartmentManager.objects.filter(id=dep_id).first()
+    if not department_manager:
+        return HttpResponse()
     form = DepartmentManagerCreateForm(instance=department_manager)
     if request.method == "POST":
         form = DepartmentManagerCreateForm(request.POST, instance=department_manager)
         if form.is_valid():
             form.save()
             messages.success(request, _("The department manager updated successfully."))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     context = {
         "form": form,
         "dep_id": dep_id,
@@ -1534,20 +1762,39 @@ def update_department_manager(request, dep_id):
 @login_required
 @permission_required("helpdesk.delete_departmentmanager")
 def delete_department_manager(request, dep_id):
-    department_manager = DepartmentManager.objects.get(id=dep_id)
-    department_manager.delete()
-    messages.success(request, _("The department manager has been deleted successfully"))
+    department_manager = DepartmentManager.find(dep_id)
+    if not department_manager:
+        return HorillaRedirect(
+            request, message=_("No Department Manager found matching the query.")
+        )
 
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    count = DepartmentManager.objects.count()
+    # Soft delete: the base Department settings page reads this record directly
+    # (bypassing is_active filtering), so this should only hide it from Helpdesk's own list.
+    department_manager.is_active = False
+    department_manager.save()
+    messages.success(request, _("The department manager has been deleted successfully"))
+    if count == 1:
+        return HttpResponse("<script>$('.reload-record').click();</script>")
+    return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
 
 @login_required
+@ticket_owner_can_enter(perm="helpdesk.change_ticket", model=Ticket)
 def update_priority(request, ticket_id):
     """
     This function is used to update the priority
     from the detailed view
     """
-    ticket = Ticket.objects.get(id=ticket_id)
+    ticket = Ticket.find(ticket_id)
+    if not ticket:
+        messages.error(
+            request,
+        )
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
     if (
         request.user.has_perm("helpdesk.view_ticket")
         or ticket.employee_id.get_reporting_manager() == request.user.employee_get
@@ -1565,18 +1812,8 @@ def update_priority(request, ticket_id):
             ticket.priority = "high"
         ticket.save()
         messages.success(request, _("Priority updated successfully."))
-        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
-    else:
-        messages.info(request, _("You don't have permission."))
-        previous_url = request.META.get("HTTP_REFERER", "/")
-
-        # Handle request for HTMX if needed
-        if "HTTP_HX_REQUEST" in request.META:
-            return render(request, "decorator_404.html")
-        else:
-            return HttpResponse(
-                f'<script>window.location.href = "{previous_url}"</script>'
-            )
+        return HorillaRedirect(request)
+    return handle_no_permission(request)
 
 
 @login_required
@@ -1592,8 +1829,8 @@ def ticket_type_view(request):
 
 
 @login_required
-# @hx_request_required
-@permission_required("helpdesk.create_tickettype")
+@hx_request_required
+@permission_required("helpdesk.add_tickettype")
 def ticket_type_create(request):
     """
     This method renders form and template to create Ticket type
@@ -1617,7 +1854,7 @@ def ticket_type_create(request):
             form.save()
             form = TicketTypeForm()
             messages.success(request, _("Ticket type has been created successfully!"))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     return render(
         request,
         "base/ticket_type/ticket_type_form.html",
@@ -1629,12 +1866,14 @@ def ticket_type_create(request):
 
 @login_required
 @hx_request_required
-@permission_required("helpdesk.update_tickettype")
+@permission_required("helpdesk.change_tickettype")
 def ticket_type_update(request, t_type_id):
     """
     This method renders form and template to create Ticket type
     """
-    ticket_type = TicketType.objects.get(id=t_type_id)
+    ticket_type = TicketType.objects.filter(id=t_type_id).first()
+    if not ticket_type:
+        return HttpResponse()
     form = TicketTypeForm(instance=ticket_type)
     if request.method == "POST":
         form = TicketTypeForm(request.POST, instance=ticket_type)
@@ -1642,7 +1881,7 @@ def ticket_type_update(request, t_type_id):
             form.save()
             form = TicketTypeForm()
             messages.success(request, _("Ticket type has been updated successfully!"))
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
     return render(
         request,
         "base/ticket_type/ticket_type_form.html",
@@ -1656,11 +1895,21 @@ def ticket_type_update(request, t_type_id):
 def ticket_type_delete(request, t_type_id):
     ticket_type = TicketType.find(t_type_id)
     if ticket_type:
-        ticket_type.delete()
-        messages.success(request, _("Ticket type has been deleted successfully!"))
-    else:
-        messages.error(request, _("Ticket type not found"))
-    return HttpResponse()
+        try:
+            ticket_type.delete()
+            messages.success(request, _("Ticket type has been deleted successfully!"))
+            count = TicketType.objects.count
+            if count == 0:
+                return HttpResponse("<script>$('.reload-record').click()</script>")
+            else:
+                return HttpResponse(
+                    "<script>$('#reloadMessagesButton').click()</script>"
+                )
+        except ProtectedError:
+            # Related tickets still reference this type.
+            messages.error(request, _("Ticket type can not delete"))
+            return HttpResponse("<script>$('.reload-record').click()</script>")
+    return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
 
 
 @login_required
@@ -1677,43 +1926,55 @@ def view_department_managers(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("helpdesk.change_departmentmanager")
 def get_department_employees(request):
-    """
-    Method to return employee in the department
-    """
-    department = (
-        Department.objects.filter(id=request.GET.get("dep_id")).first()
-        if request.GET.get("dep_id")
-        else None
-    )
-    if department:
-        employees_queryset = department.employeeworkinformation_set.all().values_list(
-            "employee_id__id", "employee_id__employee_first_name"
+    """Return employees in a department."""
+    dep_id = request.GET.get("dep_id")
+
+    employees = []
+    if dep_id:
+        raw = (
+            EmployeeWorkInformation.objects.filter(department_id=dep_id)
+            .select_related("employee_id")
+            .values_list(
+                "employee_id__id",
+                "employee_id__employee_first_name",
+                "employee_id__employee_last_name",
+            )
         )
-    else:
-        employees_queryset = None
-    employees = list(employees_queryset)
-    context = {"employees": employees}
-    employee_html = render_to_string("employee/employees_select.html", context)
+        employees = [(emp_id, f"{first} {last}".strip()) for emp_id, first, last in raw]
+
+    employee_html = render_to_string(
+        "employee/employees_select.html",
+        {"employees": employees},
+    )
+
     return HttpResponse(employee_html)
 
 
 @login_required
+@hx_request_required
 def load_faqs(request):
     base_dir = settings.BASE_DIR
     faq_file = os.path.join(base_dir, "load_data", "faq.json")
     faq_category_file = os.path.join(base_dir, "load_data", "faq_category.json")
     tags_file = os.path.join(base_dir, "load_data", "tags.json")
 
-    with open(faq_category_file, "r") as cats:
-        faq_category_raw = json.load(cats)
+    try:
+        with open(faq_category_file, "r") as cats:
+            faq_category_raw = json.load(cats)
 
-    with open(tags_file, "r") as t:
-        tags_raw = json.load(t)
+        with open(tags_file, "r") as t:
+            tags_raw = json.load(t)
 
-    with open(faq_file, "r") as faqs:
-        faq_raw = json.load(faqs)
+        with open(faq_file, "r") as faqs:
+            faq_raw = json.load(faqs)
+    except (OSError, json.JSONDecodeError):
+        messages.error(
+            request, _("Default FAQs could not be loaded. Please contact support.")
+        )
+        return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
     category_lookup = {item["pk"]: item["fields"]["title"] for item in faq_category_raw}
 
@@ -1776,11 +2037,15 @@ def load_faqs(request):
                 faq_obj.tags.set(tags)
 
                 messages.success(
-                    request, f"Automation '{faq_obj.question}' created successfully."
+                    request,
+                    _("Automation '%(faq_obj_question)s' created successfully.")
+                    % {"faq_obj_question": faq_obj.question},
                 )
             else:
                 messages.warning(
-                    request, f"Automation '{faq_obj.question}' already exists."
+                    request,
+                    _("Automation '%(faq_obj_question)s' already exists.")
+                    % {"faq_obj_question": faq_obj.question},
                 )
 
         script = """
@@ -1808,5 +2073,48 @@ def load_faqs(request):
         {
             "faqs": processed_faqs,
             "catagories": category_lookup,
+        },
+    )
+
+
+@login_required
+@hx_request_required
+@ticket_owner_can_enter(perm="helpdesk.change_ticket", model=Ticket)
+def ticket_file_upload(request, id):
+    """
+    This function is used to upload files to the ticket.
+    """
+    ticket = Ticket.find(id)
+    if not ticket:
+        return HorillaRedirect(
+            request, message=_("No Ticket found matching the query.")
+        )
+
+    if request.method == "POST":
+        files = request.FILES.getlist("file")
+
+        for file in files:
+            ext = os.path.splitext(file.name)[1].lower()
+
+            if ext in BLOCKED_EXTENSIONS:
+                messages.error(
+                    request,
+                    _("File type %(ext)s is not allowed for security reasons.")
+                    % {"ext": ext},
+                )
+                continue
+
+            a_form = AttachmentForm({"file": file, "ticket": ticket, "comment": None})
+            a_form.save()
+        messages.success(request, _("File(s) uploaded successfully."))
+
+    return render(
+        request,
+        "helpdesk/ticket/ticket_detail.html",
+        {
+            "ticket": ticket,
+            "attachments": ticket.ticket_attachment.all(),
+            "next_id": id,
+            "prev_id": id,
         },
     )

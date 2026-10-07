@@ -1,26 +1,44 @@
+from datetime import date as _date
+
 import django_filters
 from django import forms
 from django.db.models import Q
-from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy as _
 
-from horilla.filters import FilterSet, HorillaFilterSet, filter_by_name
+from horilla.filters import (
+    FilterSet,
+    HorillaFilterSet,
+    filter_by_name,
+    filter_name_or_badge_terms,
+)
 
-from .models import Employee, Project, Task, TimeSheet
+from .models import Employee, Project, ProjectStage, Task, TimeSheet
 
 
 class ProjectFilter(HorillaFilterSet):
     search = django_filters.CharFilter(method="filter_by_project")
     search_field = django_filters.CharFilter(method="search_in")
+    name_or_badge = django_filters.CharFilter(
+        method="filter_name_or_badge", label=_("Name or Badge ID")
+    )
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    ajax_fields = {
+        "managers": {
+            "key": "project-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
 
     class Meta:
         model = Project
         fields = [
             "title",
             "managers",
-            "members",
             "status",
-            "end_date",
-            "start_date",
             "is_active",
         ]
 
@@ -36,12 +54,38 @@ class ProjectFilter(HorillaFilterSet):
         widget=forms.DateInput(attrs={"type": "date"}),
         label=_("End Till"),
     )
+    overdue = django_filters.CharFilter(method="filter_overdue", label=_("Overdue"))
 
     def filter_by_project(self, queryset, _, value):
         if self.data.get("search_field"):
             return queryset
         queryset = queryset.filter(title__icontains=value)
         return queryset
+
+    def filter_overdue(self, queryset, name, value):
+        if value == "True":
+            return queryset.filter(end_date__lt=_date.today()).exclude(
+                status__in=["completed", "cancelled", "expired"]
+            )
+        return queryset
+
+    def filter_name_or_badge(self, queryset, name, value):
+        """
+        Filter with a comma-separated list of names or badge IDs
+        """
+        return filter_name_or_badge_terms(
+            queryset,
+            value,
+            "managers__employee_first_name",
+            "managers__employee_last_name",
+            "managers__badge_id",
+        )
+
+    def __init__(self, data=None, queryset=None, *, request=None, prefix=None):
+        super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
+        self.form.fields["name_or_badge"].widget.attrs["placeholder"] = _(
+            "e.g. John, PEP01, PEP02"
+        )
 
 
 class TaskFilter(FilterSet):
@@ -77,8 +121,42 @@ class TaskAllFilter(HorillaFilterSet):
         field_name="end_date",
         lookup_expr="lte",
         widget=forms.DateInput(attrs={"type": "date"}),
-        label=_("End Till"),
+        label=_("End Date Till"),
     )
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    ajax_fields = {
+        "project": {
+            "key": "task-project",
+            "queryset_fn": lambda request: Project.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select project..."),
+        },
+        "stage": {
+            "key": "task-stage",
+            "queryset_fn": lambda request: ProjectStage.objects.select_related(
+                "project"
+            ).all(),
+            "display_fn": lambda obj: str(obj),
+            "search_fields": ["title", "project__title"],
+            "placeholder": _("Select stage..."),
+        },
+        "task_managers": {
+            "key": "task-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+        "task_members": {
+            "key": "task-members",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
 
     class Meta:
         model = Task
@@ -90,13 +168,8 @@ class TaskAllFilter(HorillaFilterSet):
             "task_members",
             "end_date",
             "status",
+            "is_active",
         ]
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.form.fields["end_till"].label = (
-            f"{self.Meta.model()._meta.get_field('end_date').verbose_name} Till"
-        )
 
     def filter_by_task(self, queryset, _, value):
         queryset = queryset.filter(title__icontains=value)
@@ -115,23 +188,46 @@ class TimeSheetFilter(HorillaFilterSet):
         field_name="date",
         lookup_expr="gte",
         widget=forms.DateInput(attrs={"type": "date"}),
+        label=_("Start Date From"),
     )
     end_till = django_filters.DateFilter(
         field_name="date",
         lookup_expr="lte",
         widget=forms.DateInput(attrs={"type": "date"}),
+        label=_("End Date Till"),
     )
 
-    project = (
-        django_filters.ModelChoiceFilter(
-            field_name="project_id", queryset=Project.objects.all()
-        ),
-    )
-
-    task = django_filters.ModelChoiceFilter(
+    task = django_filters.ModelMultipleChoiceFilter(
         field_name="task_id", queryset=Task.objects.all()
     )
     search = django_filters.CharFilter(method="filter_by_employee")
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    ajax_fields = {
+        "project_id": {
+            "key": "timesheet-project",
+            "queryset_fn": lambda request: Project.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select project..."),
+        },
+        "task": {
+            "key": "timesheet-task",
+            "queryset_fn": lambda request: Task.objects.select_related(
+                "project"
+            ).filter(is_active=True),
+            "display_fn": lambda obj: str(obj),
+            "search_fields": ["title", "project__title"],
+            "placeholder": _("Select task..."),
+        },
+        "employee_id": {
+            "key": "timesheet-employee",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
 
     class Meta:
         """
@@ -146,11 +242,6 @@ class TimeSheetFilter(HorillaFilterSet):
             "date",
             "status",
         ]
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.form.fields["start_from"].label = _("Start Date From")
-        self.form.fields["end_till"].label = _("End Date Till")
 
     def filter_by_employee(self, queryset, _, value):
         """

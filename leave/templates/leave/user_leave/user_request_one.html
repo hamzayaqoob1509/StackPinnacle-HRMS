@@ -3,7 +3,7 @@
     <span class="oh-modal__dialog-title" id="rotatingWorkTypeDetailModalLabel">
         {% trans "Details" %}
     </span>
-    <button class="oh-modal__close" aria-label="Close">
+    <button class="oh-modal__close" aria-label={% trans 'Close' %}>
         <ion-icon name="close-outline"></ion-icon>
     </button>
 </div>
@@ -14,13 +14,13 @@
                 hx-target="#objectDetailsModalW25Target" data-action="previous"
                 class="oh-modal__diaglog-nav oh-modal__nav-prev">
                 <ion-icon name="chevron-back-outline" class="md hydrated" role="img"
-                    aria-label="chevron back outline"></ion-icon>
+                    aria-label="{% trans 'chevron back outline' %}"></ion-icon>
             </button>
             <button hx-get="{% url 'user-request-one' next %}?instances_ids={{instances_ids}}"
                 hx-target="#objectDetailsModalW25Target" class="oh-modal__diaglog-nav oh-modal__nav-next"
                 data-action="next">
                 <ion-icon name="chevron-forward-outline" class="md hydrated" role="img"
-                    aria-label="chevron forward outline"></ion-icon>
+                    aria-label="{% trans 'chevron forward outline' %}"></ion-icon>
             </button>
         </div>
     {% endif %}
@@ -29,11 +29,11 @@
         <div class="oh-profile mb-2">
             <div class="oh-profile__avatar">
                 <img src="{{leave_request.employee_id.get_avatar}}" class="oh-profile__image me-2"
-                    alt="Mary Magdalene" />
+                    alt="{{ leave_request.employee_id }}" />
             </div>
             <div class="oh-timeoff-modal__profile-info">
                 <span class="oh-timeoff-modal__user fw-bold">{{leave_request.employee_id}}</span>
-                <span class="oh-timeoff-modal__user m-0" style="font-size: 18px; color: #4d4a4a">
+                <span class="oh-timeoff-modal__user m-0" style="font-size: 15px; color: #4d4a4a">
                     {{leave_request.employee_id.employee_work_info.department_id}} /
                     {{leave_request.employee_id.employee_work_info.job_position_id}}</span>
             </div>

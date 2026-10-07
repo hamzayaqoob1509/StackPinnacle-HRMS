@@ -4,10 +4,12 @@ recruitment/sidebar.py
 To set Horilla sidebar for onboarding
 """
 
+from django.apps import apps
 from django.contrib.auth.context_processors import PermWrapper
-from django.urls import reverse
+from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
 
+from horilla.menu import settings_menu
 from recruitment.models import InterviewSchedule
 from recruitment.templatetags.recruitmentfilters import (
     is_recruitmentmangers,
@@ -25,8 +27,48 @@ SUBMENUS = [
     },
     {
         "menu": _("Recruitment Pipeline"),
-        "redirect": reverse("pipeline"),
+        "redirect": reverse("cbv-pipeline"),
         "accessibility": "recruitment.sidebar.pipeline_accessibility",
+        # recruitment-pipeline-shell/<rec_id>/ is a sibling URL (not a sub-path
+        # of cbv-pipeline/), so it needs an explicit prefix for the sidebar's
+        # path-based active-link highlighting to match it.
+        "match_prefixes": ["/recruitment/recruitment-pipeline-shell/"],
+    },
+    {
+        "menu": _("Open Recruitments"),
+        "redirect": reverse("open-recruitments"),
+        "accessibility": "recruitment.sidebar.recruitment_accessibility",
+        # recruitment-details/<id>/ is a sibling URL (not a sub-path of
+        # open-recruitments/), so it needs an explicit prefix for the sidebar's
+        # path-based active-link highlighting to match it.
+        "match_prefixes": ["/recruitment/recruitment-details/"],
+    },
+    {
+        "menu": _("Candidates"),
+        "redirect": reverse("candidate-view"),
+        "accessibility": "recruitment.sidebar.candidates_accessibility",
+        # The candidate edit page (candidate-update/<id>/) is a sibling URL, not a
+        # sub-path of candidate-view/, so it needs an explicit prefix here for the
+        # sidebar's path-based active-link highlighting to match it.
+        "match_prefixes": ["/recruitment/candidate-update/"],
+    },
+    {
+        "menu": _("Interviews"),
+        "redirect": reverse("interview-view"),
+        "accessibility": "recruitment.sidebar.interview_accessibility",
+        # interview-detail-view/<pk>/ is a sibling URL (not a sub-path of
+        # interview-view/), so it needs an explicit prefix for the sidebar's
+        # path-based active-link highlighting to match it.
+        "match_prefixes": ["/recruitment/interview-detail-view/"],
+    },
+    {
+        "menu": _("Job Openings"),
+        "redirect": reverse("recruitment-view"),
+        "accessibility": "recruitment.sidebar.recruitment_accessibility",
+        # recruitment-detail-view/<pk>/ is a sibling URL (not a sub-path of
+        # recruitment-view/), so it needs an explicit prefix for the sidebar's
+        # path-based active-link highlighting to match it.
+        "match_prefixes": ["/recruitment/recruitment-detail-view/"],
     },
     {
         "menu": _("Recruitment Survey"),
@@ -34,34 +76,14 @@ SUBMENUS = [
         "accessibility": "recruitment.sidebar.survey_accessibility",
     },
     {
-        "menu": _("Candidates"),
-        "redirect": reverse("candidate-view"),
-        "accessibility": "recruitment.sidebar.candidates_accessibility",
-    },
-    {
-        "menu": _("Interview"),
-        "redirect": reverse("interview-view"),
-        "accessibility": "recruitment.sidebar.interview_accessibility",
-    },
-    {
-        "menu": _("Recruitment"),
-        "redirect": reverse("recruitment-view"),
-        "accessibility": "recruitment.sidebar.recruitment_accessibility",
-    },
-    {
-        "menu": _("Open Jobs"),
-        "redirect": reverse("open-recruitments"),
-        "accessibility": "recruitment.sidebar.recruitment_accessibility",
-    },
-    {
-        "menu": _("Stages"),
-        "redirect": reverse("rec-stage-view"),
-        "accessibility": "recruitment.sidebar.stage_accessibility",
-    },
-    {
-        "menu": _("Skill Zone"),
+        "menu": _("Talent Pool"),
         "redirect": reverse("skill-zone-view"),
         "accessibility": "recruitment.sidebar.skill_zone_accessibility",
+    },
+    {
+        "menu": _("Configuration"),
+        "redirect": reverse("recruitment-settings-view"),
+        "accessibility": "recruitment.sidebar.recruitment_settings_accessibility",
     },
 ]
 
@@ -105,26 +127,13 @@ def recruitment_accessibility(
 def interview_accessibility(
     request, _submenu: dict = {}, user_perms: PermWrapper = [], *args, **kwargs
 ) -> bool:
-    interviews = InterviewSchedule.objects.all()
-    interviewers = []
-    for interview in interviews:
-        for emp in interview.employee_id.all():
-            interviewers.append(emp)
-    if (
-        getattr(request.user, "employee_get", None)
-        and request.user.employee_get in interviewers
-    ):
-        view_interview = True
-    else:
-        view_interview = False
+    employee = getattr(request.user, "employee_get", None)
+    view_interview = (
+        bool(employee)
+        and InterviewSchedule.objects.filter(employee_id=employee).exists()
+    )
 
     return request.user.has_perm("recruitment.view_interviewschedule") or view_interview
-
-
-def stage_accessibility(
-    request, _submenu: dict = {}, user_perms: PermWrapper = [], *args, **kwargs
-) -> bool:
-    return request.user.has_perm("recruitment.view_stage")
 
 
 def skill_zone_accessibility(
@@ -135,5 +144,52 @@ def skill_zone_accessibility(
     )
 
 
+def recruitment_settings_accessibility(
+    request, _submenu: dict = {}, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    return (
+        request.user.has_perm("recruitment.view_rejectreason")
+        or request.user.has_perm("recruitment.view_recruitment")
+        or request.user.has_perm("recruitment.view_stage")
+    )
+
+
 def dashboard_accessibility(request, submenu, user_perms, *args, **kwargs):
     return is_stagemanager(request.user) or "recruitment" in user_perms
+
+
+# ---------------------------------------------------------------------------
+# Settings menu registrations
+# ---------------------------------------------------------------------------
+
+
+def self_tracking_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("recruitment.view_recruitment")
+
+
+@settings_menu.register
+class RecruitmentSettings:
+    title = _("Recruitment")
+    order = 4
+    condition = lambda self, request: apps.is_installed("recruitment")
+    items = [
+        {
+            "label": _("Candidate Portal"),
+            "url": reverse_lazy("self-tracking-feature"),
+            "accessibility": self_tracking_accessibility,
+            "search_entries": [
+                {
+                    "text": _("Application Tracking"),
+                    "description": _(
+                        "Allow candidates to track their recruitment pipeline status"
+                    ),
+                },
+                {
+                    "text": _("Rating Visibility"),
+                    "description": _(
+                        "Allow candidates to view their recruitment rating"
+                    ),
+                },
+            ],
+        },
+    ]

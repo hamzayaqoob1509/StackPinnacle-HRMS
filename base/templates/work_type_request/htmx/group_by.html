@@ -138,7 +138,7 @@
                         <img
                           src="{{work_type_request.employee_id.get_avatar}}"
                           class="oh-profile__image"
-                          alt="Username"
+                          alt="{{ work_type_request.employee_id }}"
                         />
                       </div>
                       <span class="oh-profile__name oh-text--dark"
@@ -174,7 +174,7 @@
                       hx-target="#commentContainer"
                       data-toggle="oh-modal-toggle"
                       data-target="#worktypeactivitySidebar"
-                      title="View Comment"
+                      title="{% trans 'View Comment' %}"
                       class="oh-btn oh-btn--light oh-activity-sidebar__open w-100"
                       style="
                         flex: 1 0 auto;
@@ -187,7 +187,7 @@
                         name="newspaper-outline"
                         role="img"
                         class="md hydrated"
-                        aria-label="newspaper outline"
+                        aria-label="{% trans 'newspaper outline' %}"
                       ></ion-icon>
                     </button>
                   </div>
@@ -232,7 +232,7 @@
                           {% csrf_token %}
                           <button
                             type="submit"
-                            class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                            class="oh-btn oh-btn--danger w-100"
                             title="{% trans 'Delete' %}"
                           >
                             <ion-icon name="trash-outline"></ion-icon>
@@ -464,7 +464,7 @@
       <h2 class="oh-modal__dialog-title" id="createModalTitle">
         {% trans "Add Comment" %}
       </h2>
-      <button class="oh-modal__close" aria-label="Close">
+      <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
         <ion-icon name="close-outline"></ion-icon>
       </button>
     </div>
@@ -492,21 +492,17 @@
     ids = makeWorktypeListUnique(ids);
     selectedCount = ids.length;
 
-    getCurrentLanguageCode(function (code) {
-      languageCode = code;
-      var message = rowMessages[languageCode];
-      $("#selectedWorktypes").attr("data-ids", JSON.stringify(ids));
-      if (selectedCount === 0) {
-        $("#selectedShowWorktypes").css("display", "none");
-        $("#exportWorktypes").css("display", "none");
-        $("#unselectAllWorktypes").css("display", "none");
-      } else {
-        $("#exportWorktypes").css("display", "inline-flex");
-        $("#unselectAllWorktypes").css("display", "inline-flex");
-        $("#selectedShowWorktypes").css("display", "inline-flex");
-        $("#selectedShowWorktypes").text(selectedCount + " - " + message);
-      }
-    });
+    $("#selectedWorktypes").attr("data-ids", JSON.stringify(ids));
+    if (selectedCount === 0) {
+      $("#selectedShowWorktypes").css("display", "none");
+      $("#exportWorktypes").css("display", "none");
+      $("#unselectAllWorktypes").css("display", "none");
+    } else {
+      $("#exportWorktypes").css("display", "inline-flex");
+      $("#unselectAllWorktypes").css("display", "inline-flex");
+      $("#selectedShowWorktypes").css("display", "inline-flex");
+      $("#selectedShowWorktypes").text(selectedCount + " - " + i18nMessages.selected);
+    }
   }
 
   $(document).ready(function () {

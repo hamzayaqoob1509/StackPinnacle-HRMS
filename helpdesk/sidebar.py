@@ -2,19 +2,52 @@
 helpdesk/sidebar.py
 """
 
-from django.urls import reverse
-from django.utils.translation import gettext_lazy as trans
+from django.urls import reverse_lazy
+from django.utils.translation import gettext_lazy as _
 
-MENU = trans("Help Desk")
+MENU = _("Helpdesk")
 IMG_SRC = "images/ui/headset-solid.svg"
 
 SUBMENUS = [
     {
-        "menu": trans("FAQs"),
-        "redirect": reverse("faq-category-view"),
+        "menu": _("Dashboard"),
+        "redirect": reverse_lazy("helpdesk-dashboard"),
+        "accessibility": "helpdesk.sidebar.dashboard_accessibility",
     },
     {
-        "menu": trans("Tickets"),
-        "redirect": reverse("ticket-view"),
+        "menu": _("Tickets"),
+        "redirect": reverse_lazy("ticket-view"),
+        # ticket-detail/<id>/ and ticket-individual-view/<id>/ are sibling URLs
+        # (not sub-paths of ticket-view/), so they need explicit prefixes for
+        # the sidebar's path-based active-link highlighting to match them.
+        "match_prefixes": [
+            "/helpdesk/ticket-detail/",
+            "/helpdesk/ticket-individual-view/",
+        ],
+    },
+    {
+        "menu": _("FAQs"),
+        "redirect": reverse_lazy("faq-category-view"),
+        # The individual FAQ list page (faq-view/<id>/) is a sibling URL, not a
+        # sub-path of faq-category-view/, so it needs an explicit prefix here
+        # for the sidebar's path-based active-link highlighting to match it.
+        "match_prefixes": ["/helpdesk/faq-view/"],
+    },
+    {
+        "menu": _("Configuration"),
+        "redirect": reverse_lazy("helpdesk-settings-view"),
+        "accessibility": "helpdesk.sidebar.helpdesk_settings_accessibility",
     },
 ]
+
+
+def dashboard_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("helpdesk.view_ticket")
+
+
+def helpdesk_settings_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return (
+        request.user.has_perm("helpdesk.view_departmentmanager")
+        or request.user.has_perm("helpdesk.view_tickettype")
+        or request.user.has_perm("base.view_tags")
+    )

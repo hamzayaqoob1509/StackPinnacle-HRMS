@@ -1,10 +1,10 @@
 import calendar
 import datetime as dt
-import sys
 from datetime import datetime, timedelta
 
-from apscheduler.schedulers.background import BackgroundScheduler
 from dateutil.relativedelta import relativedelta
+
+from horilla.scheduling import register_job
 
 today = datetime.now()
 
@@ -32,30 +32,21 @@ def candidate_convert():
     """
     Converts candidates to a "converted" state if they already exist as users.
     """
-    from django.contrib.auth.models import User
-
+    from horilla_auth.models import HorillaUser
     from recruitment.models import Candidate
 
-    candidates = Candidate.objects.filter(is_active=True)
-    mails = list(Candidate.objects.values_list("email", flat=True))
-    existing_emails = list(
-        User.objects.filter(username__in=mails).values_list("email", flat=True)
+    mails = list(
+        Candidate.objects.filter(is_active=True).values_list("email", flat=True)
     )
-    for cand in candidates:
-        if cand.email in existing_emails:
-            cand.converted = True
-            cand.save()
+    existing_emails = list(
+        HorillaUser.objects.filter(email__in=mails).values_list("email", flat=True)
+    )
+    Candidate.objects.filter(
+        is_active=True,
+        email__in=existing_emails,
+        converted=False,
+    ).update(converted=True)
 
 
-if not any(
-    cmd in sys.argv
-    for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
-):
-    """
-    Initializes and starts background tasks using APScheduler when the server is running.
-    """
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(candidate_convert, "interval", minutes=5)
-    scheduler.add_job(recruitment_close, "interval", hours=1)
-
-    scheduler.start()
+register_job(candidate_convert, "interval", minutes=5)
+register_job(recruitment_close, "interval", hours=1)

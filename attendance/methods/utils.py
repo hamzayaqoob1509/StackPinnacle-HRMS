@@ -5,20 +5,19 @@ This module is used write custom methods
 """
 
 import calendar
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pandas as pd
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import models
 from django.db.models import Q, Sum
-from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
 
 from base.methods import get_pagination
 from base.models import WEEK_DAYS, CompanyLeaves, Holidays
 from employee.models import Employee
-from horilla.horilla_settings import HORILLA_DATE_FORMATS, HORILLA_TIME_FORMATS
 
 MONTH_MAPPING = {
     "january": 1,
@@ -43,10 +42,13 @@ def format_time(seconds):
         seconds : seconds
     """
 
-    hour = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = int((seconds % 3600) % 60)
-    return f"{hour:02d}:{minutes:02d}"
+    # Floor division on a negative value steps to the next hour down and
+    # leaves a positive remainder, so -1:29 was stored as -2:31.
+    sign = "-" if seconds < 0 else ""
+    seconds = abs(int(seconds))
+    hour = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    return f"{sign}{hour:02d}:{minutes:02d}"
 
 
 def strtime_seconds(time):
@@ -56,8 +58,12 @@ def strtime_seconds(time):
         time : time in H:M format
     """
 
+    negative = isinstance(time, str) and time.startswith("-")
+    if negative:
+        time = time[1:]
     ftr = [3600, 60, 1]
-    return sum(a * b for a, b in zip(ftr, map(int, time.split(":"))))
+    total = sum(a * b for a, b in zip(ftr, map(int, time.split(":"))))
+    return -total if negative else total
 
 
 def get_diff_obj(first_instance, other_instance, exclude_fields=None):
@@ -158,6 +164,65 @@ def get_diff_dict(first_dict, other_dict, model=None):
     return difference
 
 
+def get_client_ip(request):
+    """
+    The caller's IP, honoring only as many proxy hops as this deployment has
+    declared trustworthy (AXES_PROXY_COUNT) -- the same setting django-axes
+    itself uses for lockouts. Trusting X-Forwarded-For unconditionally lets
+    any client claim to be calling from an allowed office network, since
+    that header is attacker-supplied unless a trusted reverse proxy is
+    known to overwrite rather than append to it.
+    """
+    from ipware import get_client_ip as _get_client_ip
+
+    ip, _is_routable = _get_client_ip(
+        request,
+        proxy_count=settings.AXES_IPWARE_PROXY_COUNT,
+        request_header_order=settings.AXES_IPWARE_META_PRECEDENCE_ORDER,
+    )
+    return ip or request.META.get("REMOTE_ADDR")
+
+
+def geofence_denial_web(request, company):
+    """
+    The web clock-in/out views' counterpart to
+    horilla_api...attendance.views.geofence_denial(): that one reads
+    request.data, which only exists on a DRF Request, not the plain
+    HttpRequest these views get. The mobile/API flow enforces a configured
+    geo-fence; the web flow previously didn't check it at all, so an
+    employee outside the fence could still punch in from a browser.
+
+    Fails closed, the same reasoning as the API version: a fence that is
+    enabled but can't be evaluated (no coordinates submitted, or the browser
+    denied location access) should block the punch, not silently allow it.
+
+    Returns an error message to show the employee, or None if the punch may
+    proceed.
+    """
+    from geopy.distance import geodesic
+
+    from geofencing.models import GeoFencing
+
+    if company is None:
+        return None
+    fence = GeoFencing.objects.filter(company_id=company).first()
+    if fence is None or not fence.start:
+        return None
+
+    try:
+        latitude = float(request.GET.get("latitude"))
+        longitude = float(request.GET.get("longitude"))
+    except (TypeError, ValueError):
+        return _(
+            "Could not verify your location. Please allow location access and try again."
+        )
+
+    distance = geodesic((fence.latitude, fence.longitude), (latitude, longitude)).meters
+    if distance > fence.radius_in_meters:
+        return _("Check-In Restricted: You are outside the permitted work location.")
+    return None
+
+
 def employee_exists(request):
     """
     This method return the employee instance and work info if not exists return None instead
@@ -166,8 +231,13 @@ def employee_exists(request):
     try:
         employee = request.user.employee_get
         employee_work_info = employee.employee_work_info
-    finally:
-        return (employee, employee_work_info)
+    except Exception:
+        # Either attribute is absent for an AnonymousUser or a user with no
+        # Employee/EmployeeWorkInformation row; callers expect None rather
+        # than an exception. `except Exception` instead of a bare `finally`
+        # so KeyboardInterrupt and SystemExit still propagate.
+        pass
+    return (employee, employee_work_info)
 
 
 def shift_schedule_today(day, shift):
@@ -221,7 +291,11 @@ def is_reportingmanger(request, instance):
             instance.employee_id.employee_work_info.reporting_manager_id
         )
     except Exception:
-        return HttpResponse("This Employee Dont Have any work information")
+        # An HttpResponse object here used to be returned as-is, and every
+        # caller uses this in a boolean `or` -- any truthy value (which an
+        # HttpResponse is) granted access. An employee with no work info
+        # record yet let ANY authenticated caller act as their manager.
+        return False
     return manager == employee_workinfo_manager
 
 
@@ -303,7 +377,7 @@ def get_week_start_end_dates(week):
     year, week_number = map(int, week.split("-W"))
 
     # Get the date of the first day of the week
-    start_date = datetime.strptime(f"{year}-W{week_number}-1", "%Y-W%W-%w").date()
+    start_date = date.fromisocalendar(year, week_number, 1)
 
     # Calculate the end date by adding 6 days to the start date
     end_date = start_date + timedelta(days=6)
@@ -325,6 +399,24 @@ def get_month_start_end_dates(year_month):
     end_date = datetime(year, month, last_day).date()
 
     return start_date, end_date
+
+
+def month_date_range(year, month):
+    """Return (first_day, last_day) for a month as real dates.
+
+    Exists so queries can say ``attendance_date__range=(...)`` instead of
+    ``attendance_date__month=`` / ``__year=``. Those two wrap the column in a
+    database function, which makes a plain B-tree index on the column
+    unusable -- so the range form is what lets an index be used at all.
+
+    ``get_month_start_end_dates`` above does the same thing from a "YYYY-MM"
+    string; this takes the parts separately, which is what the model methods
+    have to hand.
+    """
+    year = int(year)
+    month = int(month)
+    _, last_day = calendar.monthrange(year, month)
+    return date(year, month, 1), date(year, month, last_day)
 
 
 def worked_hour_data(labels, records):
@@ -363,16 +455,7 @@ def pending_hour_data(labels, records):
     return data
 
 
-def get_employee_last_name(attendance):
-    """
-    This method is used to return the last name
-    """
-    if attendance.employee_id.employee_last_name:
-        return attendance.employee_id.employee_last_name
-    return ""
-
-
-def attendance_day_checking(attendance_date, minimum_hour):
+def attendance_day_checking(attendance_date, minimum_hour, employee=None):
     # Convert the string to a datetime object
     attendance_datetime = datetime.strptime(attendance_date, "%Y-%m-%d")
 
@@ -382,6 +465,10 @@ def attendance_day_checking(attendance_date, minimum_hour):
     # Taking all holidays into a list
     leaves = []
     holidays = Holidays.objects.all()
+    if employee is not None:
+        holidays = holidays.filter(Q(is_specific=False) | Q(employees=employee))
+    else:
+        holidays = holidays.filter(is_specific=False)
     for holi in holidays:
         start_date = holi.start_date
         end_date = holi.end_date
@@ -494,6 +581,20 @@ def validate_time_in_minutes(value):
         raise ValidationError(_("Invalid format,  excepted MM:SS")) from e
 
 
+class Session(dict):
+    """
+    Fake session object that mimics Django's session for biometric requests.
+    Provides session_key attribute and dict-like access for context processors.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Generate a unique session key for this fake session
+        import uuid
+
+        self.session_key = str(uuid.uuid4())
+
+
 class Request:
     """
     Represents a request for clock-in or clock-out.
@@ -503,7 +604,7 @@ class Request:
     - date: The date of the request.
     - time: The time of the request.
     - path: The path associated with the request (default: "/").
-    - session: The session data associated with the request (default: {"title": None}).
+    - session: The session data associated with the request (default: Session with title=None).
     """
 
     def __init__(
@@ -515,16 +616,49 @@ class Request:
     ) -> None:
         self.user = user
         self.path = "/"
-        self.session = {"title": None}
+        self.session = Session({"title": None})
         self.date = date
         self.time = time
         self.datetime = datetime
         self.META = META()
+        # Empty dict stands in for Django's QueryDict here -- only .get() is
+        # ever called on request.GET (e.g. horilla_crumbs' breadcrumbs context
+        # processor), and dict.get() already returns None for a missing key
+        # exactly like QueryDict.get() does.
+        self.GET = {}
+
+    def build_absolute_uri(self, location=None):
+        """
+        Build an absolute URI from the location and the variables available in
+        this request. Mimics Django's HttpRequest.build_absolute_uri() for
+        context processors that need it (e.g. breadcrumbs).
+        """
+        if location is None:
+            location = "/"
+        # For fake requests from biometric devices, return a simple default URL
+        # The actual URL doesn't matter since this is just for template rendering
+        return f"http://localhost{location}"
+
+    def is_secure(self):
+        """
+        Returns True if the request was made over HTTPS, False otherwise.
+        For fake requests from biometric devices, always returns False.
+        """
+        return False
+
+    def get_host(self):
+        """
+        Returns the host from the request. Mimics Django's HttpRequest.get_host()
+        for context processors that need it.
+        """
+        return "localhost"
 
 
 class META:
     """
     Provides access to HTTP metadata keys.
+    Dict-like interface so Django context processors (e.g. debug) work when
+    this fake request is used (e.g. from ZK biometric punch processing).
     """
 
     @classmethod
@@ -537,13 +671,28 @@ class META:
         """
         return ["HTTP_HX_REQUEST"]
 
+    def get(self, key, default=None):
+        """
+        Return the value for key if key is in the metadata, else default.
+        Required for Django context processors that call request.META.get().
+        """
+        return default
+
+    def __contains__(self, key):
+        """
+        Support ``key in request.META`` (e.g. horilla_crumbs' breadcrumbs
+        context processor checks "HTTP_HX_REQUEST" in request.META directly,
+        not just via .keys()).
+        """
+        return key in self.keys()
+
 
 def parse_time(time_str):
     if isinstance(time_str, time):  # Check if it's already a time object
         return time_str
 
     if isinstance(time_str, str):
-        for format_str in HORILLA_TIME_FORMATS.values():
+        for format_str in settings.HORILLA_TIME_FORMATS.values():
             try:
                 return datetime.strptime(time_str, format_str).time()
             except ValueError:
@@ -571,7 +720,7 @@ def get_date(date):
     if isinstance(date, datetime):
         return date
     elif isinstance(date, str):
-        for format_name, format_str in HORILLA_DATE_FORMATS.items():
+        for format_name, format_str in settings.HORILLA_DATE_FORMATS.items():
             try:
                 return datetime.strptime(date, format_str)
             except ValueError:
@@ -592,3 +741,78 @@ def sort_activity_dicts(activity_dicts):
     ]
     sorted_activity_dicts = sorted(activity_dicts, key=lambda x: x["Attendance Date"])
     return sorted_activity_dicts
+
+
+def get_employee_attendance_summary(employees, from_date, to_date):
+    """
+    Return per-employee attendance summary for a date range.
+
+    Intended for use by other apps (e.g. payroll) without importing views.
+
+    Args:
+        employees  : Employee queryset, list of Employee instances, or list of PKs
+        from_date  : datetime.date — range start (inclusive)
+        to_date    : datetime.date — range end   (inclusive)
+
+    Returns:
+        dict keyed by employee PK::
+
+            {
+                emp_pk: {
+                    "employee"             : Employee,
+                    "present"              : float,   # 1.0 full day, 0.5 half day
+                    "paid_leave"           : int,
+                    "unpaid_leave"         : int,
+                    "absent"               : float,
+                    "week_off"             : int,
+                    "holiday"              : int,
+                    "total_working"        : int,     # working days in range
+                    "conflict_days"        : int,
+                    "resolved_conflicts"   : int,
+                    "unresolved_conflicts" : int,
+                }
+            }
+
+    Example::
+
+        from attendance.methods.utils import get_employee_attendance_summary
+        import datetime
+
+        summary = get_employee_attendance_summary(
+            employees=Employee.objects.filter(department_id=dept),
+            from_date=datetime.date(2026, 6, 1),
+            to_date=datetime.date(2026, 6, 30),
+        )
+        emp_data = summary[emp.pk]
+        print(emp_data["present"], emp_data["absent"])
+    """
+    # Local import keeps this callable from any app; avoids circular imports
+    # between attendance.methods and attendance.views.
+    from attendance.views.summary import build_monthly_summary
+
+    # Coerce str/datetime to date — handles "2026-06-01" and "2026-6-1"
+    def _to_date(val):
+        if isinstance(val, datetime):
+            return val.date()
+        if isinstance(val, date):
+            return val
+        y, m, d = str(val).split("-")
+        return date(int(y), int(m), int(d))
+
+    from_date = _to_date(from_date)
+    to_date = _to_date(to_date)
+
+    # Normalise employees to a queryset
+    if not hasattr(employees, "model"):
+        pks = [e.pk if hasattr(e, "pk") else int(e) for e in employees]
+        employees = Employee.objects.filter(pk__in=pks)
+
+    rows, _total_working, _totals = build_monthly_summary(from_date, to_date, employees)
+    result = {}
+    for row in rows:
+        row["paid_days"] = (
+            row["present"] + row["paid_leave"] + row["holiday"] + row["week_off"]
+        )
+        row["unpaid_days"] = row["absent"] + row["unpaid_leave"]
+        result[row["employee"].pk] = row
+    return result

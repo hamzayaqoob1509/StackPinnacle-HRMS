@@ -6,11 +6,13 @@ from django.db import models
 from django.db.models.signals import m2m_changed, post_save
 from django.dispatch import receiver
 from django.forms import ValidationError
+from django.urls import reverse_lazy
 from django.utils.translation import gettext as _
 
 from base.horilla_company_manager import HorillaCompanyManager
 from employee.models import Employee
 from horilla.models import HorillaModel, upload_path
+from horilla_views.cbv_methods import render_template
 
 STATUS = [
     ("requested", "Requested"),
@@ -48,12 +50,24 @@ class DocumentRequest(HorillaModel):
     max_size = models.IntegerField(
         blank=True, null=True, verbose_name=_("Max size (In MB)")
     )
-    description = models.TextField(
-        blank=True, null=True, max_length=255, verbose_name=_("Description")
-    )
+    description = models.TextField(blank=True, null=True, verbose_name=_("Description"))
     objects = HorillaCompanyManager(
         related_company_field="employee_id__employee_work_info__company_id"
     )
+
+    def get_edit_url(self):
+        """
+        Returns the edit url of the document request
+        """
+
+        return reverse_lazy("document-request-update", args=[self.pk])
+
+    def get_delete_url(self):
+        """
+        Returns the delete url of the document request
+        """
+
+        return reverse_lazy("document-request-delete", args=[self.pk])
 
     class Meta:
         """
@@ -91,7 +105,7 @@ class Document(HorillaModel):
         choices=STATUS, max_length=10, default="requested", verbose_name=_("Status")
     )
     reject_reason = models.TextField(
-        blank=True, null=True, max_length=255, verbose_name=_("Reject Reason")
+        blank=True, null=True, max_length=255, verbose_name=_("Rejection Reason")
     )
     issue_date = models.DateField(null=True, blank=True, verbose_name=_("Issue Date"))
     expiry_date = models.DateField(null=True, blank=True, verbose_name=_("Expiry Date"))
@@ -132,7 +146,12 @@ class Document(HorillaModel):
                         {"document": _("File size exceeds the limit")}
                     )
 
-            ext = file.name.split(".")[1].lower()
+            # Use the true final extension. A double extension such as
+            # "file.pdf.html" must be rejected for a "pdf" request -- taking
+            # an earlier segment (or splitext on the wrong part) would let an
+            # HTML/script file through and enable stored XSS when served.
+            # See GHSA-p68r-g665-5cm9.
+            ext = os.path.splitext(file.name)[1].lstrip(".").lower()
             if format == "any":
                 pass
             elif ext != format:
@@ -168,3 +187,34 @@ class Document(HorillaModel):
         without_documents = total_requests.filter(document="").count()
         count = total_requests.count() - without_documents
         return count
+
+    def document_title_display(self):
+        """
+        "Document" column text for the list view - title plus the employee it
+        belongs to, matching the employee list's own "name" column pattern.
+        """
+        return f"{self.title} -- {self.employee_id.get_full_name()}"
+
+    def document_status_display(self):
+        """
+        "Status" column text for the list view - a document without an
+        uploaded file has no meaningful status yet.
+        """
+        if not self.document:
+            return _("No Document")
+        return self.get_status_display()
+
+    def view_file_url(self):
+        """
+        URL used by the list view's row click to open the file preview modal.
+        """
+        return reverse_lazy("view-file", args=[self.id])
+
+    def document_actions(self):
+        """
+        Upload/Approve/Reject/Delete column for the list view.
+        """
+        return render_template(
+            path="cbv/documents/document_row_actions.html",
+            context={"instance": self},
+        )

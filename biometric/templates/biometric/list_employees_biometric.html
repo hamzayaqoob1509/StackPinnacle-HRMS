@@ -21,7 +21,7 @@
         <div class="oh-sticky-table__tr">
           <div class="oh-sticky-table__th" style = "width:10px;">
             <div class="centered-div">
-							<input type="checkbox" class="oh-input oh-input__checkbox all-bio-employee" title="Select All" data-device = "{{device_id}}"
+							<input type="checkbox" class="oh-input oh-input__checkbox all-bio-employee" title="{% trans 'Select All' %}" data-device = "{{device_id}}"
 									id = "allBioEmployee"/>
 						</div>
           </div>
@@ -113,16 +113,16 @@
               </a>
               {% endcomment %}
               <a
-                class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                class="oh-btn oh-btn--danger w-100"
                 href="{% url 'delete-biometric-user' uid=employee.uid device_id=device_id %}"
-                onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to delete this user from the biometric device?' %}`)"
+                onclick = "event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to delete this user from the biometric device?'|escapejs %}`)"
                 title='{% trans "Delete" %}'
               >
                 <ion-icon
                   name="trash-outline"
                   role="img"
                   class="md hydrated"
-                  aria-label="trash outline"
+                  aria-label="{% trans 'trash outline' %}"
                 ></ion-icon>
               </a>
             </div>

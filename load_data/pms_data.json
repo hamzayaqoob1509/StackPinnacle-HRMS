@@ -10,7 +10,11 @@
       "period_name": "First Half 2024",
       "start_date": "2024-01-01",
       "end_date": "2024-06-30",
-      "company_id": [1, 2, 3]
+      "company_id": [
+        1,
+        2,
+        3
+      ]
     }
   },
   {
@@ -24,7 +28,11 @@
       "period_name": "Second Half 2024",
       "start_date": "2024-07-01",
       "end_date": "2025-07-30",
-      "company_id": [1, 2, 3]
+      "company_id": [
+        1,
+        2,
+        3
+      ]
     }
   },
   {
@@ -1079,11 +1087,22 @@
       "duration_unit": "months",
       "duration": 1,
       "add_assignees": false,
+      "is_template": true,
       "archive": false,
       "company_id": null,
-      "managers": [37],
-      "assignees": [12, 13, 68],
-      "key_result_id": [3, 2, 1]
+      "managers": [
+        37
+      ],
+      "assignees": [
+        12,
+        13,
+        68
+      ],
+      "key_result_id": [
+        3,
+        2,
+        1
+      ]
     }
   },
   {
@@ -1099,11 +1118,22 @@
       "duration_unit": "months",
       "duration": 1,
       "add_assignees": false,
+      "is_template": true,
       "archive": false,
       "company_id": null,
-      "managers": [37],
-      "assignees": [12, 13, 68],
-      "key_result_id": [3, 2, 1]
+      "managers": [
+        37
+      ],
+      "assignees": [
+        12,
+        13,
+        68
+      ],
+      "key_result_id": [
+        3,
+        2,
+        1
+      ]
     }
   },
   {
@@ -1119,11 +1149,22 @@
       "duration_unit": "months",
       "duration": 1,
       "add_assignees": false,
+      "is_template": true,
       "archive": false,
       "company_id": null,
-      "managers": [37],
-      "assignees": [12, 13, 68],
-      "key_result_id": [3, 2, 1]
+      "managers": [
+        37
+      ],
+      "assignees": [
+        12,
+        13,
+        68
+      ],
+      "key_result_id": [
+        3,
+        2,
+        1
+      ]
     }
   },
   {
@@ -1139,11 +1180,22 @@
       "duration_unit": "months",
       "duration": 1,
       "add_assignees": false,
+      "is_template": true,
       "archive": false,
       "company_id": null,
-      "managers": [37],
-      "assignees": [12, 13, 68],
-      "key_result_id": [3, 2, 1]
+      "managers": [
+        37
+      ],
+      "assignees": [
+        12,
+        13,
+        68
+      ],
+      "key_result_id": [
+        3,
+        2,
+        1
+      ]
     }
   },
   {
@@ -1398,7 +1450,11 @@
       "modified_by": 1,
       "is_active": true,
       "question_template": "Developer Question",
-      "company_id": [1, 2, 3]
+      "company_id": [
+        1,
+        2,
+        3
+      ]
     }
   },
   {
@@ -1476,7 +1532,10 @@
       "cyclic_feedback_period": null,
       "cyclic_next_start_date": null,
       "cyclic_next_end_date": null,
-      "colleague_id": [16, 18],
+      "colleague_id": [
+        16,
+        18
+      ],
       "subordinate_id": [],
       "employee_key_results_id": []
     }
@@ -1489,14 +1548,160 @@
       "created_by": 1,
       "modified_by": 1,
       "is_active": true,
-      "title": "Horilla Technical Meeting",
+      "title": "Engineering Sync",
       "date": "2025-07-12T04:30:00Z",
       "question_template": 1,
       "response": null,
       "show_response": false,
-      "employee_id": [12, 1, 37, 13],
-      "manager": [1],
-      "answer_employees": [12, 37, 13]
+      "employee_id": [
+        12,
+        1,
+        37,
+        13
+      ],
+      "manager": [
+        1
+      ],
+      "answer_employees": [
+        12,
+        37,
+        13
+      ]
+    }
+  },
+  {
+    "model": "pms.bonuspointsetting",
+    "pk": 1,
+    "fields": {
+      "model": "pms.models.EmployeeObjective",
+      "applicable_for": "members",
+      "bonus_for": "completed",
+      "field_1": "complition_date",
+      "conditions": "<=",
+      "field_2": "end_date",
+      "points": 50,
+      "is_active": true,
+      "company_id": 1
+    }
+  },
+  {
+    "model": "pms.bonuspointsetting",
+    "pk": 2,
+    "fields": {
+      "model": "pms.models.EmployeeKeyResult",
+      "applicable_for": "owner",
+      "bonus_for": "completed",
+      "field_1": "complition_date",
+      "conditions": "<=",
+      "field_2": "end_date",
+      "points": 25,
+      "is_active": true,
+      "company_id": 1
+    }
+  },
+  {
+    "model": "pms.bonuspointsetting",
+    "pk": 3,
+    "fields": {
+      "model": "pms.models.EmployeeObjective",
+      "applicable_for": "managers",
+      "bonus_for": "completed",
+      "field_1": "complition_date",
+      "conditions": "<=",
+      "field_2": "end_date",
+      "points": 30,
+      "is_active": false,
+      "company_id": 1
+    }
+  },
+  {
+    "model": "pms.bonuspointsetting",
+    "pk": 4,
+    "fields": {
+      "model": "pms.models.EmployeeObjective",
+      "applicable_for": "members",
+      "bonus_for": "completed",
+      "field_1": "complition_date",
+      "conditions": "<=",
+      "field_2": "end_date",
+      "points": 50,
+      "is_active": true,
+      "company_id": 2
+    }
+  },
+  {
+    "model": "pms.bonuspointsetting",
+    "pk": 5,
+    "fields": {
+      "model": "pms.models.EmployeeObjective",
+      "applicable_for": "members",
+      "bonus_for": "completed",
+      "field_1": "complition_date",
+      "conditions": "<=",
+      "field_2": "end_date",
+      "points": 50,
+      "is_active": true,
+      "company_id": 3
+    }
+  },
+  {
+    "model": "pms.employeebonuspoint",
+    "pk": 1,
+    "fields": {
+      "created_at": "2025-07-10T03:30:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 12,
+      "bonus_point": 50,
+      "instance": "Increase Sales",
+      "based_on": "Completed sales objective before end date",
+      "bonus_point_id": null
+    }
+  },
+  {
+    "model": "pms.employeebonuspoint",
+    "pk": 2,
+    "fields": {
+      "created_at": "2025-07-10T03:31:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 13,
+      "bonus_point": 25,
+      "instance": "Digital Marketing",
+      "based_on": "Key result completed on time",
+      "bonus_point_id": null
+    }
+  },
+  {
+    "model": "pms.employeebonuspoint",
+    "pk": 3,
+    "fields": {
+      "created_at": "2025-07-10T03:32:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 68,
+      "bonus_point": 40,
+      "instance": "Customer Satisfaction",
+      "based_on": "Exceeded customer satisfaction target",
+      "bonus_point_id": null
+    }
+  },
+  {
+    "model": "pms.employeebonuspoint",
+    "pk": 4,
+    "fields": {
+      "created_at": "2025-07-10T03:33:00.000Z",
+      "created_by": 1,
+      "modified_by": 1,
+      "is_active": true,
+      "employee_id": 37,
+      "bonus_point": 15,
+      "instance": "Team Collaboration",
+      "based_on": "Recognized for mentoring team members",
+      "bonus_point_id": null
     }
   }
 ]

@@ -1,45 +1,65 @@
 {% extends 'index.html' %}
 {% block content %}
-{% load i18n static %}
+    {% load i18n static %}
 
-<section class="oh-wrapper oh-main__topbar" style="padding-bottom: 1rem;">
-  <div class="oh-main__titlebar oh-main__titlebar--left oh-d-flex-column--resp oh-mb-3--small">
-    <h1 class="oh-main__titlebar-title fw-bold">{% trans "Employee Handbook" %}</h1>
-    <p class="text-muted mb-0" style="font-size: 13px;">
-      {% trans "Company policies, guidelines and procedures." %}
-    </p>
-  </div>
+    <div class="bg-white rounded-md shadow-card p-3">
+        <section class="oh-wrapper mb-3 p-3">
+            <div class="flex flex-wrap justify-between items-center gap-2">
+                <div>
+                    <h5 class="font-semibold text-sm">{% trans "Employee Handbook" %}</h5>
+                    <p class="text-xs text-[#565E6C]">{% trans "Company policies, guidelines and procedures." %}</p>
+                </div>
 
-  <div class="oh-main__titlebar oh-main__titlebar--right oh-d-flex-column--resp oh-mb-3--small">
-    <div class="oh-input-group oh-input__search-group mr-3">
-      <ion-icon name="search-outline" class="oh-input-group__icon oh-input-group__icon--left" role="img" aria-label="search outline"></ion-icon>
-      <input name="search" value="{{ search }}" type="text" placeholder="{% trans 'Search' %}"
-        class="oh-input oh-input__icon" autocomplete="off" aria-label="{% trans 'Search Input' %}"
-        hx-get="{% url 'handbook-list' %}" hx-target="#handbookContainer"
-        hx-trigger="keyup changed delay:.3s" hx-include="[name='category']" />
+                <div class="flex items-center flex-wrap gap-2">
+                    <div class="relative">
+                        <input
+                            type="text"
+                            name="search"
+                            value="{{ search }}"
+                            placeholder="{% trans 'Search' %}"
+                            aria-label="{% trans 'Search Input' %}"
+                            autocomplete="off"
+                            class="text-color-600 ps-8 p-1.5 pb-2 placeholder:text-xs w-full border border-dark-50 rounded-md focus-visible:outline-0 placeholder:text-dark-100 text-sm [transition:.3s] focus:border-primary-600"
+                            hx-get="{% url 'handbook-list' %}"
+                            hx-target="#handbookContainer"
+                            hx-trigger="keyup changed delay:.3s"
+                            hx-include="[name='category']"
+                        >
+                        <i class="fas fa-search absolute left-3 top-[1px] bottom-0 m-auto flex items-center opacity-50 text-xs"></i>
+                    </div>
+                    <select
+                        name="category"
+                        aria-label="{% trans 'Category' %}"
+                        class="p-1.5 pb-2 border border-dark-50 rounded-md text-sm min-w-[160px] focus-visible:outline-0 focus:border-primary-600"
+                        hx-get="{% url 'handbook-list' %}"
+                        hx-target="#handbookContainer"
+                        hx-trigger="change"
+                        hx-include="[name='search']"
+                    >
+                        <option value="">{% trans "All categories" %}</option>
+                        {% for value, label in categories %}
+                            <option value="{{ value }}" {% if value == selected_category %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if perms.employee_handbook.add_handbookdocument %}
+                        <button
+                            type="button"
+                            class="px-4 py-2 bg-brand-600 text-white rounded-md text-xs flex items-center gap-2 hover:bg-brand-800 transition duration-300"
+                            hx-get="{% url 'handbook-create' %}"
+                            hx-target="#objectCreateModalTarget"
+                            data-toggle="oh-modal-toggle"
+                            data-target="#objectCreateModal"
+                        >
+                            <img src="{% static 'horilla_theme/assets/img/icons/more.svg' %}" alt="" width="13" class="filter brightness-0 invert">
+                            {% trans "Add Entry" %}
+                        </button>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+
+        <div class="oh-wrapper" id="handbookContainer">
+            {% include 'employee_handbook/handbook_list.html' %}
+        </div>
     </div>
-    <select name="category" class="oh-select mr-3" style="min-width: 160px;"
-      hx-get="{% url 'handbook-list' %}" hx-target="#handbookContainer"
-      hx-trigger="change" hx-include="[name='search']">
-      <option value="">{% trans "All categories" %}</option>
-      {% for value, label in categories %}
-        <option value="{{ value }}" {% if value == selected_category %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    {% if perms.employee_handbook.add_handbookdocument %}
-      <div class="oh-main__titlebar-button-container">
-        <a hx-get="{% url 'handbook-create' %}" hx-target="#objectCreateModalTarget"
-          data-toggle="oh-modal-toggle" data-target="#objectCreateModal" class="oh-btn oh-btn--secondary">
-          <ion-icon name="add-outline"></ion-icon>
-          {% trans "Add Entry" %}
-        </a>
-      </div>
-    {% endif %}
-  </div>
-</section>
-
-<div class="oh-wrapper" id="handbookContainer">
-  {% include 'employee_handbook/handbook_list.html' %}
-</div>
-
 {% endblock content %}

@@ -18,7 +18,7 @@ from .scheduler import *
 from .zip import *
 
 # @login_required
-# @permission_required("backup.add_localbackup")
+# @permission_required("horilla_backup.add_localbackup")
 # def local_setup(request):
 #     """
 #     function used to setup local backup.
@@ -48,7 +48,7 @@ from .zip import *
 
 
 # @login_required
-# @permission_required("backup.change_localbackup")
+# @permission_required("horilla_backup.change_localbackup")
 # def local_Backup_stop_or_start(request):
 #     """
 #     function used to stop or start local backup.
@@ -76,7 +76,7 @@ from .zip import *
 
 
 # @login_required
-# @permission_required("backup.delete_localbackup")
+# @permission_required("horilla_backup.delete_localbackup")
 # def local_Backup_delete(request):
 #     """
 #     function used to delete local backup.
@@ -97,7 +97,7 @@ from .zip import *
 
 
 @login_required
-@permission_required("backup.add_localbackup")
+@permission_required("horilla_backup.add_localbackup")
 def gdrive_setup(request):
     """
     function used to setup gdrive backup.
@@ -148,7 +148,7 @@ def gdrive_setup(request):
 
 
 @login_required
-@permission_required("backup.change_localbackup")
+@permission_required("horilla_backup.change_localbackup")
 def gdrive_Backup_stop_or_start(request):
     """
     function used to stop or start gdrive backup.
@@ -165,18 +165,18 @@ def gdrive_Backup_stop_or_start(request):
         if gdive_backup.active == True:
             gdive_backup.active = False
             stop_gdrive_backup_job()
-            message = "Gdrive Backup Automation Stopped Successfully."
+            message = "Google Drive Backup Automation Stopped Successfully."
         else:
             gdive_backup.active = True
             start_gdrive_backup_job()
-            message = "Gdrive Backup Automation Started Successfully."
+            message = "Google Drive Backup Automation Started Successfully."
         gdive_backup.save()
         messages.success(request, _(message))
     return redirect("gdrive")
 
 
 @login_required
-@permission_required("backup.delete_localbackup")
+@permission_required("horilla_backup.delete_localbackup")
 def gdrive_Backup_delete(request):
     """
     function used to delete gdrive backup.
@@ -191,5 +191,7 @@ def gdrive_Backup_delete(request):
         gdrive_backup = GoogleDriveBackup.objects.first()
         gdrive_backup.delete()
         stop_gdrive_backup_job()
-        messages.success(request, _("Gdrive Backup Automation Removed Successfully."))
+        messages.success(
+            request, _("Google Drive Backup Automation Removed Successfully.")
+        )
     return redirect("gdrive")

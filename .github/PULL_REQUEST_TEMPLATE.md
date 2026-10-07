@@ -1,29 +1,14 @@
-##NOTE: this file should be inside .github folder in root folder
-
 ## Description
 
-Please include a summary of the change. List any dependencies that are required for this change.
+<!-- What does this PR change, and why? -->
 
-## Ticket Link
+## Checklist
 
-## Summary of Changes
+- [ ] **This PR targets `dev/v2.0`, not `2.0`.** GitHub defaults new PRs to `2.0` (the repo default) — change the base branch to `dev/v2.0` before submitting.
+- [ ] I've followed the coding conventions in [CONTRIBUTING.md](../CONTRIBUTING.md) (Black + isort, Horilla decorators/`HorillaModel` patterns, etc.)
+- [ ] CI (Docker CI + Quality) passes
+- [ ] I've linked any related issues
 
-- [x]
-- []
--
+## Related issues
 
-## Additional implementation details (OPTIONAL)
-
-- [x]
-- []
--
-
-## Deployment Notes (OPTIONAL)
-
-- []
-
-## Screenshot
-
-## Before
-
-## After
+<!-- e.g. Closes #123 -->

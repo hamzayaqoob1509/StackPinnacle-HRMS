@@ -36,7 +36,7 @@
         <div class="oh-sticky-dropdown--header">
             <div class="oh-dropdown" x-data="{open: false}">
                 <button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-                        role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+                        role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
                 <div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
                     <ul class="oh-dropdown__items" id="roratingWorkTypeCells">
                     </ul>
@@ -95,7 +95,7 @@
                             <div class="oh-profile oh-profile--md">
                                 <div class="oh-profile__avatar mr-1">
                                     <img src="{{rwork_type.employee_id.get_avatar}}" class="oh-profile__image"
-                                        alt="Username" />
+                                        alt="{{ rwork_type.employee_id }}" />
                                 </div>
                                 <span class="oh-profile__name oh-text--dark">{{rwork_type.employee_id}}</span>
                             </div>
@@ -151,7 +151,7 @@
                                             <form hx-confirm="{% trans 'Do you want to archive this rotating work type assign?' %}"
                                                 hx-get="{% url 'rotating-work-type-assign-archive' rwork_type.id %}?{{pd}}"
                                                 hx-target="#view-container" style="width:100%">
-                                                <button class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                <button class="oh-btn oh-btn--danger w-100"
                                                     title="{% trans 'Archive' %}">
                                                     <ion-icon name="archive"></ion-icon>
                                                 </button>
@@ -160,7 +160,7 @@
                                             <form hx-confirm="{% trans 'Do you want to un-archive this rotating work type assign?' %}"
                                                 hx-get="{% url 'rotating-work-type-assign-archive' rwork_type.id %}?{{pd}}"
                                                 hx-target="#view-container" style="width:100%">
-                                                <button class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                                <button class="oh-btn oh-btn--danger w-100"
                                                     title="{% trans 'Un-Archive' %}">
                                                     <ion-icon name="archive"></ion-icon>
                                                 </button>
@@ -173,7 +173,7 @@
                                             hx-post="{% url 'rotating-work-type-assign-delete' rwork_type.id %}?{{pd}}"
                                             hx-target="#view-container" style="width:100%">
                                             {% csrf_token %}
-                                            <button type="submit" class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                            <button type="submit" class="oh-btn oh-btn--danger w-100"
                                                 title="{% trans 'Remove' %}">
                                                 <ion-icon name="trash-outline"></ion-icon>
                                             </button>
@@ -262,21 +262,17 @@
         ids = makeRWorktypeListUnique(ids);
         selectedCount = ids.length;
 
-        getCurrentLanguageCode(function (code) {
-            languageCode = code;
-            var message = rowMessages[languageCode];
-            $("#selectedRWorktypes").attr("data-ids", JSON.stringify(ids));
-            if (selectedCount === 0) {
-                $("#selectedShowRWorktypes").css("display", "none");
-                $("#exportRWorktypes").css("display", "none");
-                $("#unselectAllRWorktypes").css("display", "none");
-            } else {
-                $("#exportRWorktypes").css("display", "inline-flex");
-                $("#unselectAllRWorktypes").css("display", "inline-flex");
-                $("#selectedShowRWorktypes").css("display", "inline-flex");
-                $("#selectedShowRWorktypes").text(selectedCount + " - " + message);
-            }
-        });
+        $("#selectedRWorktypes").attr("data-ids", JSON.stringify(ids));
+        if (selectedCount === 0) {
+            $("#selectedShowRWorktypes").css("display", "none");
+            $("#exportRWorktypes").css("display", "none");
+            $("#unselectAllRWorktypes").css("display", "none");
+        } else {
+            $("#exportRWorktypes").css("display", "inline-flex");
+            $("#unselectAllRWorktypes").css("display", "inline-flex");
+            $("#selectedShowRWorktypes").css("display", "inline-flex");
+            $("#selectedShowRWorktypes").text(selectedCount + " - " + i18nMessages.selected);
+        }
     }
 
     $(document).ready(function () {
@@ -391,11 +387,12 @@
             });
         });
     });
-    // toggle columns //
+
     toggleColumns("rotating-work-type-table", "roratingWorkTypeCells");
     localStorageroratingWorkTypeCells = localStorage.getItem(
         "rotating_work_type_tab"
     );
+
     if (!localStorageroratingWorkTypeCells) {
         $("#roratingWorkTypeCells").find("[type=checkbox]").prop("checked", true);
     }

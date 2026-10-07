@@ -23,7 +23,7 @@
     <div class="oh-sticky-dropdown--header">
         <div class="oh-dropdown" x-data="{open: false}">
             <button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-                    role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+                    role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
             <div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
                 <ul class="oh-dropdown__items" id="CandidateViewCells">
                 </ul>
@@ -48,7 +48,7 @@
                     <div class="oh-sticky-table__th {% if request.sort_option.order == '-name' %}arrow-up {% elif request.sort_option.order == 'name' %}arrow-down {% else %} arrow-up-down {% endif %}"
                         hx-target="#candidates" hx-get="{% url 'candidate-filter' %}?{{pd}}&orderby=name">{% trans "Candidate" %}</div>
                     <div data-cell-index="1" data-cell-title='{% trans "Email" %}' class="oh-sticky-table__th">{% trans "Email" %}</div>
-                    <div data-cell-index="2" data-cell-title='{% trans "Date of joining" %}'
+                    <div data-cell-index="2" data-cell-title="{% trans 'Date of joining' %}"
                         class="oh-sticky-table__th {% if request.sort_option.order == '-joining_date' %}arrow-up {% elif request.sort_option.order == 'joining_date' %}arrow-down {% else %} arrow-up-down {% endif %}"
                         hx-target="#candidates" hx-get="{% url 'candidate-filter' %}?{{pd}}&orderby=joining_date">{% trans "Date of joining" %}</div>
                     <div data-cell-index="3" data-cell-title='{% trans "Probation ends" %}'
@@ -56,7 +56,7 @@
                         hx-target="#candidates" hx-get="{% url 'candidate-filter' %}?{{pd}}&orderby=probation_end">{% trans "Probation ends" %}</div>
                     <div data-cell-index="4" data-cell-title='{% trans "Job position" %}' class="oh-sticky-table__th">{% trans "Job position" %}</div>
                     <div data-cell-index="5" data-cell-title='{% trans "Recruitment" %}' class="oh-sticky-table__th">{% trans "Recruitment" %}</div>
-                    <div data-cell-index="6" data-cell-title='{% trans "Offer letter" %}' class="oh-sticky-table__th">{% trans "Offer letter" %}</div>
+                    <div data-cell-index="6" data-cell-title="{% trans 'Offer letter' %}" class="oh-sticky-table__th">{% trans "Offer letter" %}</div>
                     <div class="oh-sticky-table__th oh-sticky-table__right" style="width: 290px;">{% trans "Actions" %}
                     </div>
                 </div>
@@ -124,7 +124,7 @@
                                         class="oh-btn oh-btn--light w-100" data-toggle="oh-modal-toggle"
                                         data-target="#objectCreateModal">
                                         <ion-icon name="mail-open-outline" role="img" class="md hydrated"
-                                            aria-label="mail open outline">
+                                            aria-label="{% trans 'mail open outline' %}">
                                         </ion-icon>
                                     </button>
                                 {% endif %}
@@ -149,8 +149,8 @@
                                         title="{% trans 'Send Portal / Start onboarding' %}" data-toggle="oh-modal-toggle"
                                         disabled><ion-icon name="link-outline"></ion-icon></a>
                                 {% endif %}
-                                <a class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
-                                    onclick="return confirm('{% trans " Do you want to delete this record" %}?')"
+                                <a class="oh-btn oh-btn--danger w-100"
+                                    onclick="return confirm('{% trans " Do you want to delete this record"|escapejs %}?')"
                                     id="delete-link" href="{% url 'candidate-delete' candidate.id %}"
                                     title="{% trans 'Delete' %}">
                                     <ion-icon name="trash-outline"></ion-icon>
@@ -306,7 +306,7 @@
             <span class="oh-modal__dialog-title" id="sendMailModalLabel">
                 <h5>{% trans 'Send Mail' %}</h5>
             </span>
-            <button class="oh-modal__close" aria-label="Close"><ion-icon name="close-outline"></ion-icon></button>
+            <button class="oh-modal__close" aria-label="{% trans 'Close' %}"><ion-icon name="close-outline"></ion-icon></button>
         </div>
         <div class="oh-modal__dialog-body" id="mail-content"></div>
     </div>
@@ -314,7 +314,7 @@
 <div class="oh-modal" id="rejectReasonModal" role="dialog" aria-hidden="true">
     <div class="oh-modal__dialog" style="max-width: 550px">
         <div class="oh-modal__dialog-header">
-            <button type="button" class="oh-modal__close" aria-label="Close"><ion-icon
+            <button type="button" class="oh-modal__close" aria-label="{% trans 'Close' %}"><ion-icon
                     name="close-outline"></ion-icon></button>
         </div>
 
@@ -324,45 +324,6 @@
 
 
 <script>
-    var archive_CanMessages = {
-        ar: "هل ترغب حقًا في أرشفة جميع المرشحين المحددين؟",
-        de: "Möchten Sie wirklich alle ausgewählten Kandidaten archivieren?",
-        es: "¿Realmente deseas archivar a todos los candidatos seleccionados?",
-        en: "Do you really want to archive all the selected candidates?",
-        fr: "Voulez-vous vraiment archiver tous les candidats sélectionnés?",
-    };
-
-    var unarchive_CanMessages = {
-        ar: "هل ترغب حقًا في إلغاء أرشفة جميع المرشحين المحددين؟",
-        de: "Möchten Sie wirklich alle ausgewählten Kandidaten aus der Archivierung nehmen?",
-        es: "¿Realmente deseas desarchivar a todos los candidatos seleccionados?",
-        en: "Do you really want to unarchive all the selected candidates?",
-        fr: "Voulez-vous vraiment désarchiver tous les candidats sélectionnés?",
-    };
-
-    var delete_CanMessages = {
-        ar: "هل ترغب حقًا في حذف جميع المرشحين المحددين؟",
-        de: "Möchten Sie wirklich alle ausgewählten Kandidaten löschen?",
-        es: "¿Realmente deseas eliminar a todos los candidatos seleccionados?",
-        en: "Do you really want to delete all the selected candidates?",
-        fr: "Voulez-vous vraiment supprimer tous les candidats sélectionnés?",
-    };
-
-    var noRowMessages = {
-        ar: "لم يتم تحديد أي صفوف.",
-        de: "Es wurden keine Zeilen ausgewählt.",
-        es: "No se han seleccionado filas.",
-        en: "No rows have been selected.",
-        fr: "Aucune ligne n'a été sélectionnée.",
-    };
-
-    var rowMessages = {
-        ar: " تم الاختيار",
-        de: " Ausgewählt",
-        es: " Seleccionado",
-        en: " Selected",
-        fr: " Sélectionné",
-    };
     function makeListUnique1(list) {
         return Array.from(new Set(list));
     }
@@ -413,7 +374,7 @@
         $("#unselectAllInstances, #selectedCandidate, #exportCandidates").hide();
         if (ids.length) {
             $("#unselectAllInstances, #selectedCandidate, #exportCandidates").show();
-            $("#selectedCandidate").text("{% trans "Selected" %}" + " -" + ids.length);
+            $("#selectedCandidate").text("{% trans 'Selected'|escapejs %}" + " -" + ids.length);
         }
     }
 
@@ -432,43 +393,11 @@
     });
 
 
-    function getCurrentLanguageCode(callback) {
-        var languageCode = $("#main-section-data").attr("data-lang");
-        var allowedLanguageCodes = ["ar", "de", "es", "en", "fr"];
-        if (allowedLanguageCodes.includes(languageCode)) {
-            callback(languageCode);
-        } else {
-            $.ajax({
-                type: "GET",
-                url: "/employee/get-language-code/",
-                success: function (response) {
-                    var ajaxLanguageCode = response.language_code;
-                    $("#main-section-data").attr("data-lang", ajaxLanguageCode);
-                    callback(
-                        allowedLanguageCodes.includes(ajaxLanguageCode)
-                            ? ajaxLanguageCode
-                            : "en"
-                    );
-                },
-                error: function () {
-                    callback("en");
-                },
-            });
-        }
-    }
 
     $(document).ready(function () {
-        var excelMessages = {
-            ar: "هل ترغب في تنزيل ملف Excel؟",
-            de: "Möchten Sie die Excel-Datei herunterladen?",
-            es: "¿Desea descargar el archivo de Excel?",
-            en: "Do you want to download the excel file?",
-            fr: "Voulez-vous télécharger le fichier Excel?",
-        };
         var ids = JSON.parse($("#selectedInstances").attr("data-ids") || "[]");
         var uniqueIds = makeListUnique1(ids);
         var selectedCount = uniqueIds.length;
-        var message1 = rowMessages[languageCode];
         $("#selectAllInstances").click(function () {
             $("#selectedInstances").attr("data-clicked", 1);
             var savedFilters = JSON.parse(localStorage.getItem("savedFilters"));
@@ -531,49 +460,45 @@
         });
         $("#exportCandidates").click(function (e) {
             var currentDate = new Date().toISOString().slice(0, 10);
-            var languageCode = null;
             ids = [];
             ids.push($("#selectedInstances").attr("data-ids"));
             ids = JSON.parse($("#selectedInstances").attr("data-ids"));
-            getCurrentLanguageCode(function (code) {
-                languageCode = code;
-                var confirmMessage = excelMessages[languageCode];
-                Swal.fire({
-                    text: confirmMessage,
-                    icon: "question",
-                    showCancelButton: true,
-                    confirmButtonColor: "#008000",
-                    cancelButtonColor: "#d33",
-                    confirmButtonText: "Confirm",
-                }).then(function (result) {
-                    if (result.isConfirmed) {
-                        $.ajax({
-                            type: "GET",
-                            url: "/recruitment/candidate-info-export",
-                            data: {
-                                ids: JSON.stringify(ids),
-                            },
-                            dataType: "binary",
-                            xhrFields: {
-                                responseType: "blob",
-                            },
-                            success: function (response) {
-                                const file = new Blob([response], {
-                                    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                });
-                                const url = URL.createObjectURL(file);
-                                const link = document.createElement("a");
-                                link.href = url;
-                                link.download = "Candidate_file_" + currentDate + ".xlsx";
-                                document.body.appendChild(link);
-                                link.click();
-                            },
-                            error: function (xhr, textStatus, errorThrown) {
-                                console.error("Error downloading file:", errorThrown);
-                            },
-                        });
-                    }
-                });
+            Swal.fire({
+                text: i18nMessages.downloadTemplate,
+                icon: "question",
+                showCancelButton: true,
+                confirmButtonColor: "#008000",
+                cancelButtonColor: "#6c757d",
+                confirmButtonText: i18nMessages.confirm,
+                cancelButtonText: i18nMessages.cancel,
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $.ajax({
+                        type: "GET",
+                        url: "/recruitment/candidate-info-export",
+                        data: {
+                            ids: JSON.stringify(ids),
+                        },
+                        dataType: "binary",
+                        xhrFields: {
+                            responseType: "blob",
+                        },
+                        success: function (response) {
+                            const file = new Blob([response], {
+                                type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            });
+                            const url = URL.createObjectURL(file);
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = "Candidate_file_" + currentDate + ".xlsx";
+                            document.body.appendChild(link);
+                            link.click();
+                        },
+                        error: function (xhr, textStatus, errorThrown) {
+                            console.error("Error downloading file:", errorThrown);
+                        },
+                    });
+                }
             });
         });
     });

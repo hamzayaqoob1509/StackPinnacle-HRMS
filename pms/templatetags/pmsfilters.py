@@ -16,9 +16,8 @@ Filters:
 
 from django.template.defaultfilters import register
 
-from base.methods import filtersubordinatesemployeemodel
 from employee.models import Employee, EmployeeWorkInformation
-from pms.models import AnonymousFeedback, EmployeeObjective, Feedback, Objective
+from pms.models import AnonymousFeedback, Answer, EmployeeObjective, Feedback, Objective
 
 
 @register.filter(name="replace")
@@ -117,6 +116,17 @@ def is_feedback_answer(feedback, user):
     return False
 
 
+@register.filter(name="has_user_answered")
+def has_user_answered(feedback, user):
+    """
+    Returns True if the given user has already submitted an answer for this feedback.
+    """
+    employee = Employee.objects.filter(employee_user_id=user).first()
+    if not employee:
+        return False
+    return Answer.objects.filter(feedback_id=feedback, employee_id=employee).exists()
+
+
 @register.filter(name="is_anonymous_feedback_owner")
 def is_anonymous_feedback_owner(user, feedback):
     """
@@ -125,29 +135,3 @@ def is_anonymous_feedback_owner(user, feedback):
     if str(user.id) == feedback.anonymous_feedback_id:
         return True
     return False
-
-
-@register.filter(name="assignees_count")
-def assignees_count(objective, request):
-    """
-    Args:
-        objective: The objective for which to retrieve assignees.
-        user: The user requesting the assignees.
-    Returns:
-        int: The count of assignees for the given objective.
-    """
-
-    if (
-        request.user.has_perm("pms.view_objective")
-        or objective.managers.filter(id=request.user.employee_get.id).exists()
-    ):
-        return objective.employee_objective.count()
-    sub_employees = filtersubordinatesemployeemodel(
-        request,
-        queryset=Employee.objects.filter(is_active=True),
-    )
-    if sub_employees.exists():
-        subordinate_objectives = objective.employee_objective.filter(
-            employee_id__in=sub_employees
-        )
-    return subordinate_objectives.count()

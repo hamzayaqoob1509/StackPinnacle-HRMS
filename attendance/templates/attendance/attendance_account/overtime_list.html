@@ -18,7 +18,7 @@
 		<div class="oh-sticky-dropdown--header m-0">
 			<div class="oh-dropdown" x-data="{open: false}">
 			<button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-				role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+				role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
 			<div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
 				<ul class="oh-dropdown__items" id="fieldContainerTable">
 				</ul>
@@ -52,7 +52,7 @@
 				<div class="oh-sticky-table__tbody">
 					{% for ot in accounts %}
 						{% with dates=ot.month_days %}
-							<div class="oh-sticky-table__tr" {% if perms.attendance.view_attendance or request.user|is_reportingmanager %} hx-get="{% url 'attendance-search' %}?employee_id={{ot.employee_id.id}}&attendance_validated=true&attendance_date__gte={{ dates.0|date:"Y-m-d" }}&attendance_date__lte={{ dates.1|date:"Y-m-d" }}" hx-target="#ot-table" onclick="hiding()" {% else %} hx-get="{% url 'filter-own-attendance' %}?employee_id={{ot.employee_id.id}}&attendance_validated=true&attendance_date__gte={{ dates.0|date:"Y-m-d" }}&attendance_date__lte={{ dates.1|date:"Y-m-d" }}" hx-target="#ot-table" onclick="hiding()" {% endif %}  draggable="true" >
+							<div class="oh-sticky-table__tr" {% if perms.attendance.view_attendance or request.user|is_reportingmanager %} hx-get="{% url 'attendance-search' %}?employee_id={{ot.employee_id.id}}&attendance_validated=True&attendance_date__gte={{ dates.0|date:"Y-m-d" }}&attendance_date__lte={{ dates.1|date:"Y-m-d" }}" hx-target="#ot-table" onclick="hiding()" {% else %} hx-get="{% url 'filter-own-attendance' %}?employee_id={{ot.employee_id.id}}&attendance_validated=True&attendance_date__gte={{ dates.0|date:"Y-m-d" }}&attendance_date__lte={{ dates.1|date:"Y-m-d" }}" hx-target="#ot-table" onclick="hiding()" {% endif %}  draggable="true" >
 								<div  class="oh-sticky-table__sd" onclick="event.stopPropagation();">
 									<div class="centered-div">
 									<input
@@ -99,7 +99,7 @@
 													hx-post="{% url 'attendance-overtime-delete' ot.id  %}?{{pd}}"
 													hx-target="#ot-table" class='w-50'>
 													{% csrf_token %}
-													<button type='submit' class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"   title="{% trans 'Remove' %}"><ion-icon name="trash-outline"></ion-icon></button>
+													<button type='submit' class="oh-btn oh-btn--danger w-100"   title="{% trans 'Remove' %}"><ion-icon name="trash-outline"></ion-icon></button>
 												</form>
 											{% endif %}
 										</div>

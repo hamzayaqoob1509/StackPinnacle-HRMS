@@ -10,9 +10,12 @@ from typing import Any
 from django import forms
 from django.contrib import messages
 from django.template.loader import render_to_string
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.forms import ModelForm
 from employee.forms import MultipleFileField
+from employee.models import Employee
 from horilla import horilla_middlewares
 from notifications.signals import notify
 from offboarding.models import (
@@ -33,6 +36,8 @@ class OffboardingForm(ModelForm):
     """
 
     verbose_name = "Offboarding"
+
+    cols = {"title": 12, "description": 12, "managers": 12, "status": 12}
 
     class Meta:
         model = Offboarding
@@ -55,10 +60,12 @@ class OffboardingStageForm(ModelForm):
 
     verbose_name = "Stage"
 
+    cols = {"title": 12, "type": 12, "managers": 12}
+
     class Meta:
         model = OffboardingStage
         fields = "__all__"
-        exclude = ["offboarding_id", "is_active"]
+        exclude = ["is_active"]
 
     def as_p(self):
         """
@@ -80,6 +87,10 @@ class OffboardingEmployeeForm(ModelForm):
         model = OffboardingEmployee
         fields = "__all__"
         exclude = ["notice_period", "unit", "is_active"]
+        widgets = {
+            "notice_period_starts": forms.DateInput(attrs={"type": "date"}),
+            "notice_period_ends": forms.DateInput(attrs={"type": "date"}),
+        }
 
     def as_p(self):
         """
@@ -123,7 +134,7 @@ class StageSelectForm(ModelForm):
         super().__init__(*args, **kwargs)
         attrs = self.fields["stage_id"].widget.attrs
         attrs["onchange"] = "offboardingUpdateStage($(this))"
-        attrs["class"] = "w-100 oh-select-custom"
+        attrs["class"] = "w-100 oh-custom-select"
         self.fields["stage_id"].widget.attrs.update(attrs)
         self.fields["stage_id"].empty_label = None
         self.fields["stage_id"].queryset = OffboardingStage.objects.filter(
@@ -182,9 +193,9 @@ class TaskForm(ModelForm):
 
     verbose_name = "Offboarding Task"
     tasks_to = forms.ModelMultipleChoiceField(
-        queryset=OffboardingEmployee.objects.all(),
-        required=False,
+        queryset=OffboardingEmployee.objects.all(), required=False, label=_("Task To")
     )
+    cols = {"title": 12, "managers": 12, "stage_id": 12, "tasks_to": 12}
 
     class Meta:
         model = OffboardingTask
@@ -196,12 +207,15 @@ class TaskForm(ModelForm):
         self.fields["stage_id"].empty_label = "All Stages in Offboarding"
         self.fields["managers"].empty_label = None
         if not self.instance.pk:
-            queryset = OffboardingEmployee.objects.filter(
-                stage_id__offboarding_id=OffboardingStage.objects.filter(
-                    id=self.initial.get("stage_id")
+            stage = OffboardingStage.objects.filter(
+                id=self.initial.get("stage_id")
+            ).first()
+            queryset = (
+                OffboardingEmployee.objects.filter(
+                    stage_id__offboarding_id=stage.offboarding_id
                 )
-                .first()
-                .offboarding_id
+                if stage
+                else OffboardingEmployee.objects.none()
             )
             self.fields["tasks_to"].queryset = queryset
 
@@ -229,6 +243,14 @@ class ResignationLetterForm(ModelForm):
     Resignation Letter
     """
 
+    cols = {
+        "employee_id": 12,
+        "title": 12,
+        "description": 12,
+        "planned_to_leave_on": 12,
+        "status": 12,
+    }
+
     description = forms.CharField(
         widget=forms.Textarea(attrs={"data-summernote": "", "style": "display:none;"}),
         label="Description",
@@ -250,21 +272,29 @@ class ResignationLetterForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["planned_to_leave_on"].widget = forms.DateInput(
+            attrs={"type": "date", "class": "oh-input w-100"}
+        )
         exclude = []
         if self.instance.pk:
             exclude.append("employee_id")
             self.verbose_name = (
-                self.instance.employee_id.get_full_name() + " Resignation Letter"
+                self.instance.employee_id.get_full_name() + "'s Resignation Letter"
             )
 
         request = getattr(horilla_middlewares._thread_locals, "request", None)
-
-        if request and not request.user.has_perm("offboarding.add_offboardingemployee"):
-            exclude = exclude + [
-                "employee_id",
-                "status",
-            ]
+        if request and not request.user.has_perm("offboarding.add_resignationletter"):
+            exclude = exclude + ["status"]
+            self.fields["employee_id"].queryset = Employee.objects.filter(
+                employee_user_id=request.user
+            )
+            self.fields["employee_id"].initial = request.user.employee_get
             self.instance.employee_id = request.user.employee_get
+        if request and request.user.has_perm("offboarding.add_resignationletter"):
+            if request.GET.get("emp_id"):
+                emp_id = request.GET.get("emp_id")
+                self.fields["employee_id"].queryset = Employee.objects.filter(id=emp_id)
+                self.fields["employee_id"].initial = emp_id
         exclude = list(set(exclude))
         for field in exclude:
             del self.fields[field]
@@ -273,29 +303,29 @@ class ResignationLetterForm(ModelForm):
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         instance = self.instance
         if (
-            not request.user.has_perm("offboarding.add_offboardingemployee")
+            not request.user.has_perm("offboarding.add_resignationletter")
             and instance.status == "requested"
-        ) or request.user.has_perm("add_offboardingemployee"):
+        ) or request.user.has_perm("offboarding.add_resignationletter"):
             instance = super().save(commit)
         else:
             messages.info(
-                request, "You cannot edit a request that has been rejected/approved"
+                request, _("You cannot edit a request that has been rejected/approved")
             )
+            return None
 
         if (
             instance.status == "requested"
             and request
-            and not request.user.has_perm("offboarding.add_offboardingemployee")
+            and not request.user.has_perm("offboarding.add_resignationletter")
         ):
             with contextlib.suppress(Exception):
                 notify.send(
                     request.user.employee_get,
                     recipient=self.instance.employee_id.get_reporting_manager().employee_user_id,
-                    verb=f"{self.instance.employee_id.get_full_name()} requested for resignation.",
-                    verb_ar=f"",
-                    verb_de=f"",
-                    verb_es=f"",
-                    verb_fr=f"",
+                    verb=gettext_noop("%(get_full_name)s requested for resignation."),
+                    verb_params={
+                        "get_full_name": str(self.instance.employee_id.get_full_name())
+                    },
                     redirect="#",
                     icon="information",
                 )

@@ -1,13 +1,17 @@
 from django.db.models import ProtectedError, Q
 from django.http import Http404
+from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accessibility.methods import check_is_accessible
 from employee.filters import (
     DisciplinaryActionFilter,
     DocumentRequestFilter,
@@ -21,15 +25,18 @@ from employee.models import (
     EmployeeType,
     EmployeeWorkInformation,
     Policy,
+    ProfileEditFeature,
 )
-from employee.views import work_info_export, work_info_import
-from horilla.decorators import owner_can_enter
+from employee.views import can_access_document, work_info_export, work_info_import
+from horilla.decorators import check_manager
 from horilla_api.api_decorators.base.decorators import permission_required
+from horilla_api.api_methods.base.pagination import HorillaPageNumberPagination
 from horilla_api.api_methods.employee.methods import get_next_badge_id
 from horilla_documents.models import Document, DocumentRequest
 from notifications.signals import notify
 
 from ...api_decorators.base.decorators import (
+    approver_permission_required,
     manager_or_owner_permission_required,
     manager_permission_required,
 )
@@ -43,6 +50,7 @@ from ...api_serializers.employee.serializers import (
     EmployeeBankDetailsSerializer,
     EmployeeListSerializer,
     EmployeeSelectorSerializer,
+    EmployeeSelfSerializer,
     EmployeeSerializer,
     EmployeeTypeSerializer,
     EmployeeWorkInformationSerializer,
@@ -109,7 +117,8 @@ class EmployeeAPIView(APIView):
             ).get(pk=pk)
         except Employee.DoesNotExist:
             return Response(
-                {"error": "Employee does not exist"}, status=status.HTTP_404_NOT_FOUND
+                {"error": _("Employee does not exist")},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         # If user has global view permission
@@ -129,10 +138,10 @@ class EmployeeAPIView(APIView):
             return Response(serializer.data)
 
         return Response(
-            {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
+            {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
         )
 
-        # paginator = PageNumberPagination()
+        # paginator = HorillaPageNumberPagination()
         # if request.user.has_perm('employee.view_employee'):
         #     employees_queryset = Employee.objects.all()
         # elif request.user.employee_get.get_subordinate_employees():
@@ -158,18 +167,69 @@ class EmployeeAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request, pk):
+        """
+        Update an employee.
+
+        Who may edit whom is unchanged: yourself, anyone reporting to you, or
+        anyone at all with ``employee.change_employee``. (Note the direction of
+        the manager check -- ``employee`` is the *target*, so this reads "is the
+        caller the target's manager". It permits manager -> subordinate, which
+        is correct; it has been misread as the reverse more than once.)
+
+        What changed is which fields *you* may write on *your own* record.
+        Editing yourself now goes through an allowlist, because
+        ``fields = "__all__"`` let a plain employee set ``is_active`` or
+        ``badge_id`` on themselves while updating their phone number, and it
+        ignored the profile-edit switch the web UI honours.
+
+        Two limits of that, both settled deliberately rather than overlooked.
+
+        **Managers keep the full serializer.** A reporting manager can still
+        set ``is_active`` or ``badge_id`` on a subordinate through this path.
+        That was reviewed and kept: editing a report is treated as a full-trust
+        capability here, and ``test_manager_can_edit_subordinate`` pins it. If
+        that view changes, the change is a manager allowlist alongside
+        ``EmployeeSelfSerializer``, not a tweak to this branch.
+
+        **Self-edit checks the global switch only.** The web additionally
+        requires the employee to be in the per-employee ``DefaultAccessibility``
+        grant for ``profile_edit``, so this endpoint stays more permissive than
+        the UI it mirrors. Also deliberate, and deferred rather than dismissed:
+        the toggle that is supposed to populate that grant creates the row with
+        an empty employee list (reported in #1243), so adding the check today
+        would disable self-service editing for every install whose admin has
+        not separately configured Accessibility. Add it once that is fixed, and
+        the two surfaces agree.
+        """
         user = request.user
-        employee = Employee.objects.get(pk=pk)
-        if (
-            employee
-            in [user.employee_get, request.user.employee_get.get_reporting_manager()]
-        ) or user.has_perm("employee.change_employee"):
-            serializer = EmployeeSerializer(employee, data=request.data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"error": "You don't have permission"}, status=400)
+        employee = get_object_or_404(Employee, pk=pk)
+
+        is_hr = user.has_perm("employee.change_employee")
+        is_self = employee == user.employee_get
+        is_their_manager = employee.get_reporting_manager() == user.employee_get
+
+        if not (is_hr or is_self or is_their_manager):
+            return Response({"error": _("You don't have permission")}, status=400)
+
+        if is_self and not is_hr:
+            # Self-service profile editing is a feature an admin can switch
+            # off. base/views.py and the context processor both read a missing
+            # row as "off"; the API ignored the toggle altogether, so it was
+            # more permissive than the UI it mirrors.
+            if not ProfileEditFeature.objects.filter(is_enabled=True).exists():
+                return Response(
+                    {"error": _("Profile editing is disabled.")},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            serializer_class = EmployeeSelfSerializer
+        else:
+            serializer_class = EmployeeSerializer
+
+        serializer = serializer_class(employee, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @method_decorator(permission_required("employee.delete_employee"))
     def delete(self, request, pk):
@@ -178,11 +238,53 @@ class EmployeeAPIView(APIView):
             employee.delete()
         except Employee.DoesNotExist:
             return Response(
-                {"error": "Employee does not exist"}, status=status.HTTP_404_NOT_FOUND
+                {"error": _("Employee does not exist")},
+                status=status.HTTP_404_NOT_FOUND,
             )
         except ProtectedError as e:
             return Response({"error": str(e)}, status=status.HTTP_204_NO_CONTENT)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def directory_is_accessible(request):
+    """
+    Whether this caller may browse the employee directory.
+
+    Mirrors what ``@enter_if_accessible(feature="employee_view")`` does for the
+    web view, so one setting governs both surfaces.
+
+    Worth knowing: ``check_is_accessible`` returns True when the feature has no
+    ``DefaultAccessibility`` row, so an unconfigured install grants the
+    directory to everyone -- that is the web's existing default, not something
+    introduced here. Configure the feature to restrict it.
+
+    Only ever widens which *rows* are listed; the payload is unchanged.
+    Be clear about what that payload is, though, because widening who can see
+    it is the point of this function: ``EmployeeListSerializer`` returns id,
+    first and last name, job position, avatar, **email**, and the row ids of
+    the employee's work-information and bank-details records.
+
+    The two ids are safe to hand out -- ``EmployeeWorkInformationAPIView.get``
+    and ``EmployeeBankDetailsAPIView.get`` each re-check that the caller is the
+    owner, their reporting manager, or holds the matching view permission, so
+    knowing an id grants nothing. Salary, address and bank particulars stay
+    behind those checks.
+
+    The email does not have that protection: granting this feature publishes
+    every colleague's address to every grantee. That is the same set the web
+    directory shows, so it is not new exposure relative to the web -- but it is
+    new exposure relative to what this endpoint returned before, and it is
+    worth deciding deliberately rather than inheriting.
+    """
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+    session_key = getattr(request.session, "session_key", None)
+    if not session_key:
+        return False
+    return check_is_accessible(
+        "employee_view", session_key + "accessibility_filter", employee
+    )
 
 
 class EmployeeListAPIView(APIView):
@@ -201,8 +303,19 @@ class EmployeeListAPIView(APIView):
             "id", "employee_first_name", "employee_last_name"
         )
 
-        # Permission-based filtering
-        if user.has_perm("employee.view_employee"):
+        # Permission-based filtering.
+        #
+        # The web directory (employee.views.employee_view) is guarded by
+        # @enter_if_accessible(feature="employee_view", ...), so an admin can
+        # grant or withhold it through the accessibility app. This endpoint
+        # ignored that entirely and allowed only perm holders, managers and
+        # self -- so an employee who can browse the directory on the web saw
+        # nothing but themselves through the API, and the mobile directory
+        # screen had no data source at all.
+        #
+        # Honouring the same grant, additively: everything that resolved
+        # before still resolves, this only adds the accessibility path.
+        if user.has_perm("employee.view_employee") or directory_is_accessible(request):
             pass  # employees_queryset is already all employees
         else:
             subordinate_qs = user.employee_get.get_subordinate_employees()
@@ -221,7 +334,7 @@ class EmployeeListAPIView(APIView):
             )
 
         # Paginate
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(employees_queryset, request)
 
         serializer = EmployeeListSerializer(page, many=True)
@@ -250,8 +363,14 @@ class EmployeeBankDetailsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        # Handle schema generation for DRF-YASG
+        if getattr(self, "swagger_fake_view", False):
+            return EmployeeBankDetails.objects.none()
         queryset = EmployeeBankDetails.objects.all()
         user = self.request.user
+        # Handle AnonymousUser during schema generation
+        if not user.is_authenticated:
+            return EmployeeBankDetails.objects.none()
         # checking user level permissions
         perm = "base.view_employeebankdetails"
         queryset = permission_based_queryset(user, perm, queryset)
@@ -269,7 +388,7 @@ class EmployeeBankDetailsAPIView(APIView):
             serializer = EmployeeBankDetailsSerializer(bank_detail)
             return Response(serializer.data)
 
-        return Response({"message": "No permission"}, status=400)
+        return Response({"message": _("No permission")}, status=400)
 
     @manager_or_owner_permission_required(
         EmployeeBankDetails, "employee.add_employeebankdetails"
@@ -289,7 +408,8 @@ class EmployeeBankDetailsAPIView(APIView):
             bank_detail = EmployeeBankDetails.objects.get(pk=pk)
         except EmployeeBankDetails.DoesNotExist:
             return Response(
-                {"error": "Bank details do not exist"}, status=status.HTTP_404_NOT_FOUND
+                {"error": _("Bank details do not exist")},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         serializer = EmployeeBankDetailsSerializer(bank_detail, data=request.data)
@@ -298,14 +418,19 @@ class EmployeeBankDetailsAPIView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @manager_permission_required("employee.change_employeebankdetails")
+    # Was manager_permission_required (no owner scoping, any manager could delete any
+    # employee's bank record - GHSA-39gq-9wwx-p8hx). Permission string kept as-is on purpose.
+    @manager_or_owner_permission_required(
+        EmployeeBankDetails, "employee.change_employeebankdetails"
+    )
     def delete(self, request, pk):
         try:
             bank_detail = EmployeeBankDetails.objects.get(pk=pk)
             bank_detail.delete()
         except EmployeeBankDetails.DoesNotExist:
             return Response(
-                {"error": "Bank details do not exist"}, status=status.HTTP_404_NOT_FOUND
+                {"error": _("Bank details do not exist")},
+                status=status.HTTP_404_NOT_FOUND,
             )
         except Exception as E:
             return Response({"error": str(E)}, status=400)
@@ -318,8 +443,10 @@ class EmployeeWorkInformationAPIView(APIView):
     Manage employee work information with CRUD operations.
 
     Methods:
-        get(request, pk):
+        get(request, pk=None):
             - Retrieves work information for a specific employee identified by `pk`.
+            - Returns a paginated list, scoped to what the caller may see, if
+              `pk` is not provided.
 
         post(request):
             - Creates a new work information entry for an employee.
@@ -333,15 +460,26 @@ class EmployeeWorkInformationAPIView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, pk):
-        work_info = EmployeeWorkInformation.objects.get(pk=pk)
-        if (
-            request.user.employee_get
-            in [work_info.employee_id, work_info.reporting_manager_id]
-        ) or request.user.has_perm("employee.view_employeeworkinformation"):
-            serializer = EmployeeWorkInformationSerializer(work_info)
-            return Response(serializer.data, status=200)
-        return Response({"message": "No permission"}, status=400)
+    def get(self, request, pk=None):
+        if pk is not None:
+            work_info = EmployeeWorkInformation.objects.get(pk=pk)
+            if (
+                request.user.employee_get
+                in [work_info.employee_id, work_info.reporting_manager_id]
+            ) or request.user.has_perm("employee.view_employeeworkinformation"):
+                serializer = EmployeeWorkInformationSerializer(work_info)
+                return Response(serializer.data, status=200)
+            return Response({"message": _("No permission")}, status=400)
+
+        queryset = permission_based_queryset(
+            request.user,
+            "employee.view_employeeworkinformation",
+            EmployeeWorkInformation.objects.all(),
+        )
+        paginator = HorillaPageNumberPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = EmployeeWorkInformationSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @manager_permission_required("employee.add_employeeworkinformation")
     def post(self, request):
@@ -365,7 +503,7 @@ class EmployeeWorkInformationAPIView(APIView):
                 serializer.save()
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"message": "No permission"}, status=400)
+        return Response({"message": _("No permission")}, status=400)
 
     @method_decorator(
         permission_required("employee.delete_employeeworkinformation"), name="dispatch"
@@ -463,18 +601,18 @@ class ActiontypeView(APIView):
         if pk:
             action_type = object_check(Actiontype, pk)
             if action_type is None:
-                return Response({"error": "Actiontype not found"}, status=404)
+                return Response({"error": _("Actiontype not found")}, status=404)
             serializer = self.serializer_class(action_type)
             return Response(serializer.data, status=200)
         action_types = Actiontype.objects.all()
-        paginater = PageNumberPagination()
+        paginater = HorillaPageNumberPagination()
         page = paginater.paginate_queryset(action_types, request)
         serializer = self.serializer_class(page, many=True)
         return paginater.get_paginated_response(serializer.data)
 
     def post(self, request):
         if permission_check(request, "employee.add_actiontype") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -483,10 +621,10 @@ class ActiontypeView(APIView):
 
     def put(self, request, pk):
         if permission_check(request, "employee.change_actiontype") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         action_type = object_check(Actiontype, pk)
         if action_type is None:
-            return Response({"error": "Actiontype not found"}, status=404)
+            return Response({"error": _("Actiontype not found")}, status=404)
         serializer = self.serializer_class(action_type, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -495,10 +633,10 @@ class ActiontypeView(APIView):
 
     def delete(self, request, pk):
         if permission_check(request, "employee.delete_actiontype") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         action_type = object_check(Actiontype, pk)
         if action_type is None:
-            return Response({"error": "Actiontype not found"}, status=404)
+            return Response({"error": _("Actiontype not found")}, status=404)
         response, status_code = object_delete(Actiontype, pk)
         return Response(response, status=status_code)
 
@@ -526,6 +664,7 @@ class DisciplinaryActionAPIView(APIView):
 
     filterset_class = DisciplinaryActionFilter
     permission_classes = [IsAuthenticated]
+    queryset = DisciplinaryAction.objects.none()  # For drf-yasg schema generation
 
     def get_object(self, pk):
         try:
@@ -550,7 +689,7 @@ class DisciplinaryActionAPIView(APIView):
             ):
                 serializer = DisciplinaryActionSerializer(disciplinary_action)
                 return Response(serializer.data, status=200)
-            return Response({"error": "No permission"}, status=400)
+            return Response({"error": _("No permission")}, status=400)
         else:
             employee = request.user.employee_get
             is_manager = EmployeeWorkInformation.objects.filter(
@@ -571,7 +710,7 @@ class DisciplinaryActionAPIView(APIView):
             else:
                 queryset = DisciplinaryAction.objects.filter(employee_id=employee)
 
-            paginator = PageNumberPagination()
+            paginator = HorillaPageNumberPagination()
             disciplinary_actions = queryset
             disciplinary_action_filter_queryset = self.filterset_class(
                 request.GET, queryset=disciplinary_actions
@@ -584,7 +723,7 @@ class DisciplinaryActionAPIView(APIView):
 
     def post(self, request):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         serializer = DisciplinaryActionSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -593,7 +732,7 @@ class DisciplinaryActionAPIView(APIView):
 
     def put(self, request, pk):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         disciplinary_action = self.get_object(pk)
         serializer = DisciplinaryActionSerializer(
             disciplinary_action, data=request.data
@@ -605,7 +744,7 @@ class DisciplinaryActionAPIView(APIView):
 
     def delete(self, request, pk):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         disciplinary_action = self.get_object(pk)
         disciplinary_action.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -652,14 +791,14 @@ class PolicyAPIView(APIView):
             else:
                 policies = Policy.objects.all()
             serializer = PolicySerializer(policies, many=True)
-            paginator = PageNumberPagination()
+            paginator = HorillaPageNumberPagination()
             page = paginator.paginate_queryset(policies, request)
             serializer = PolicySerializer(page, many=True)
             return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         if permission_check(request, "employee.add_policy") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
 
         serializer = PolicySerializer(data=request.data)
         if serializer.is_valid():
@@ -669,7 +808,7 @@ class PolicyAPIView(APIView):
 
     def put(self, request, pk):
         if permission_check(request, "employee.change_policy") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         policy = self.get_object(pk)
         serializer = PolicySerializer(policy, data=request.data)
         if serializer.is_valid():
@@ -679,7 +818,7 @@ class PolicyAPIView(APIView):
 
     def delete(self, request, pk):
         if permission_check(request, "employee.delete_policy") is False:
-            return Response({"error": "No permission"}, status=401)
+            return Response({"error": _("No permission")}, status=401)
         policy = self.get_object(pk)
         policy.delete()
         return Response(status=204)
@@ -718,16 +857,34 @@ class DocumentRequestAPIView(APIView):
     def get(self, request, pk=None):
         if pk:
             document_request = self.get_object(pk)
+            has_perm = request.user.has_perm("horilla_documents.view_documentrequest")
+            is_addressee = document_request.employee_id.filter(
+                id=getattr(request.user.employee_get, "id", None)
+            ).exists()
+            if not (has_perm or is_addressee):
+                return Response(
+                    {
+                        "error": _(
+                            "You do not have permission to view this document request."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             serializer = DocumentRequestSerializer(document_request)
             return Response(serializer.data)
         else:
-            document_requests = DocumentRequest.objects.all()
-            pagination = PageNumberPagination()
+            if request.user.has_perm("horilla_documents.view_documentrequest"):
+                document_requests = DocumentRequest.objects.all()
+            else:
+                document_requests = DocumentRequest.objects.filter(
+                    employee_id=request.user.employee_get
+                )
+            pagination = HorillaPageNumberPagination()
             page = pagination.paginate_queryset(document_requests, request)
             serializer = DocumentRequestSerializer(page, many=True)
             return pagination.get_paginated_response(serializer.data)
 
-    @manager_permission_required("horilla_documents.add_documentrequests")
+    @manager_permission_required("horilla_documents.add_documentrequest")
     def post(self, request):
         serializer = DocumentRequestSerializer(data=request.data)
         if serializer.is_valid():
@@ -738,11 +895,8 @@ class DocumentRequestAPIView(APIView):
                 notify.send(
                     request.user.employee_get,
                     recipient=employees,
-                    verb=f"{request.user.employee_get} requested a document.",
-                    verb_ar=f"طلب {request.user.employee_get} مستنداً.",
-                    verb_de=f"{request.user.employee_get} hat ein Dokument angefordert.",
-                    verb_es=f"{request.user.employee_get} solicitó un documento.",
-                    verb_fr=f"{request.user.employee_get} a demandé un document.",
+                    verb=gettext_noop("%(employee_get)s requested a document."),
+                    verb_params={"employee_get": str(request.user.employee_get)},
                     redirect="/employee/employee-profile",
                     icon="chatbox-ellipses",
                     api_redirect=f"/api/employee/document-request/{obj.id}",
@@ -755,6 +909,22 @@ class DocumentRequestAPIView(APIView):
     @manager_permission_required("horilla_documents.change_documentrequests")
     def put(self, request, pk):
         document_request = self.get_object(pk)
+        # A request can be addressed to multiple employees, so editing it requires the
+        # permission or managing all addressees, not just one (GHSA-97wm-28fj-g4pj).
+        if not request.user.has_perm("horilla_documents.change_documentrequests"):
+            employee = request.user.employee_get
+            addressees = document_request.employee_id.all()
+            if not addressees or any(
+                not check_manager(employee, addressee) for addressee in addressees
+            ):
+                return Response(
+                    {
+                        "error": _(
+                            "You do not have permission to edit this document request."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         serializer = DocumentRequestSerializer(document_request, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -771,24 +941,41 @@ class DocumentRequestAPIView(APIView):
 class DocumentAPIView(APIView):
     filterset_class = DocumentRequestFilter
     permission_classes = [IsAuthenticated]
+    queryset = Document.objects.none()  # For drf-yasg schema generation
 
-    def get_object(self, pk):
+    def get_object(self, pk, request, perm="horilla_documents.view_document"):
+        """
+        Resolve a document and authorize the caller against it. `request` is required
+        (not optional) so no handler can silently skip authorization (GHSA-x72c-5gf7-97g3).
+        """
         try:
-            return Document.objects.get(pk=pk)
+            document = Document.objects.get(pk=pk)
         except Document.DoesNotExist:
             raise Http404
+        if not can_access_document(request, document, perm):
+            raise PermissionDenied
+        return document
 
     def get(self, request, pk=None):
         if pk:
-            document = self.get_object(pk)
+            document = self.get_object(pk, request)
             serializer = DocumentSerializer(document)
             return Response(serializer.data)
         else:
-            documents = Document.objects.all()
+            employee = request.user.employee_get
+            if request.user.has_perm("horilla_documents.view_document"):
+                documents = Document.objects.all()
+            else:
+                managed_ids = Employee.objects.filter(
+                    employee_work_info__reporting_manager_id=employee
+                ).values_list("id", flat=True)
+                documents = Document.objects.filter(
+                    employee_id__in=list(managed_ids) + [employee.id]
+                )
             document_requests_filtered = self.filterset_class(
                 request.GET, queryset=documents
             ).qs
-            paginator = PageNumberPagination()
+            paginator = HorillaPageNumberPagination()
             page = paginator.paginate_queryset(document_requests_filtered, request)
             serializer = DocumentSerializer(page, many=True)
             return paginator.get_paginated_response(serializer.data)
@@ -804,11 +991,8 @@ class DocumentAPIView(APIView):
                 notify.send(
                     request.user.employee_get,
                     recipient=request.user.employee_get.get_reporting_manager().employee_user_id,
-                    verb=f"{request.user.employee_get} uploaded a document",
-                    verb_ar=f"قام {request.user.employee_get} بتحميل مستند",
-                    verb_de=f"{request.user.employee_get} hat ein Dokument hochgeladen",
-                    verb_es=f"{request.user.employee_get} subió un documento",
-                    verb_fr=f"{request.user.employee_get} a téléchargé un document",
+                    verb=gettext_noop("%(employee_get)s uploaded a document"),
+                    verb_params={"employee_get": str(request.user.employee_get)},
                     redirect=f"/employee/employee-view/{request.user.employee_get.id}/",
                     icon="chatbox-ellipses",
                     api_redirect=f"/api/employee/documents/",
@@ -818,18 +1002,18 @@ class DocumentAPIView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @method_decorator(owner_can_enter("horilla_documents.change_document", Employee))
+    # The owner_can_enter decorators formerly here resolved an Employee from a Document id
+    # (wrong model), so removing them takes away misleading cover, not protection - get_object does the real check.
     def put(self, request, pk):
-        document = self.get_object(pk)
+        document = self.get_object(pk, request, "horilla_documents.change_document")
         serializer = DocumentSerializer(document, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @method_decorator(owner_can_enter("horilla_documents.delete_document", Employee))
     def delete(self, request, pk):
-        document = self.get_object(pk)
+        document = self.get_object(pk, request, "horilla_documents.delete_document")
         document.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -837,7 +1021,9 @@ class DocumentAPIView(APIView):
 class DocumentRequestApproveRejectView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @manager_permission_required("horilla_documents.add_document")
+    @approver_permission_required(
+        Document, "horilla_documents.add_document", pk_kwarg="id"
+    )
     def post(self, request, id, status):
         document = Document.objects.filter(id=id).first()
         document.status = status
@@ -856,11 +1042,23 @@ class DocumentBulkApproveRejectAPIView(APIView):
 
         if ids:
             documents = Document.objects.filter(id__in=ids)
+            if not request.user.has_perm("horilla_documents.add_document"):
+                # Same rule as the single-record endpoint: never your own, only employees
+                # you manage - otherwise this is the unscoped version (GHSA-97wm-28fj-g4pj).
+                employee = request.user.employee_get
+                documents = documents.exclude(employee_id=employee)
+                documents = documents.filter(
+                    pk__in=[
+                        document.pk
+                        for document in documents
+                        if check_manager(employee, document)
+                    ]
+                )
             response = []
             for document in documents:
                 if not document.document:
                     status_code = 400
-                    response.append({"id": document.id, "error": "No documents"})
+                    response.append({"id": document.id, "error": _("No documents")})
                     continue
                 response.append({"id": document.id, "status": "success"})
                 document.status = status
@@ -878,13 +1076,13 @@ class EmployeeBulkArchiveView(APIView):
         for employee_id in ids:
             employee = Employee.objects.get(id=employee_id)
             employee.is_active = is_active
-            employee.employee_user_id.is_active = is_active
             if employee.get_archive_condition() is False:
                 employee.save()
+                employee.sync_login_access()
             error.append(
                 {
                     "employee": str(employee),
-                    "error": "Related model found for this employee. ",
+                    "error": _("Related model found for this employee. "),
                 }
             )
         return Response(error, status=200)
@@ -897,10 +1095,10 @@ class EmployeeArchiveView(APIView):
     def post(self, request, id, is_active):
         employee = Employee.objects.get(id=id)
         employee.is_active = is_active
-        employee.employee_user_id.is_active = is_active
         response = None
         if employee.get_archive_condition() is False:
             employee.save()
+            employee.sync_login_access()
         else:
             response = {
                 "employee": str(employee),
@@ -927,7 +1125,7 @@ class EmployeeSelectorView(APIView):
         if request.user.has_perm("employee.view_employee"):
             employees = Employee.objects.all()
 
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(employees, request)
         serializer = EmployeeSelectorSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)

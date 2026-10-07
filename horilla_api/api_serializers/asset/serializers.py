@@ -1,3 +1,4 @@
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from asset.models import *
@@ -77,6 +78,7 @@ class AssetRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = AssetRequest
         fields = "__all__"
+        read_only_fields = ("asset_request_status",)
 
 
 class AssetRequestGetSerializer(serializers.ModelSerializer):
@@ -120,7 +122,7 @@ class AssetApproveSerializer(serializers.ModelSerializer):
         asset_request = self.context.get("asset_request")
         asset_category = asset_request.asset_category_id
         if value.asset_category_id != asset_category:
-            raise serializers.ValidationError("Invalid asset.")
+            raise serializers.ValidationError(_("Invalid asset."))
         return value
 
 
@@ -134,12 +136,12 @@ class AssetReturnSerializer(serializers.ModelSerializer):
 
     def validate_return_status(self, value):
         if value not in [status[0] for status in AssetAssignment.STATUS]:
-            raise serializers.ValidationError("Invalid Choice")
+            raise serializers.ValidationError(_("Invalid Choice"))
         return value
 
     def validate(self, data):
         if self.instance.return_date:
-            raise serializers.ValidationError("Already Returned")
+            raise serializers.ValidationError(_("Already Returned"))
         return data
 
 

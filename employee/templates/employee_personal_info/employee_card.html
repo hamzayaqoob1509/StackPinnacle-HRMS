@@ -1,9 +1,5 @@
 
-{% load i18n %}
-{% load static %}
-{% load basefilters %}
-{% load horillafilters employee_filter %}
-
+{% load i18n static basefilters horillafilters employee_filter %}
 
 <span name="" id="filterEmployee" style="display: none" hx-get="{% url 'employee-filter-view' %}?{{pd}}" hx-target="#view-container"></span>
 <div class="d-flex flex-row-reverse m-2">
@@ -60,10 +56,10 @@
 
           <div class="oh-kanban-card__details">
             <span class="oh-kanban-card__title" {% if emp.email|length >= 30 %}title = "{{emp}}" {% endif %}>{{emp|truncatechars:30}}</span>
-            <span class="oh-kanban-card__subtitle" {% if emp.get_email|length >= 35 %}title = "{{emp.get_email}}" {% endif %}>{{emp.get_email|truncatechars:35}}</span><br>
+            <span class="oh-kanban-card__subtitle" {% if emp.email|length >= 35 %}title = "{{emp.email}}" {% endif %}>{{emp.email|truncatechars:35}}</span><br>
             <span class="oh-kanban-card__subtitle">{{emp.employee_work_info.job_position_id}}</span>
             <div class="oh-kanban-card__subtitle">
-              {% if "attendance"|app_installed %}
+              {% if "attendance"|app_installed and request|is_check_in_enabled %}
                 {% if emp.check_online %}
                   <span class="oh-dot oh-dot--small me-1" style="background-color:yellowgreen"></span> {% trans "Online" %}
                 {% else %}
@@ -77,7 +73,7 @@
             <div class="oh-kanban-card__dots" onclick="event.stopPropagation()">
               <div class="oh-dropdown" x-data="{show: false}">
                 <button class="oh-btn oh-btn--transparent text-muted p-3" @click="show = !show" title='{% trans "Actions" %}'>
-                  <ion-icon name="ellipsis-vertical-sharp" role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon>
+                  <ion-icon name="ellipsis-vertical-sharp" role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon>
                 </button>
                 <div class="oh-dropdown__menu oh-dropdown__menu--dark-border oh-dropdown__menu--right" x-show="show" @click.outside="show = false" style="display: none;">
                   <ul class="oh-dropdown__items">
@@ -115,7 +111,7 @@
                     {% if perms.employee.delete_employee %}
                       <li class="oh-dropdown__item">
                         <form action="{% url 'employee-delete' emp.id %}?view=card" method="post"
-                          onsubmit="return confirm('{% trans "All non-active contracts of the employee will also be deleted. Do you want to continue ?" %}')">
+                          onsubmit="return confirm('{% trans "All non-active contracts of the employee will also be deleted. Do you want to continue ?"|escapejs %}')">
                           {% csrf_token %}
                           <button type="submit" class="oh-dropdown__link oh-dropdown__link--danger">{% trans "Delete" %}</button>
                         </form>

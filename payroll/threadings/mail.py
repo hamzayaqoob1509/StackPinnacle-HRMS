@@ -58,7 +58,9 @@ class MailSendThread(Thread):
                     logger.error(
                         "Failed to generate PDF for payslip %s: %s",
                         instance.id,
-                        getattr(response, "content", b"").decode("utf-8", errors="ignore"),
+                        getattr(response, "content", b"").decode(
+                            "utf-8", errors="ignore"
+                        ),
                     )
             employee = record["instances"][0].employee_id
             email_backend = ConfiguredEmailBackend()

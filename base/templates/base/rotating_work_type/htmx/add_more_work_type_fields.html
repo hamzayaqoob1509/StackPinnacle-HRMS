@@ -1,13 +1,13 @@
 {% load i18n %}
 <div
-  class="oh-input__group pt-3"
+  class="oh-input__group pt-2"
   id="{{ current_hx_target }}"
-  style="display: flex"
+  style="display: flex; padding-right :0px;"
 >
   {{field_html}}
   <a
     hx-get="{% url 'add-remove-work-type-fields' %}"
-    class="oh-btn oh-btn--danger-outline oh-btn--light-bkg"
+    class="oh-btn oh-btn--danger"
     hx-target="#{{ current_hx_target }}"
     hx-swap="outerHTML"
     id="delete-link"
@@ -21,7 +21,7 @@
     hx-swap="outerHTML"
     hx-post="{% url 'add-remove-work-type-fields' %}"
     role="button"
-    style="color: green"
+    class="text-primary-600"
     >{% trans "Add more work types.." %}</a
   >
 </div>

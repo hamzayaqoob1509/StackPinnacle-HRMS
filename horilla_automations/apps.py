@@ -3,10 +3,16 @@ App configuration for the Horilla Automations app.
 Initializes model choices and starts automation when the server runs.
 """
 
+import logging
 import os
 import sys
 
 from django.apps import AppConfig
+from django.core.exceptions import AppRegistryNotReady, ImproperlyConfigured
+from django.db.utils import DatabaseError
+from django.utils.translation import gettext_lazy as _
+
+logger = logging.getLogger(__name__)
 
 
 class HorillaAutomationConfig(AppConfig):
@@ -14,13 +20,19 @@ class HorillaAutomationConfig(AppConfig):
 
     default_auto_field = "django.db.models.BigAutoField"
     name = "horilla_automations"
+    verbose_name = _("Automations")
 
     def ready(self) -> None:
         ready = super().ready()
-        if not (
-            len(sys.argv) >= 2
-            and sys.argv[1] == "runserver"
-            and os.environ.get("RUN_MAIN") == "true"
+        if any(
+            cmd in sys.argv
+            for cmd in [
+                "makemigrations",
+                "migrate",
+                "compilemessages",
+                "flush",
+                "shell",
+            ]
         ):
             return ready
         try:
@@ -57,13 +69,15 @@ class HorillaAutomationConfig(AppConfig):
                 from horilla_automations.signals import start_automation
 
                 start_automation()
-            except Exception as e:
-                print(e)
-                """
-                Migrations are not affected yet
-                """
-        except:
-            """
-            Models not ready yet
-            """
+            except DatabaseError as error:
+                # Tables are not present yet on a fresh database; the
+                # post_migrate hook re-runs this once they are.
+                logger.debug("automations not started yet: %s", error)
+        except (AppRegistryNotReady, ImproperlyConfigured, ImportError) as error:
+            # MODEL_CHOICES is assembled from other apps' models, so this can
+            # fire while the registry is still loading. Narrowed from a bare
+            # except, which also hid a genuine failure here and left
+            # MODEL_CHOICES half-built with the automations unregistered and
+            # nothing logged at all.
+            logger.warning("automation model choices incomplete: %s", error)
         return ready

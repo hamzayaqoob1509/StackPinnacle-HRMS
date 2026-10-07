@@ -1,10 +1,14 @@
 import contextlib
 import importlib
 
-from django.contrib.auth.models import User
+from django.conf import settings
+from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.shortcuts import redirect, render
+from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.translation import gettext as _
 
-from horilla.horilla_settings import APP_URLS, DYNAMIC_URL_PATTERNS
+from horilla_auth.models import HorillaUser
 
 
 def get_horilla_model_class(app_label, model):
@@ -19,7 +23,7 @@ def get_horilla_model_class(app_label, model):
         Model: The Django model class corresponding to the specified app label and model name.
 
     """
-    content_type = ContentType.objects.get(app_label=app_label, model=model)
+    content_type = ContentType.objects.get_by_natural_key(app_label, model)
     model_class = content_type.model_class()
     return model_class
 
@@ -63,17 +67,41 @@ def horilla_users_with_perms(permissions):
         permissions = [permissions]
 
     # Start with a queryset that includes all superusers
-    users_with_permissions = User.objects.filter(is_superuser=True)
+    users_with_permissions = HorillaUser.objects.filter(is_superuser=True)
 
     # Filter users based on the permissions list
     for perm in permissions:
         app_label, codename = perm.split(".")
-        users_with_permissions |= User.objects.filter(
+        users_with_permissions |= HorillaUser.objects.filter(
             user_permissions__codename=codename,
             user_permissions__content_type__app_label=app_label,
         )
 
     return users_with_permissions.distinct()
+
+
+def handle_no_permission(request, message=_("You don't have permission.")):
+    messages.info(request, message)
+    # Sec-Fetch-Mode is set by the browser itself for a genuine top-level
+    # navigation and can't be spoofed by an htmx fetch() call, unlike the
+    # HX-Request header alone -- some browser setups send HX-Request even on
+    # a real address-bar visit, which would otherwise render the raw
+    # fragment instead of redirecting (e.g. to the login page).
+    is_real_navigation = request.headers.get("Sec-Fetch-Mode") == "navigate"
+    if request.headers.get("HX-Request") and not is_real_navigation:
+        return render(request, "decorator_404.html")
+
+    previous_url = request.META.get("HTTP_REFERER", "/")
+
+    # Prevent open redirect + XSS
+    if not url_has_allowed_host_and_scheme(
+        previous_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        previous_url = "/"
+
+    return redirect(previous_url)
 
 
 def get_urlencode(request):
@@ -87,7 +115,7 @@ def remove_dynamic_url(path_info):
     """Function to remove a dynamically added URL from any app's urlpatterns."""
 
     # Iterate over all app URL patterns
-    for app_urls in APP_URLS:
+    for app_urls in settings.APP_URLS:
         try:
             # Dynamically import the app's urls.py module
             urls_module = importlib.import_module(app_urls)
@@ -105,5 +133,5 @@ def remove_dynamic_url(path_info):
             print(f"Module {app_urls} not found. Skipping...")
 
     # Also remove it from the tracked dynamic paths
-    if path_info in DYNAMIC_URL_PATTERNS:
-        DYNAMIC_URL_PATTERNS.remove(path_info)
+    if path_info in settings.DYNAMIC_URL_PATTERNS:
+        settings.DYNAMIC_URL_PATTERNS.remove(path_info)

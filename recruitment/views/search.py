@@ -7,11 +7,10 @@ This module is used to register search/filter views methods
 import json
 from urllib.parse import parse_qs
 
-from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 from django.shortcuts import render
 
-from base.methods import get_key_instances, get_pagination, sortby
+from base.methods import get_key_instances, sortby
 from horilla.decorators import (
     hx_request_required,
     is_recruitment_manager,
@@ -20,6 +19,7 @@ from horilla.decorators import (
 )
 from horilla.group_by import group_by_queryset
 from horilla.group_by import group_by_queryset as general_group_by
+from horilla_auth.models import HorillaUser
 from recruitment.filters import (
     CandidateFilter,
     RecruitmentFilter,
@@ -133,9 +133,9 @@ def candidate_search(request):
     candidates = paginator_qry(candidates, request.GET.get("page"))
 
     mails = list(Candidate.objects.values_list("email", flat=True))
-    # Query the User model to check if any email is present
+    # Query the HorillaUser model to check if any email is present
     existing_emails = list(
-        User.objects.filter(username__in=mails).values_list("email", flat=True)
+        HorillaUser.objects.filter(username__in=mails).values_list("email", flat=True)
     )
 
     return render(
@@ -189,7 +189,7 @@ def filter_survey(request):
         for manager in i.recruitment_managers.all():
             if request.user.employee_get == manager:
                 ids.append(i.id)
-    if request.user.has_perm("view_recruitmentsurvey"):
+    if request.user.has_perm("recruitment.view_recruitmentsurvey"):
         questions = RecruitmentSurvey.objects.all()
     else:
         questions = RecruitmentSurvey.objects.filter(recruitment_ids__in=ids)
@@ -197,12 +197,25 @@ def filter_survey(request):
     previous_data = request.GET.urlencode()
     filter_obj = SurveyFilter(request.GET, questions)
     questions = filter_obj.qs
+    # group_by_queryset() already returns a correctly paginated Page (with
+    # working has_next/has_previous) - templates-with-questions only, though,
+    # since unused (0-question) templates aren't rows in `questions` to group
+    # in the first place. Unused templates still need to show up in the same
+    # accordion, so fetch every templates-with-questions group here (no
+    # pagination at this step - a large records_per_page makes group_by_queryset
+    # compute the full set instead of slicing it), append the unused ones, then
+    # paginate the combined list exactly once below. Paginating here *and* via
+    # paginator_qry() below on the merged list double-applied "template_page",
+    # so page 2 sliced a different (and often empty/short) already-sliced
+    # subset instead of the real page 2 - has_previous silently came out
+    # False there, which is why the pagination controls vanished after
+    # clicking "next".
     templates = group_by_queryset(
         questions.filter(template_id__isnull=False).distinct(),
         "template_id__title",
-        page=request.GET.get("template_page"),
+        page=1,
         page_name="template_page",
-        records_per_page=get_pagination(),
+        records_per_page=1000000,
     )
     all_template_object_list = []
     for template in templates:

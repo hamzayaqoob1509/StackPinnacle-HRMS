@@ -11,6 +11,7 @@ from django.core.cache import cache
 from django.core.mail import EmailMessage
 from django.core.mail.backends.smtp import EmailBackend
 
+from base.email_redaction import get_current_company, redact_credential_body
 from base.models import DynamicEmailConfiguration, EmailLog
 from horilla import settings
 from horilla.horilla_middlewares import _thread_locals
@@ -133,10 +134,10 @@ class DefaultHorillaMailBackend(EmailBackend):
 
     @property
     def dynamic_from_email_with_display_name(self):
-        return (
-            f"{self.dynamic_display_name} <{self.dynamic_mail_sent_from}>"
-            if self.dynamic_display_name
-            else self.dynamic_mail_sent_from
+        if self.dynamic_display_name and self.dynamic_mail_sent_from:
+            return f"{self.dynamic_display_name} <{self.dynamic_mail_sent_from}>"
+        return self.dynamic_mail_sent_from or getattr(
+            settings, "DEFAULT_FROM_EMAIL", ""
         )
 
     @property
@@ -199,12 +200,18 @@ class ConfiguredEmailBackend(BACKEND_CLASS):
     def send_messages(self, email_messages):
         response = super(BACKEND_CLASS, self).send_messages(email_messages)
         for message in email_messages:
+            from_email = (
+                self.dynamic_from_email_with_display_name
+                or message.from_email
+                or getattr(settings, "DEFAULT_FROM_EMAIL", "")
+            )
             email_log = EmailLog(
                 subject=message.subject,
-                from_email=self.dynamic_from_email_with_display_name,
+                from_email=from_email,
                 to=message.to,
-                body=message.body,
+                body=redact_credential_body(message.subject, message.body),
                 status="sent" if response else "failed",
+                company_id=get_current_company(),
             )
             email_log.save()
         return response

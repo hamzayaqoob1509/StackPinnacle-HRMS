@@ -316,6 +316,11 @@ def generate_data_set(request, start_date, type, end_date, dept):
     data = {}
     if on_time or late_come_obj or early_out_obj:
         data = {
+            # id alongside label so callers can link back to this exact
+            # department by pk instead of re-matching on its name -- the
+            # main dashboard's Attendance Overview chart drills into the
+            # employee list that way when a bar is clicked.
+            "id": dept.pk,
             "label": dept.department,
             "data": [on_time, len(late_come_obj), len(early_out_obj)],
         }
@@ -331,10 +336,15 @@ def dashboard_attendance(request):
     Returns:
         JsonResponse: returns data set as json
     """
+    if not (
+        request.user.is_superuser or request.user.has_perm("attendance.view_attendance")
+    ):
+        return JsonResponse({"no_permission": True})
+
     labels = [
         _("On Time"),
-        _("Late Come"),
-        _("Early Out"),
+        _("Late Arrival"),
+        _("Early Departure"),
     ]
     # initializing values
     data_set = []
@@ -359,6 +369,7 @@ def dashboard_attendance(request):
     return JsonResponse({"dataSet": data_set, "labels": labels, "message": message})
 
 
+@login_required
 def pending_hours(request):
     """
     pending hours chart dashboard view
@@ -378,6 +389,11 @@ def pending_hours(request):
 
 @login_required
 def department_overtime_chart(request):
+    if not (
+        request.user.is_superuser or request.user.has_perm("attendance.view_attendance")
+    ):
+        return JsonResponse({"no_permission": True})
+
     start_date = request.GET.get("date") if request.GET.get("date") else date.today()
     chart_type = request.GET.get("type") if request.GET.get("type") else "day"
     end_date = (

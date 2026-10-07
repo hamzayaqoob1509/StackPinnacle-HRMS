@@ -8,7 +8,7 @@
 					<div class="oh-sticky-dropdown--header">
 						<div class="oh-dropdown" x-data="{open: false}">
 							<button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-								role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+								role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
 								<div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
 									<ul class="oh-dropdown__items" id="MyTicketsCells">
 									</ul>
@@ -73,7 +73,6 @@
 												<span class='d-flex justify-content-between align-items-center'
 												>
 													{{ticket.ticket_type.prefix}}{{ ticket.id|stringformat:"03d" }}
-													{% if ticket.status != "resolved" %}
 													<span title = 'due  {% if ticket.deadline == today %} today {% else %}in {{ticket.deadline|sub:today}}{% endif %}'>
 														<ion-icon
 															class="text-{% if ticket.deadline < today %}danger {% elif ticket.deadline == today %}warning {% else %}success{% endif %}"
@@ -81,7 +80,6 @@
 														>
 														</ion-icon>
 													</span>
-													{% endif %}
 												</span>
 											</div>
 											<div data-cell-index="1" class="oh-sticky-table__td">{{ticket.title}}</div>
@@ -95,7 +93,7 @@
 													<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 														{% csrf_token %}
 														<div class="d-flex">
-															<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+															<div class="oh-rate" onclick="event.stopPropagation()">
 																{% for i in "321" %}
 																	<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '1' == i %} checked {% endif %}/>
 																	<label for="star{{i}}{{ticket.id}}"
@@ -110,7 +108,7 @@
 													<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 														{% csrf_token %}
 														<div class="d-flex">
-															<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+															<div class="oh-rate" onclick="event.stopPropagation()">
 																{% for i in "321" %}
 																	<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '2' == i %} checked {% endif %}/>
 																	<label for="star{{i}}{{ticket.id}}"
@@ -125,7 +123,7 @@
 													<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 														{% csrf_token %}
 														<div class="d-flex">
-															<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+															<div class="oh-rate" onclick="event.stopPropagation()">
 																{% for i in "321" %}
 																	<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '3' == i %} checked {% endif %}/>
 																	<label for="star{{i}}{{ticket.id}}"
@@ -157,20 +155,20 @@
 														<form
 														action="{% url 'ticket-archive' ticket.id %}"
 														class="w-50"
-														onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to archive this ticket?" %}');"
+														onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to archive this ticket?"|escapejs %}');"
 															method="post"
 															style="display: contents"
 														>
 															{% csrf_token %}
 															<button
-															class="oh-btn oh-btn--danger-outline p-3 w-50"
+															class="oh-btn oh-btn--danger p-3 w-50"
 															title="{% trans 'Archive' %}"
 															>
 															<ion-icon
 																name="archive-sharp"
 																role="img"
 																class="md hydrated"
-																aria-label="archive sharp"
+																aria-label="{% trans 'archive sharp' %}"
 															></ion-icon>
 															</button>
 														</form>
@@ -178,20 +176,20 @@
 														<form
 															action="{% url 'ticket-archive' ticket.id %}"
 															class="w-50"
-															onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to un-archive this ticket?" %}');"
+															onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to un-archive this ticket?"|escapejs %}');"
 															method="post"
 															style="display: contents"
 														>
 															{% csrf_token %}
 															<button
-															class="oh-btn oh-btn--danger-outline p-3 w-50"
+															class="oh-btn oh-btn--danger p-3 w-50"
 															title="{% trans 'Un-archive' %}"
 															>
 															<ion-icon
 																name="archive-sharp"
 																role="img"
 																class="md hydrated"
-																aria-label="archive sharp"
+																aria-label="{% trans 'archive sharp' %}"
 															></ion-icon>
 															</button>
 														</form>
@@ -200,26 +198,26 @@
 														<form
 															action="{% url 'ticket-delete' ticket.id %}"
 															class="w-50"
-															onsubmit="return confirm('{% trans 'Are you sure you want to delete	this Ticket?' %}');"
+															onsubmit="return confirm('{% trans 'Are you sure you want to delete	this Ticket?'|escapejs %}');"
 															method='post' onclick="event.stopPropagation()" >
 															{% csrf_token %}
 															<button
 																type="submit"
-																class="oh-btn oh-btn--danger-outline oh-btn--light-bkg p-3 w-100"
+																class="oh-btn oh-btn--danger p-3 w-100"
 																title="{% trans 'Delete' %}"
 															>
 																<ion-icon
 																	class="me-1 md hydrated"
 																	name="trash-outline"
 																	role="img"
-																	aria-label="trash outline"
+																	aria-label="{% trans 'trash outline' %}"
 																></ion-icon>
 															</button>
 														</form>
 													{% else %}
 														<button
 															type="submit"
-															class="oh-btn oh-btn--danger-outline oh-btn--light-bkg p-3 w-100"
+															class="oh-btn oh-btn--danger p-3 w-100"
 															title="{% trans 'Delete' %}"
 															disabled
 														>
@@ -227,7 +225,7 @@
 																class="me-1 md hydrated"
 																name="trash-outline"
 																role="img"
-																aria-label="trash outline"
+																aria-label="{% trans 'trash outline' %}"
 															></ion-icon>
 														</button>
 													{% endif %}
@@ -325,7 +323,7 @@
 					<div class="oh-sticky-dropdown--header">
 						<div class="oh-dropdown" x-data="{open: false}">
 							<button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-								role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+								role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
 								<div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
 									<ul class="oh-dropdown__items" id="SuggestedTicketsCells">
 									</ul>
@@ -401,7 +399,6 @@
 												<span class='d-flex justify-content-between align-items-center'
 												>
 													{{ticket.ticket_type.prefix}}{{ ticket.id|stringformat:"03d" }}
-													{% if ticket.status != "resolved" %}
 													<span title = 'due  {% if ticket.deadline == today %} today {% else %}in {{ticket.deadline|sub:today}}{% endif %}'>
 														<ion-icon
 															class="text-{% if ticket.deadline < today %}danger {% elif ticket.deadline == today %}warning {% else %}success{% endif %}"
@@ -409,7 +406,6 @@
 														>
 														</ion-icon>
 													</span>
-													{% endif %}
 												</span>
 											</div>
 											<div data-cell-index="11" class="oh-sticky-table__td">{{ticket.title}}</div>
@@ -424,7 +420,7 @@
 														<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 															{% csrf_token %}
 															<div class="d-flex">
-																<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+																<div class="oh-rate" onclick="event.stopPropagation()">
 																	{% for i in "321" %}
 																		<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '1' == i %} checked {% endif %}/>
 																		<label for="star{{i}}{{ticket.id}}"
@@ -439,7 +435,7 @@
 														<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 															{% csrf_token %}
 															<div class="d-flex">
-																<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+																<div class="oh-rate" onclick="event.stopPropagation()">
 																	{% for i in "321" %}
 																		<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '2' == i %} checked {% endif %}/>
 																		<label for="star{{i}}{{ticket.id}}"
@@ -454,7 +450,7 @@
 														<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 															{% csrf_token %}
 															<div class="d-flex">
-																<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+																<div class="oh-rate" onclick="event.stopPropagation()">
 																	{% for i in "321" %}
 																		<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '3' == i %} checked=True {% endif %}/>
 																		<label for="star{{i}}{{ticket.id}}"
@@ -532,7 +528,7 @@
 																<a
 																	type="submit"
 																	href = "{% url 'claim-ticket' ticket.id %}"
-																	class="oh-btn oh-btn--info w-100"
+																	class="oh-btn oh-btn--success w-100"
 																	title="{% trans 'Claim' %}"
 																	>
 																	<ion-icon name="checkmark-done-outline"></ion-icon>
@@ -556,20 +552,20 @@
 																<form
 																action="{% url 'ticket-archive' ticket.id %}"
 																class="w-50"
-																onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to archive this ticket?" %}');"
+																onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to archive this ticket?"|escapejs %}');"
 																	method="post"
 																	style="display: contents"
 																>
 																	{% csrf_token %}
 																	<button
-																	class="oh-btn oh-btn--danger-outline p-3 w-50"
+																	class="oh-btn oh-btn--danger p-3 w-50"
 																	title="{% trans 'Archive' %}"
 																	>
 																	<ion-icon
 																		name="archive-sharp"
 																		role="img"
 																		class="md hydrated"
-																		aria-label="archive sharp"
+																		aria-label="{% trans 'archive sharp' %}"
 																	></ion-icon>
 																	</button>
 																</form>
@@ -577,20 +573,20 @@
 																<form
 																	action="{% url 'ticket-archive' ticket.id %}"
 																	class="w-50"
-																	onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to un-archive this ticket?" %}');"
+																	onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to un-archive this ticket?"|escapejs %}');"
 																	method="post"
 																	style="display: contents"
 																>
 																	{% csrf_token %}
 																	<button
-																	class="oh-btn oh-btn--danger-outline p-3 w-50"
+																	class="oh-btn oh-btn--danger p-3 w-50"
 																	title="{% trans 'Un-archive' %}"
 																	>
 																	<ion-icon
 																		name="archive-sharp"
 																		role="img"
 																		class="md hydrated"
-																		aria-label="archive sharp"
+																		aria-label="{% trans 'archive sharp' %}"
 																	></ion-icon>
 																	</button>
 																</form>
@@ -601,25 +597,25 @@
 																<form
 																	action="{% url 'ticket-delete' ticket.id %}"
 																	class="w-50"
-																	onsubmit="return confirm('{% trans 'Are you sure you want to delete	this Ticket?' %}');"
+																	onsubmit="return confirm('{% trans 'Are you sure you want to delete	this Ticket?'|escapejs %}');"
 																	method='post' onclick="event.stopPropagation()" >
 																	{% csrf_token %}
 																	<button
 																		type="submit"
-																		class="oh-btn oh-btn--danger-outline oh-btn--light-bkg p-3 w-100"
+																		class="oh-btn oh-btn--danger p-3 w-100"
 																		title="{% trans 'Delete' %}"
 																	>
 																		<ion-icon
 																			class="me-1 md hydrated"
 																			name="trash-outline"
 																			role="img"
-																			aria-label="trash outline"
+																			aria-label="{% trans 'trash outline' %}"
 																		></ion-icon>
 																	</button>
 																</form>
 															{% else %}
 																<button
-																	class="oh-btn oh-btn--danger-outline oh-btn--light-bkg p-3 w-100"
+																	class="oh-btn oh-btn--danger p-3 w-100"
 																	disabled
 																	title="{% trans 'Delete' %}"
 																>
@@ -627,7 +623,7 @@
 																		class="me-1 md hydrated"
 																		name="trash-outline"
 																		role="img"
-																		aria-label="trash outline"
+																		aria-label="{% trans 'trash outline' %}"
 																	></ion-icon>
 																</button>
 															{% endif %}
@@ -722,7 +718,7 @@
 				<div class="oh-sticky-dropdown--header">
 					<div class="oh-dropdown" x-data="{open: false}">
 						<button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-							role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+							role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
 							<div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
 								<ul class="oh-dropdown__items" id="AllTicketsCells">
 								</ul>
@@ -787,7 +783,6 @@
 											<span class='d-flex justify-content-between align-items-center'
 											>
 												{{ticket.ticket_type.prefix}}{{ ticket.id|stringformat:"03d" }}
-												{% if ticket.status != "resolved" %}
 												<span title = 'due  {% if ticket.deadline == today %} today {% else %}in {{ticket.deadline|sub:today}}{% endif %}'>
 													<ion-icon
 														class="text-{% if ticket.deadline < today %}danger {% elif ticket.deadline == today %}warning {% else %}success{% endif %}"
@@ -795,7 +790,6 @@
 													>
 													</ion-icon>
 												</span>
-												{% endif %}
 											</span>
 										</div>
 										<div data-cell-index="21" class="oh-sticky-table__td">{{ticket.title}}</div>
@@ -810,7 +804,7 @@
 													<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 														{% csrf_token %}
 														<div class="d-flex">
-															<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+															<div class="oh-rate" onclick="event.stopPropagation()">
 																{% for i in "321" %}
 																	<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '1' == i %} checked {% endif %}/>
 																	<label for="star{{i}}{{ticket.id}}"
@@ -825,7 +819,7 @@
 													<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 														{% csrf_token %}
 														<div class="d-flex">
-															<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+															<div class="oh-rate" onclick="event.stopPropagation()">
 																{% for i in "321" %}
 																	<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '2' == i %} checked {% endif %}/>
 																	<label for="star{{i}}{{ticket.id}}"
@@ -840,7 +834,7 @@
 													<form hx-swap="none" hx-post='{% url "update-priority" ticket.id %}' method="post">
 														{% csrf_token %}
 														<div class="d-flex">
-															<div class="oh-rate" onclick="event.stopPropagation();$(this).parents().closest('form').find('button').click()">
+															<div class="oh-rate" onclick="event.stopPropagation()">
 																{% for i in "321" %}
 																	<input type="radio" id="star{{i}}{{ticket.id}}" name="rating" class="rating-radio" value="{{i}}" {% if '3' == i %} checked {% endif %}/>
 																	<label for="star{{i}}{{ticket.id}}"
@@ -920,20 +914,20 @@
 															<form
 															action="{% url 'ticket-archive' ticket.id %}"
 															class="w-50"
-															onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to archive this ticket?" %}');"
+															onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to archive this ticket?"|escapejs %}');"
 																method="post"
 																style="display: contents"
 															>
 																{% csrf_token %}
 																<button
-																class="oh-btn oh-btn--danger-outline p-3 w-50"
+																class="oh-btn oh-btn--danger p-3 w-50"
 																title="{% trans 'Archive' %}"
 																>
 																<ion-icon
 																	name="archive-sharp"
 																	role="img"
 																	class="md hydrated"
-																	aria-label="archive sharp"
+																	aria-label="{% trans 'archive sharp' %}"
 																></ion-icon>
 																</button>
 															</form>
@@ -941,20 +935,20 @@
 															<form
 																action="{% url 'ticket-archive' ticket.id %}"
 																class="w-50"
-																onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to un-archive this ticket?" %}');"
+																onsubmit="event.stopPropagation();return confirm('{% trans "Do you want to un-archive this ticket?"|escapejs %}');"
 																method="post"
 																style="display: contents"
 															>
 																{% csrf_token %}
 																<button
-																class="oh-btn oh-btn--danger-outline p-3 w-50"
+																class="oh-btn oh-btn--danger p-3 w-50"
 																title="{% trans 'Un-archive' %}"
 																>
 																<ion-icon
 																	name="archive-sharp"
 																	role="img"
 																	class="md hydrated"
-																	aria-label="archive sharp"
+																	aria-label="{% trans 'archive sharp' %}"
 																></ion-icon>
 																</button>
 															</form>
@@ -965,25 +959,25 @@
 															<form
 																action="{% url 'ticket-delete' ticket.id %}"
 																class="w-50"
-																onsubmit="return confirm('{% trans 'Are you sure you want to delete	this Ticket?' %}');"
+																onsubmit="return confirm('{% trans 'Are you sure you want to delete	this Ticket?'|escapejs %}');"
 																method='post' onclick="event.stopPropagation()" >
 																{% csrf_token %}
 																<button
 																	type="submit"
-																	class="oh-btn oh-btn--danger-outline oh-btn--light-bkg p-3 w-100"
+																	class="oh-btn oh-btn--danger p-3 w-100"
 																	title="{% trans 'Delete' %}"
 																>
 																	<ion-icon
 																		class="me-1 md hydrated"
 																		name="trash-outline"
 																		role="img"
-																		aria-label="trash outline"
+																		aria-label="{% trans 'trash outline' %}"
 																	></ion-icon>
 																</button>
 															</form>
 														{% else %}
 															<button
-																class="oh-btn oh-btn--danger-outline oh-btn--light-bkg p-3 w-100"
+																class="oh-btn oh-btn--danger p-3 w-100"
 																disabled
 																title="{% trans 'Delete' %}"
 															>
@@ -991,7 +985,7 @@
 																	class="me-1 md hydrated"
 																	name="trash-outline"
 																	role="img"
-																	aria-label="trash outline"
+																	aria-label="{% trans 'trash outline' %}"
 																></ion-icon>
 															</button>
 														{% endif %}

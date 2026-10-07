@@ -8,12 +8,17 @@ from accessibility import views as accessibility
 
 urlpatterns = [
     path(
-        "user-accessibility/",
+        "settings/user-accessibility/",
         accessibility.user_accessibility,
         name="user-accessibility",
     ),
     path(
-        "get-initial-accessibility-data",
+        "settings/load-accessibility-form/",
+        accessibility.load_accessibility_form,
+        name="load-accessibility-form",
+    ),
+    path(
+        "get-initial-accessibility-data/",
         accessibility.get_accessibility_data,
         name="get-initial-accessibility-data",
     ),

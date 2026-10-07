@@ -20,7 +20,7 @@
             class="oh-modal__diaglog-nav oh-modal__nav-prev"
             data-action="previous">
             <ion-icon name="chevron-back-outline" class="md hydrated" role="img"
-            aria-label="chevron back outline"></ion-icon>
+            aria-label="{% trans 'chevron back outline' %}"></ion-icon>
         </button>
         <button
             hx-get="{% url 'leave-allocation-request-single-view' next %}?instances_ids={{instances_ids}}&my_request={{my_request}}&dashboard={{dashboard}}"
@@ -28,7 +28,7 @@
             class="oh-modal__diaglog-nav oh-modal__nav-next"
             data-action="next">
             <ion-icon name="chevron-forward-outline" class="md hydrated" role="img"
-            aria-label="chevron forward outline"></ion-icon>
+            aria-label="{% trans 'chevron forward outline' %}"></ion-icon>
         </button>
     </div>
 {% endif %}
@@ -37,8 +37,8 @@
     <h2 class="oh-modal__dialog-title" id="objectDetailsModalLabel">
         {% trans "Details" %}
     </h2>
-    <button class="oh-modal__close" aria-label="Close">
-        <ion-icon name="close-outline" role="img" class="md hydrated" aria-label="close outline"></ion-icon>
+    <button class="oh-modal__close" aria-label={% trans 'Close' %}>
+        <ion-icon name="close-outline" role="img" class="md hydrated" aria-label="{% trans 'close outline' %}"></ion-icon>
     </button>
 </div>
 {% if leave_allocation_request %}
@@ -50,7 +50,7 @@
             <img
               src="{{leave_allocation_request.employee_id.get_avatar}}"
               class="oh-profile__image me-2"
-              alt="Mary Magdalene"
+              alt="{{ leave_allocation_request.employee_id }}"
             />
           </div>
           <div class="oh-timeoff-modal__profile-info">
@@ -59,7 +59,7 @@
             >
             <span
               class="oh-timeoff-modal__user m-0"
-              style="font-size: 18px; color: #4d4a4a"
+              style="font-size: 15px; color: #4d4a4a"
             >
               {{leave_allocation_request.employee_id.employee_work_info.department_id}} /
               {{leave_allocation_request.employee_id.employee_work_info.job_position_id}}</span
@@ -136,19 +136,19 @@
                 {% if my_request %}
                     {% if leave_allocation_request.status ==  'requested' %}
                         <button
-                            class="oh-btn oh-btn--info w-100 "
+                            class="oh-btn oh-btn--light-bkg oh-btn--secondary w-100 "
                             title="{% trans 'Edit' %}"
                             data-toggle="oh-modal-toggle"
                             data-target="#editModal"
                             hx-get="{% url 'leave-allocation-request-update' leave_allocation_request.id %}"
                             hx-target="#editTarget">
                             <ion-icon name="create-outline" role="img"
-                            class="md hydrated" aria-label="create outline">
+                            class="md hydrated" aria-label="{% trans 'create outline' %}">
                             </ion-icon>{% trans "Edit" %}
                         </button>
                     {% else %}
                         <button
-                            class="oh-btn oh-btn--info  w-100" disabled>
+                            class="oh-btn oh-btn--light-bkg oh-btn--secondary  w-100" disabled>
                             <ion-icon name="create-outline" ></ion-icon>
                         </button></td>
                     {% endif %}
@@ -161,7 +161,7 @@
                                 name="trash-outline"
                                 role="img"
                                 class="md hydrated"
-                                aria-label="create outline"
+                                aria-label="{% trans 'create outline' %}"
                             >
                             </ion-icon>{% trans "Delete" %}
                         </a>
@@ -216,7 +216,7 @@
 </div>
 {% else %}
     <div class="oh-empty">
-        <img src="{% static 'images/ui/search.svg' %}" class="oh-404__image" alt="Page not found. 404." />
+        <img src="{% static 'images/ui/search.svg' %}" class="oh-404__image" alt="{% trans 'Page not found. 404.' %}" />
         <h1 class="oh-empty__title">{% trans "No Records found." %}</h1>
         <p class="oh-empty__subtitle" style="text-align: center;">{% trans "There are no leave allocation requests at the moment." %}</p>
     </div>

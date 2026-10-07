@@ -10,10 +10,6 @@
                         {{f.form.recruitment_managers}}
                     </div>
                     <div class="oh-input-group">
-                        <label class="oh-label" for="{{f.form.start_date.id_for_label}}">{{f.form.start_date.label}}</label>
-                        {{f.form.start_date}}
-                    </div>
-                    <div class="oh-input-group">
                         <label class="oh-label" for="{{f.form.closed.id_for_label}}">{{f.form.closed.label}}</label>
                         {% comment %} {{f.form.closed}} {% endcomment %}
                         {{f.form.closed}}
@@ -23,10 +19,6 @@
                     <div class="oh-input-group">
                         <label class="oh-label" for="{{f.form.company_id.id_for_label}}">{{f.form.company_id.label}}</label>
                         {{f.form.company_id}}
-                    </div>
-                    <div class="oh-input-group">
-                        <label class="oh-label" for="{{f.form.end_date.id_for_label}}">{{f.form.end_date.label}}</label>
-                        {{f.form.end_date}}
                     </div>
                     <div class="oh-input-group">
                         <label class="oh-label" for="{{f.form.is_published.id_for_label}}">{{f.form.is_published.label}}</label>
@@ -63,7 +55,7 @@
     </div>
 </div>
 <div class="oh-dropdown__filter-footer">
-    <button class="oh-btn oh-btn--secondary oh-btn--small w-100 filterButton" id="">{% trans "Filter" %}</button>
+    <button class="oh-btn oh-btn--secondary oh-btn--small w-100 filterButton" id="">{% trans "Apply" %}</button>
 </div>
 </form>
 <script src="{% static '/base/filter.js' %}"></script>

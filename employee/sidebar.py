@@ -4,72 +4,69 @@ employee/sidebar.py
 To set Horilla sidebar for employee
 """
 
-from django.urls import reverse
-from django.utils.translation import gettext_lazy as trans
+from django.urls import reverse_lazy
+from django.utils.translation import gettext_lazy as _
 
 from accessibility.methods import check_is_accessible
 from base.templatetags.basefilters import is_reportingmanager
+from horilla.horilla_middlewares import _thread_locals
 
-MENU = trans("Employee")
+request = getattr(_thread_locals, "request", None)
+MENU = _("Employee")
 IMG_SRC = "images/ui/employees.svg"
+
 
 SUBMENUS = [
     {
-        "menu": trans("Profile"),
-        "redirect": reverse("employee-profile"),
-        "accessibility": "employee.sidebar.profile_accessibility",
+        "menu": _("My Dashboard"),
+        "redirect": reverse_lazy("ess-dashboard"),
+        "accessibility": "employee.sidebar.my_dashboard_accessibility",
     },
     {
-        "menu": trans("Employees"),
-        "redirect": reverse("employee-view"),
+        "menu": _("Employees"),
+        "redirect": reverse_lazy("employee-view"),
         "accessibility": "employee.sidebar.employee_accessibility",
+        "match_prefixes": [
+            "/employee/employee-view-new/",
+            "/employee/employee-view-update/",
+        ],
     },
     {
-        "menu": trans("Document Requests"),
-        "redirect": reverse("document-request-view"),
-        "accessibility": "employee.sidebar.document_accessibility",
+        "menu": _("Organization Chart"),
+        "redirect": reverse_lazy("organisation-chart"),
     },
     {
-        "menu": trans("Shift Requests"),
-        "redirect": reverse("shift-request-view"),
+        "menu": _("Requests"),
+        "redirect": reverse_lazy("requests-view"),
+        "accessibility": "employee.sidebar.requests_accessibility",
     },
     {
-        "menu": trans("Work Type Requests"),
-        "redirect": reverse("work-type-request-view"),
+        "menu": _("Work Schedules"),
+        "redirect": reverse_lazy("work-schedules-view"),
+        "accessibility": "employee.sidebar.work_schedules_accessibility",
     },
     {
-        "menu": trans("Rotating Shift Assign"),
-        "redirect": reverse("rotating-shift-assign"),
-        "accessibility": "employee.sidebar.rotating_shift_accessibility",
+        "menu": _("Policies & Discipline"),
+        "redirect": reverse_lazy("policies-discipline-view"),
+        # disciplinary-actions-detail-view/<pk>/ is a sibling URL (not a
+        # sub-path of policies-discipline-view/), so it needs an explicit
+        # prefix for the sidebar's path-based active-link highlighting to
+        # match it.
+        "match_prefixes": ["/employee/disciplinary-actions-detail-view/"],
     },
     {
-        "menu": trans("Rotating Work Type Assign"),
-        "redirect": reverse("rotating-work-type-assign"),
-        "accessibility": "employee.sidebar.rotating_work_type_accessibility",
-    },
-    {
-        "menu": trans("Disciplinary Actions"),
-        "redirect": reverse("disciplinary-actions"),
-    },
-    {
-        "menu": trans("Policies"),
-        "redirect": reverse("view-policies"),
-    },
-    {
-        "menu": trans("Organization Chart"),
-        "redirect": reverse("organisation-chart"),
+        "menu": _("Configuration"),
+        "redirect": reverse_lazy("employee-settings-view"),
+        "accessibility": "employee.sidebar.employee_settings_accessibility",
     },
 ]
 
 
-def profile_accessibility(request, submenu, user_perms, *args, **kwargs):
-    accessible = False
-    try:
-        accessible = request.session["selected_company"] == "all" or str(
-            request.user.employee_get.employee_work_info.company_id.id
-        ) == str(request.session["selected_company"])
-    finally:
-        return accessible
+def my_dashboard_accessibility(request, submenu, user_perms, *args, **kwargs):
+    """Hidden for plain employees — the main Dashboard link already shows this."""
+    from base.dashboard_roles import can_see_analytics_home, resolve_home_role
+
+    return can_see_analytics_home(resolve_home_role(request))
 
 
 def document_accessibility(request, submenu, user_perms, *args, **kwargs):
@@ -78,16 +75,54 @@ def document_accessibility(request, submenu, user_perms, *args, **kwargs):
     ) or is_reportingmanager(request.user)
 
 
-def rotating_shift_accessibility(request, submenu, user_perms, *args, **kwargs):
+def requests_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return True
+
+
+def rotating_shift_assign_accessibility(request, submenu, user_perms, *args, **kwargs):
     return request.user.has_perm(
         "base.view_rotatingshiftassign"
     ) or is_reportingmanager(request.user)
 
 
-def rotating_work_type_accessibility(request, submenu, user_perms, *args, **kwargs):
+def rotating_work_type_assign_accessibility(
+    request, submenu, user_perms, *args, **kwargs
+):
     return request.user.has_perm(
         "base.view_rotatingworktypeassign"
     ) or is_reportingmanager(request.user)
+
+
+def shift_roster_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_roster") or is_reportingmanager(
+        request.user
+    )
+
+
+def work_schedules_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return (
+        rotating_shift_assign_accessibility(
+            request, submenu, user_perms, *args, **kwargs
+        )
+        or rotating_work_type_assign_accessibility(
+            request, submenu, user_perms, *args, **kwargs
+        )
+        or shift_roster_accessibility(request, submenu, user_perms, *args, **kwargs)
+    )
+
+
+def employee_settings_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return (
+        employee_shift_accessibility(request, submenu, user_perms, *args, **kwargs)
+        or shift_schedule_accessibility(request, submenu, user_perms, *args, **kwargs)
+        or rotating_shift_accessibility(request, submenu, user_perms, *args, **kwargs)
+        or work_type_accessibility(request, submenu, user_perms, *args, **kwargs)
+        or rotating_work_type_accessibility(
+            request, submenu, user_perms, *args, **kwargs
+        )
+        or employee_type_accessibility(request, submenu, user_perms, *args, **kwargs)
+        or employee_tag_accessibility(request, submenu, user_perms, *args, **kwargs)
+    )
 
 
 def employee_accessibility(request, submenu, user_perms, *args, **kwargs):
@@ -101,3 +136,36 @@ def employee_accessibility(request, submenu, user_perms, *args, **kwargs):
         or request.user.has_perm("employee.view_employee")
         or check_is_accessible("employee_view", cache_key, employee)
     )
+
+
+# ---------------------------------------------------------------------------
+# Settings menu registrations
+# ---------------------------------------------------------------------------
+
+
+def work_type_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_worktype")
+
+
+def rotating_work_type_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_rotatingworktype")
+
+
+def employee_shift_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_employeeshift")
+
+
+def rotating_shift_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_rotatingshift")
+
+
+def shift_schedule_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_employeeshiftschedule")
+
+
+def employee_type_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("base.view_employeetype")
+
+
+def employee_tag_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("employee.view_employeetag")

@@ -24,6 +24,7 @@ from base.methods import (
     is_reportingmanager,
     reload_queryset,
 )
+from base.models import Company
 from employee.filters import EmployeeFilter
 from horilla import horilla_middlewares
 from horilla_widgets.widgets.horilla_multi_select_field import HorillaMultiSelectField
@@ -52,7 +53,7 @@ def validate_date(start_date, end_date):
     Validates that the start date is before or equal to the end date.
     """
     if start_date and end_date and start_date > end_date:
-        raise forms.ValidationError("The start date must be before the end date.")
+        raise forms.ValidationError(_("The start date must be before the end date."))
 
 
 def set_date_field_initial(instance):
@@ -81,7 +82,7 @@ class ObjectiveForm(BaseForm):
         label=_("Key result"),
         widget=forms.SelectMultiple(
             attrs={
-                "class": "oh-select oh-select-2",
+                "class": "oh-select oh-select-2 select2-hidden-accessible",
                 "onchange": "keyResultChange($(this))",
             }
         ),
@@ -122,7 +123,7 @@ class ObjectiveForm(BaseForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 required=False,
                 instance=self.instance,
@@ -135,7 +136,7 @@ class ObjectiveForm(BaseForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 required=False,
                 instance=self.instance,
@@ -177,10 +178,10 @@ class ObjectiveForm(BaseForm):
         start_date = cleaned_data.get("start_date")
         managers = cleaned_data.get("managers")
         if not managers or managers == None:
-            raise forms.ValidationError("Managers is a required field")
+            raise forms.ValidationError(_("Managers is a required field"))
         if add_assignees:
             if not assignees.exists() or start_date is None:
-                raise forms.ValidationError("Assign employees and start date")
+                raise forms.ValidationError(_("Assign employees and start date"))
         start_date = cleaned_data.get("start_date")
         end_date = cleaned_data.get("end_date")
         # Check that start date is before end date
@@ -249,7 +250,7 @@ class EmployeeObjectiveForm(BaseForm):
         label=_("Key result"),
         widget=forms.Select(
             attrs={
-                "class": "oh-select oh-select-2",
+                "class": "oh-select oh-select-2 select2-hidden-accessible",
                 "onchange": "keyResultChange($(this))",
             }
         ),
@@ -307,13 +308,15 @@ class EmployeeObjectiveCreateForm(BaseForm):
         required=False,
         widget=forms.SelectMultiple(
             attrs={
-                "class": "oh-select oh-select-2",
+                "class": "oh-select oh-select-2 select2-hidden-accessible",
                 "onchange": "keyResultChange($(this))",
             }
         ),
     )
     objective_id = forms.ModelChoiceField(
-        queryset=Objective.objects.all().exclude(archive=True),
+        queryset=Objective.objects.all()
+        .exclude(archive=True)
+        .exclude(is_template=True),
         required=True,
         label=_("Objective"),
         widget=forms.Select(
@@ -345,7 +348,7 @@ class EmployeeObjectiveCreateForm(BaseForm):
         widgets = {
             "start_date": forms.DateInput(
                 attrs={"class": "oh-input w-100", "type": "date"}
-            ),
+            )
         }
 
     def __init__(self, *args, **kwargs):
@@ -370,6 +373,10 @@ class EmployeeObjectiveCreateForm(BaseForm):
             self.fields["employee_id"].queryset = employees | Employee.objects.filter(
                 employee_user_id=request.user
             )
+        else:
+            self.fields["employee_id"].queryset = Employee.objects.filter(
+                employee_user_id=request.user
+            )
 
     def as_p(self):
         """
@@ -390,7 +397,7 @@ class EmployeeKeyResultForm(BaseForm):
         label=_("Key result"),
         widget=forms.Select(
             attrs={
-                "class": "oh-select oh-select-2",
+                "class": "oh-select oh-select-2 select2-hidden-accessible",
                 "onchange": "keyResultChange($(this))",
             }
         ),
@@ -413,6 +420,17 @@ class EmployeeKeyResultForm(BaseForm):
         ]
         widgets = {
             "employee_objective_id": forms.HiddenInput(),
+            "start_date": forms.DateInput(
+                attrs={
+                    "class": "oh-input w-100",
+                    "type": "date",
+                    "required": True,
+                    "onchange": "startDateChange()",
+                }
+            ),
+            "end_date": forms.DateInput(
+                attrs={"class": "oh-input w-100", "type": "date"}
+            ),
         }
 
     def as_p(self):
@@ -426,19 +444,20 @@ class EmployeeKeyResultForm(BaseForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = getattr(horilla_middlewares._thread_locals, "request", None)
-        self.fields["start_date"].widget.attrs.update({"onchange": "startDateChange()"})
         if self.initial.get("employee_objective_id"):
             if (
-                type(self.initial.get("employee_objective_id")) == int
-                or type(self.initial.get("employee_objective_id")) == str
+                type(self.initial.get("employee_objective_id")) is int
+                or type(self.initial.get("employee_objective_id")) is str
             ):
-                self.verbose_name = EmployeeObjective.objects.get(
-                    id=int(self.initial.get("employee_objective_id"))
-                ).employee_id
+                self.verbose_name = str(
+                    EmployeeObjective.objects.get(
+                        id=int(self.initial.get("employee_objective_id"))
+                    ).employee_id
+                )
             else:
-                self.verbose_name = self.initial.get(
-                    "employee_objective_id"
-                ).employee_id
+                self.verbose_name = str(
+                    self.initial.get("employee_objective_id").employee_id
+                )
         if request.user.has_perm("pms.add_keyresult") or is_reportingmanager(request):
             self.fields["key_result_id"].choices = list(
                 self.fields["key_result_id"].choices
@@ -466,11 +485,6 @@ class KRForm(HorillaModelForm):
             "target_value",
             "duration",
             "company_id",
-            "archive",
-        ]
-        exclude = [
-            "history",
-            "objects",
         ]
 
     def as_p(self):
@@ -560,7 +574,7 @@ class KeyResultForm(ModelForm):
             ),
             "employee_id": forms.Select(
                 attrs={
-                    "class": "oh-select oh-select-2",
+                    "class": "oh-select oh-select-2 select2-hidden-accessible",
                     "style": "display:none;",
                 }
             ),
@@ -569,6 +583,12 @@ class KeyResultForm(ModelForm):
             ),
             "target_value": forms.NumberInput(
                 attrs={"class": "oh-input w-100", "required": True}
+            ),
+            "start_date": forms.DateInput(
+                attrs={"type": "date", "class": "oh-input w-100", "required": True}
+            ),
+            "end_date": forms.DateInput(
+                attrs={"type": "date", "class": "oh-input w-100", "required": True}
             ),
             "progress_type": forms.Select(
                 attrs={
@@ -590,12 +610,13 @@ class KeyResultForm(ModelForm):
         employees = Employee.objects.filter(
             is_active=True, employee_work_info__reporting_manager_id=employee
         )
-        if employee and employees:
-            # manager level access
-            self.fields["employee_id"].queryset = employees
+        if "employee_id" in self.fields:
+            if employee and employees:
+                # manager level access
+                self.fields["employee_id"].queryset = employees
 
-        # Set unique IDs for employee_id fields to prevent conflicts with other forms on the same page
-        self.fields["employee_id"].widget.attrs.update({"id": str(uuid.uuid4())})
+            # Set unique IDs for employee_id fields to prevent conflicts with other forms on the same page
+            self.fields["employee_id"].widget.attrs.update({"id": str(uuid.uuid4())})
 
     def clean_value(self, value_type):
         """
@@ -612,7 +633,7 @@ class KeyResultForm(ModelForm):
             and value > other_value
         ):
             raise forms.ValidationError(
-                "Current value cannot be greater than target value"
+                _("Current value cannot be greater than target value")
             )
         elif (
             value is not None
@@ -621,7 +642,7 @@ class KeyResultForm(ModelForm):
             and value < other_value
         ):
             raise forms.ValidationError(
-                "Target value cannot be less than current value"
+                _("Target value cannot be less than current value")
             )
         return value
 
@@ -637,18 +658,20 @@ class KeyResultForm(ModelForm):
         # date comparing with objective start and end date
         if employee_objective_id and start_date and end_date:
             if start_date < employee_objective_id.start_date:
-                raise ValidationError("Start date should be after Objective start date")
+                raise ValidationError(
+                    _("Start date should be after Objective start date")
+                )
 
             if end_date > employee_objective_id.end_date:
-                raise ValidationError("End date should be below Objective end date")
+                raise ValidationError(_("End date should be below Objective end date"))
         else:
-            raise forms.ValidationError("Employee Objective not found")
+            raise forms.ValidationError(_("Employee Objective not found"))
         # target value and current value comparison
         if target_value <= 0:
-            raise ValidationError("Target value should be greater than zero")
+            raise ValidationError(_("Target value should be greater than zero"))
         if current_value > target_value:
             raise forms.ValidationError(
-                "Current value cannot be greater than target value"
+                _("Current value cannot be greater than target value")
             )
         return cleaned_data
 
@@ -668,12 +691,56 @@ class FeedbackForm(HorillaModelForm):
 
     class Meta:
         model = Feedback
-        fields = "__all__"
-        exclude = ["status", "archive", "is_active"]
+        fields = [
+            "review_cycle",
+            "employee_id",
+            "manager_id",
+            "subordinate_id",
+            "colleague_id",
+            "start_date",
+            "end_date",
+            "question_template_id",
+            "employee_key_results_id",
+            "cyclic_feedback",
+            "cyclic_feedback_days_count",
+            "cyclic_feedback_period",
+        ]
+        # fields = "__all__"
+        exclude = [
+            "status",
+            "archive",
+            "is_active",
+            "cyclic_next_start_date",
+            "cyclic_next_end_date",
+        ]
+
+        labels = {
+            "manager_id": _("Manager"),
+            "employee_id": _("Employee"),
+            "colleague_id": _("Colleague"),
+            "question_template_id": _("Question Template"),
+            "employee_key_results_id": _("Key Result"),
+            "cyclic_feedback": _("Is Cyclic Feedback"),
+            # "cyclic_feedback_period":_("")
+        }
 
         widgets = {
+            "employee_key_results_id": forms.SelectMultiple(
+                attrs={
+                    "class": "oh-select oh-select-2 w-100",
+                    "multiple": "multiple",
+                    "style": "width:100%; display:none;",
+                    "required": False,
+                }
+            ),
             "review_cycle": forms.TextInput(
                 attrs={"placeholder": _("Enter a title"), "class": "oh-input w-100"}
+            ),
+            "start_date": forms.DateInput(
+                attrs={"type": "date", "class": "oh-input w-100"}
+            ),
+            "end_date": forms.DateInput(
+                attrs={"type": "date", "class": "oh-input w-100"}
             ),
             "cyclic_feedback": forms.CheckboxInput(
                 attrs={
@@ -689,6 +756,8 @@ class FeedbackForm(HorillaModelForm):
         """
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         super().__init__(*args, **kwargs)
+        # if instance:
+        #     kwargs["initial"] = set_date_field_initial(instance)
 
         user = request.user if request else None
         user_perms = user.get_all_permissions() if user else set()
@@ -716,6 +785,17 @@ class FeedbackForm(HorillaModelForm):
         self.fields["employee_id"].widget.attrs["onchange"] = "get_collegues($(this))"
 
         reload_queryset(self.fields)
+        selected_employee_id = self.data.get("employee_id") if self.data else None
+        if not selected_employee_id and self.instance and self.instance.pk:
+            selected_employee_id = self.instance.employee_id_id
+
+        self.fields["employee_key_results_id"].queryset = (
+            EmployeeKeyResult.objects.filter(
+                employee_objective_id__employee_id=selected_employee_id
+            )
+            if selected_employee_id
+            else EmployeeKeyResult.objects.none()
+        )
 
         if self.instance and self.instance.pk:
             employee = self.instance.employee_id
@@ -753,7 +833,7 @@ class FeedbackForm(HorillaModelForm):
         #     widget=HorillaMultiSelectWidget(
         #         filter_route_name="employee-widget-filter",
         #         filter_class=EmployeeFilter,
-        #         filter_instance_contex_name="f",
+        #         filter_instance_context_name="f",
         #         filter_template_path="employee_filters.html",
         #         instance=self.instance,
         #         required=False,
@@ -785,13 +865,16 @@ class QuestionTemplateForm(ModelForm):
     Form for creating or updating a question template instance
     """
 
+    cols = {"question_template": 12, "company_id": 12}
+
     question_template = forms.CharField(
+        label=_("Question Template"),
         widget=forms.TextInput(
             attrs={
                 "class": "oh-input oh-input--small oh-input--res-height w-100",
                 "placeholder": _("For Developer"),
             }
-        )
+        ),
     )
 
     class Meta:
@@ -812,6 +895,12 @@ class QuestionTemplateForm(ModelForm):
                 "class": "oh-select oh-select-2 w-100",
             }
         )
+        if not self.instance.pk:
+            from base.auth_backends import resolve_company_id_for_new_record
+
+            company_id = resolve_company_id_for_new_record()
+            if company_id:
+                self.initial["company_id"] = Company.objects.filter(id=company_id)
 
     def as_p(self):
         """
@@ -937,7 +1026,7 @@ class ObjectiveCommentForm(ModelForm):
         reload_queryset(self.fields)
 
 
-class PeriodForm(HorillaModelForm):
+class PeriodForm(ModelForm):
     """
     A form for creating or updating a Period object.
     """
@@ -953,6 +1042,12 @@ class PeriodForm(HorillaModelForm):
         widgets = {
             "period_name": forms.TextInput(
                 attrs={"placeholder": "Q1.", "class": "oh-input w-100"}
+            ),
+            "start_date": forms.DateInput(
+                attrs={"type": "date", "class": "oh-input  w-100"}
+            ),
+            "end_date": forms.DateInput(
+                attrs={"type": "date", "class": "oh-input  w-100"}
             ),
         }
 
@@ -988,6 +1083,15 @@ class PeriodForm(HorillaModelForm):
 
 
 class AnonymousFeedbackForm(BaseForm):
+    cols = {
+        "feedback_subject": 12,
+        "based_on": 12,
+        "feedback_description": 12,
+        "employee_id": 12,
+        "department_id": 12,
+        "job_position_id": 12,
+    }
+
     class Meta:
         model = AnonymousFeedback
         fields = "__all__"
@@ -995,15 +1099,17 @@ class AnonymousFeedbackForm(BaseForm):
 
 
 class MeetingsForm(BaseForm):
+
+    cols = {
+        "employee_id": 12,
+        "manager": 12,
+        "answer_employees": 12,
+        "question_template": 12,
+    }
     date = forms.DateTimeField(
         widget=forms.DateTimeInput(
-            format="%Y-%m-%dT%H:%M",
-            attrs={
-                "class": "oh-input w-100",
-                "type": "datetime-local",
-            },
+            attrs={"class": "oh-input w-100", "type": "datetime-local"}
         ),
-        input_formats=["%Y-%m-%dT%H:%M"],
     )
 
     class Meta:
@@ -1053,7 +1159,7 @@ class MeetingsForm(BaseForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 form=self,
                 instance=self.instance,
@@ -1068,6 +1174,21 @@ class MeetingsForm(BaseForm):
                 self.fields["answer_employees"].queryset = employees
         except:
             pass
+
+
+class MeetingResponseForm(ModelForm):
+    """
+    Meeting response form
+    """
+
+    cols = {"response": 12}
+
+    class Meta:
+        model = Meetings
+        fields = ["response"]
+        widgets = {
+            "response": forms.Textarea(attrs={"data-summernote": ""}),
+        }
 
 
 class BonusPointSettingForm(HorillaModelForm):
@@ -1088,29 +1209,38 @@ class BonusPointSettingForm(HorillaModelForm):
         model = BonusPointSetting
         fields = "__all__"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        reload_queryset(self.fields)
+        self.fields["company_id"].widget.attrs.update(
+            {"class": "oh-select oh-select-2 w-100"}
+        )
+        # Always required: signals.py uses this to decide who receives the
+        # bonus point, so a blank value silently awards nobody.
+        self.fields["applicable_for"].required = True
+
     def clean(self):
         cleaned_data = super().clean()
         model = cleaned_data.get("model")
+        applicable_for = cleaned_data.get("applicable_for")
 
         if model in ["pms.models.EmployeeObjective", "pms.models.EmployeeKeyResult"]:
-            if not cleaned_data.get("applicable_for") == "owner":
+            if applicable_for != "owner":
                 raise ValidationError(
-                    _(
-                        f"Model Doesn't have this {cleaned_data.get('applicable_for')} field"
-                    )
+                    _("For Objective and Key Result, 'Applicable For' must be 'Owner'.")
                 )
-            if not cleaned_data["bonus_for"] == "Closed":
+            if cleaned_data.get("bonus_for") != "Closed":
                 raise ValidationError(
-                    _(f"This 'Bonus for' is not in the Model's status")
+                    _("For Objective and Key Result, 'Bonus For' must be 'Closing'.")
                 )
         if model in ["project.models.Task", "project.models.Project"]:
-            if cleaned_data.get("applicable_for") == "owner":
+            if applicable_for == "owner":
                 raise ValidationError(
                     _(
-                        f"Model Doesn't have this {cleaned_data.get('applicable_for')} field"
+                        "For Task and Project, 'Applicable For' must be 'Members' or 'Managers'."
                     )
                 )
-        if cleaned_data["points"] <= 0:
+        if cleaned_data.get("points", 0) <= 0:
             raise ValidationError(_("Bonus point must be greater than zero"))
 
         return cleaned_data
@@ -1160,7 +1290,7 @@ class EmployeeFeedbackForm(HorillaModelForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 form=self,
                 instance=self.instance,
@@ -1257,7 +1387,7 @@ class BulkFeedbackForm(HorillaModelForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 form=self,
                 instance=self.instance,

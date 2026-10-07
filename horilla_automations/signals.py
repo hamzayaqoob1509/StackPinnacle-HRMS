@@ -6,18 +6,19 @@ horilla_automation/signals.py
 import copy
 import logging
 import threading
-import time
 import types
 
 from bs4 import BeautifulSoup
 from django import template
 from django.core.mail import EmailMessage
-from django.db import models
+from django.db import models, transaction
 from django.db.models.query import QuerySet
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
+from base.methods import build_safe_template_request, sanitize_mail_template_body
 from horilla.horilla_middlewares import _thread_locals
+from horilla.models import has_xss
 from horilla.signals import post_bulk_update, pre_bulk_update
 from notifications.signals import notify
 
@@ -102,11 +103,14 @@ def start_automation():
                 previous_queryset = previous_bulk_record.get("queryset", None)
                 previous_queryset_copy = previous_bulk_record.get("queryset_copy", [])
 
-            bulk_thread = threading.Thread(
-                target=_bulk_update_thread_handler,
-                args=(queryset, previous_queryset_copy, automation),
+            # Deferred for the same reason as the post_save handler above:
+            # the thread reads the rows back on its own connection.
+            transaction.on_commit(
+                lambda: threading.Thread(
+                    target=_bulk_update_thread_handler,
+                    args=(queryset, previous_queryset_copy, automation),
+                ).start()
             )
-            bulk_thread.start()
 
         func_name = f"{automation.method_title}_post_bulk_signal_handler"
 
@@ -149,7 +153,7 @@ def start_automation():
 
             post_bulk_update.connect(handler, sender=model_class)
 
-            def create_signal_handler(name, automation, query_strings):
+            def create_signal_handler(name, automation, query_strings, model_class):
                 def signal_handler(sender, instance, created, **kwargs):
                     """
                     Signal handler for post-save events of the model instances.
@@ -168,10 +172,21 @@ def start_automation():
                         instance,
                         previous_instance,
                     )
-                    thread = threading.Thread(
-                        target=lambda: send_automated_mail(*args),
+                    # Deferred to on_commit rather than started here: the
+                    # thread gets its own DB connection, so if this save is
+                    # inside an open transaction (fixture loads and the demo
+                    # data backfills wrap large batches in transaction.atomic)
+                    # the row is not visible to it yet and send_mail's
+                    # re-read raises DoesNotExist. on_commit runs the thread
+                    # once the row is durable, and never runs at all if the
+                    # transaction rolls back -- which is also correct, since
+                    # a mail should not go out for a save that was undone.
+                    # Outside a transaction on_commit runs immediately.
+                    transaction.on_commit(
+                        lambda: threading.Thread(
+                            target=lambda: send_automated_mail(*args),
+                        ).start()
                     )
-                    thread.start()
 
                 signal_handler.__name__ = name
                 signal_handler.model_class = model_class
@@ -180,8 +195,11 @@ def start_automation():
 
             # Create and connect the signal handler
             handler_name = f"{automation.method_title}_signal_handler"
+            # model_class is passed in rather than read from the enclosing
+            # loop: the handler outlives the iteration, so a closure over the
+            # loop variable would make every handler use the last model.
             dynamic_signal_handler = create_signal_handler(
-                handler_name, automation, query_strings
+                handler_name, automation, query_strings, model_class
             )
             SIGNAL_HANDLERS.append(dynamic_signal_handler)
             post_save.connect(
@@ -243,8 +261,14 @@ def start_automation():
             INSTANCE_HANDLERS.append(handler)
             pre_bulk_update.connect(handler, sender=model_class)
 
+            # _model/_automation are bound as defaults rather than read from
+            # the enclosing loop: the handler stays connected after the loop
+            # ends, so a closure would make every handler use the last
+            # iteration's values. Django only passes sender/instance/**kwargs.
             @receiver(pre_save, sender=model_class)
-            def instance_handler(sender, instance, **kwargs):
+            def instance_handler(
+                sender, instance, _model=model_class, _automation=automation, **kwargs
+            ):
                 """
                 Signal handler for pres-save events of the model instances.
                 """
@@ -252,17 +276,14 @@ def start_automation():
                 request = getattr(_thread_locals, "request", None)
                 if instance.pk:
                     # to get the previous instance
-                    instance = model_class.objects.filter(id=instance.pk).first()
+                    instance = _model.objects.filter(id=instance.pk).first()
                 if request:
                     _thread_locals.previous_record = {
-                        "automation": automation,
+                        "automation": _automation,
                         "instance": instance,
                     }
-                instance_handler.__name__ = (
-                    f"{automation.method_title}_instance_handler"
-                )
-                return instance_handler
 
+            instance_handler.__name__ = f"{automation.method_title}_instance_handler"
             instance_handler.model_class = model_class
             instance_handler.automation = automation
 
@@ -364,9 +385,26 @@ def send_mail(request, automation, instance):
     to_emails = []
 
     if instance.pk:
-        # refreshing instance due to m2m fields are not loading here some times
-        time.sleep(0.1)
-        instance = instance._meta.model.objects.get(pk=instance.pk)
+        # Re-read so m2m fields are populated -- they are not yet attached on
+        # the instance the post_save signal hands over.
+        #
+        # filter().first() rather than get(): the row can legitimately be
+        # gone by the time this runs, because the caller is a thread with its
+        # own DB connection. A row created and then deleted inside the same
+        # transaction, or an object deleted between the save and this read,
+        # both land here. get() raised DoesNotExist into a bare thread, which
+        # printed a traceback nobody could act on and sent no mail either
+        # way; returning quietly has the same effect without the noise.
+        refreshed = instance._meta.model.objects.filter(pk=instance.pk).first()
+        if refreshed is None:
+            logger.debug(
+                "Skipping automation %s: %s pk=%s no longer exists",
+                automation.method_title,
+                instance._meta.label,
+                instance.pk,
+            )
+            return
+        instance = refreshed
 
     pk_or_text = getattribute(instance, automation.mail_details)
     model_class = get_model_class(automation.model)
@@ -426,19 +464,42 @@ def send_mail(request, automation, instance):
             sender = request.user.employee_get
         except:
             sender = None
+        # Automation bodies/titles are admin-authored Django template source
+        # stored in the DB, rendered here with real employee/instance data and
+        # (for attachments) fed to wkhtmltopdf. sanitize_mail_template_body()
+        # strips forbidden attribute access (password, META, session, ...) and
+        # forbidden tags; build_safe_template_request() keeps `request` usable
+        # in templates without exposing its sensitive internals.
+        safe_request = build_safe_template_request(request)
         if context_instance:
             if template_attachments := automation.template_attachments.all():
                 for template_attachment in template_attachments:
-                    template_bdy = template.Template(template_attachment.body)
+                    template_bdy = template.Template(
+                        sanitize_mail_template_body(template_attachment.body)
+                    )
                     context = template.Context(
                         {
                             "instance": context_instance,
                             "self": sender,
                             "model_instance": instance,
-                            "request": request,
+                            "request": safe_request,
                         }
                     )
                     render_bdy = template_bdy.render(context)
+                    # A blocklist over the raw template source can be bypassed
+                    # by splitting a dangerous tag across separate {{ }}
+                    # expressions that only combine into e.g. "<script>" once
+                    # rendered. Re-check the actual rendered HTML -- the thing
+                    # that's about to reach wkhtmltopdf (which runs with
+                    # local-file-access enabled) -- not just the source.
+                    if has_xss(render_bdy):
+                        logger.error(
+                            "Automation '%s': rendered attachment body failed "
+                            "the post-render XSS check; skipping this PDF "
+                            "attachment.",
+                            automation.title,
+                        )
+                        continue
                     attachments.append(
                         (
                             "Document",
@@ -449,22 +510,26 @@ def send_mail(request, automation, instance):
                         )
                     )
 
-            template_bdy = template.Template(mail_template.body)
+            template_bdy = template.Template(
+                sanitize_mail_template_body(mail_template.body)
+            )
         else:
-            template_bdy = template.Template(pk_or_text)
+            template_bdy = template.Template(sanitize_mail_template_body(pk_or_text))
         context = template.Context(
             {
                 "instance": context_instance,
                 "self": sender,
                 "model_instance": instance,
-                "request": request,
+                "request": safe_request,
             }
         )
         render_bdy = template_bdy.render(context)
 
-        title_template = template.Template(automation.title)
+        title_template = template.Template(
+            sanitize_mail_template_body(automation.title)
+        )
         title_context = template.Context(
-            {"instance": instance, "self": sender, "request": request}
+            {"instance": instance, "self": sender, "request": safe_request}
         )
         render_title = title_template.render(title_context)
         soup = BeautifulSoup(render_bdy, "html.parser")

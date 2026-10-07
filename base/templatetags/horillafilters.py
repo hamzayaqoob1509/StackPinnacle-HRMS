@@ -13,13 +13,13 @@ from django import template
 from django.apps import apps
 from django.forms.widgets import SelectMultiple, Textarea
 from django.template import TemplateSyntaxError
-from django.template.defaultfilters import register
 from django.utils.translation import gettext as _
 
-from base.models import Company, EmployeeShiftSchedule
+from base.models import Company, EmployeeShiftSchedule, IntegrationApps
 from employee.methods.duration_methods import strtime_seconds
 from horilla.horilla_middlewares import _thread_locals
 from horilla.methods import get_horilla_model_class
+from horilla_theme.models import CompanyTheme, HorillaColorTheme
 
 register = template.Library()
 
@@ -237,6 +237,16 @@ def base64_encode(value):
 
 
 @register.filter
+def absolute_url(url, request):
+    if not url:
+        return ""
+    if url.startswith("http"):
+        return url
+
+    return request.build_absolute_uri(url)
+
+
+@register.filter
 def get_item(list, i):
     try:
         return list[i]
@@ -250,6 +260,30 @@ def app_installed(app_name):
     Returns True if the app with the given name is installed, otherwise False.
     """
     return apps.is_installed(app_name)
+
+
+@register.filter(name="integration_installed")
+def is_integration_installed(app_name):
+    """
+    Custom function to check if an app is installed and enabled for the current company.
+    """
+    from base.models import Company
+
+    request = _thread_locals.request
+    company = None
+    if request:
+        selected_company = request.session.get("selected_company")
+        if selected_company and selected_company != "all":
+            company = Company.objects.filter(id=selected_company).first()
+
+    if not IntegrationApps.objects.filter(
+        app_label=app_name
+    ).exists() and not apps.is_installed(app_name):
+        return False
+
+    return IntegrationApps.objects.filter(
+        app_label=app_name, company=company, is_enabled=True
+    ).exists()
 
 
 @register.filter(name="is_stagemanager")
@@ -305,7 +339,6 @@ def is_check_in_enabled(request):
     """
     from attendance.models import AttendanceGeneralSetting
 
-    # from base.models import Company  # Assuming Company is the correct model for `selected_company`
     selected_company = request.session.get("selected_company")
     if not selected_company:
         return False  # Safeguard if session key is missing
@@ -327,6 +360,80 @@ def is_check_in_enabled(request):
     return bool(attendance_settings and attendance_settings.enable_check_in)
 
 
+@register.filter(name="is_geofencing_enabled")
+def is_geofencing_enabled(request):
+    """
+    Whether the selected company has an active geo-fence -- the web
+    check-in/out buttons only need to capture the browser's location (and
+    the backend only needs to enforce it) when this is true.
+    """
+    from geofencing.models import GeoFencing
+
+    selected_company = request.session.get("selected_company")
+    if not selected_company or selected_company == "all":
+        return False
+    company = Company.objects.filter(id=selected_company).first()
+    if not company:
+        return False
+    fence = GeoFencing.objects.filter(company_id=company).first()
+    return bool(fence and fence.start)
+
+
+@register.filter(name="is_asset_fine_enabled")
+def is_asset_fine_enabled(request):
+    """
+    This method checks whether the asset fine feature is enabled.
+    """
+    from asset.models import AssetGeneralSetting
+
+    selected_company = request.session.get("selected_company")
+    if not selected_company:
+        return False  # Safeguard if session key is missing
+
+    # Fetch the settings based on the selected company
+    if selected_company == "all":
+        asset_settings = AssetGeneralSetting.objects.filter(company_id=None).first()
+    else:
+        company = Company.objects.filter(id=selected_company).first()
+        if not company:
+            return False  # Return False if the company doesn't exist
+        asset_settings = AssetGeneralSetting.objects.filter(company_id=company).first()
+
+    return bool(asset_settings and asset_settings.enable_asset_fine)
+
+
+@register.filter(name="is_timerunner_enabled")
+def is_timerunner_enabled(request):
+    """
+    Whether the navbar at-work timer should run for this request.
+
+    Uses the selected company when one is chosen; when the switcher is on
+    "all", uses the logged-in employee's company (the Check-In/Out control is
+    personal). Falls back to the global (company_id=None) row, then True.
+    """
+    from attendance.models import AttendanceGeneralSetting
+
+    if not apps.is_installed("attendance"):
+        return True
+
+    selected_company = request.session.get("selected_company")
+    company = None
+    if selected_company and selected_company != "all":
+        company = Company.objects.filter(id=selected_company).first()
+    else:
+        try:
+            company = request.user.employee_get.get_company()
+        except Exception:
+            company = None
+
+    setting = AttendanceGeneralSetting.objects.filter(company_id=company).first()
+    if not setting:
+        setting = AttendanceGeneralSetting.objects.filter(company_id=None).first()
+    if setting is None:
+        return True
+    return bool(setting.time_runner)
+
+
 @register.filter
 def verbose_name(instance, field_name):
     """Return verbose name of a model field."""
@@ -334,3 +441,84 @@ def verbose_name(instance, field_name):
         return instance._meta.get_field(field_name).verbose_name
     except Exception:
         return field_name
+
+
+def _resolve_company_theme(company_id):
+    if company_id is not None and company_id != "all":
+        company = Company.objects.filter(id=company_id).first()
+        theme = CompanyTheme.objects.filter(company=company).first()
+        if theme:
+            return HorillaColorTheme.objects.filter(id=theme.theme.id).first()
+        else:
+            return HorillaColorTheme.objects.filter(is_default=True).first()
+    return HorillaColorTheme.objects.filter(is_default=True).first()
+
+
+@register.simple_tag(takes_context=True)
+def get_company(context):
+    # Some fragments are rendered without a request in context; fall back to the
+    # default theme instead of raising so this tag is safe to use anywhere.
+    request = context.get("request")
+    session = getattr(request, "session", None) if request is not None else None
+    company_id = session.get("selected_company") if session is not None else None
+
+    # This tag is invoked from per-row/per-fragment templates (e.g. render_template()
+    # calls on list pages), so a page with N rows can call it N times per request.
+    # The resolved theme can't change within a single request, so memoize on it.
+    if request is None:
+        return _resolve_company_theme(company_id)
+    cache = getattr(request, "_horilla_company_theme_cache", None)
+    if cache is None:
+        cache = {}
+        request._horilla_company_theme_cache = cache
+    if company_id not in cache:
+        cache[company_id] = _resolve_company_theme(company_id)
+    return cache[company_id]
+
+
+@register.simple_tag
+def get_hq_company():
+    """
+    Returns the Company flagged as headquarters (Company.hq=True), for
+    public-facing pages (open recruitments, application form, candidate
+    survey) that need to show a real company identity regardless of the
+    WHITE_LABELLING setting or the viewer's session (these pages are reached
+    by anonymous candidates, who have no selected_company/employee context).
+    """
+    return Company.objects.filter(hq=True).order_by("id").first()
+
+
+@register.simple_tag
+def remove_item_at(obj, idx):
+    try:
+        idx = int(idx)
+    except (ValueError, TypeError):
+        return obj
+
+    # Handle dictionary
+    if isinstance(obj, dict):
+        items = list(obj.items())
+        if 0 <= idx < len(items):
+            items.pop(idx)
+        return items
+
+    # Handle list
+    if isinstance(obj, list):
+        new_list = obj.copy()
+        if 0 <= idx < len(new_list):
+            new_list.pop(idx)
+        return new_list
+
+    # Handle tuple
+    if isinstance(obj, tuple):
+        temp = list(obj)
+        if 0 <= idx < len(temp):
+            temp.pop(idx)
+        return tuple(temp)
+
+    return obj
+
+
+@register.simple_tag(takes_context=True)
+def get_def_theme(context):
+    return HorillaColorTheme.objects.filter(is_default=True).first()

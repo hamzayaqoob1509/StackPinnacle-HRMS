@@ -5,69 +5,66 @@ This module is used to map url pattern or request path with view functions
 """
 
 from django.urls import include, path
+from django.views.generic import RedirectView
 
+from payroll import dashboard as pay_dashboard
+from payroll.cbv import contracts, dashboard, payslip_automation, settings_tabs
 from payroll.models.models import Contract, Payslip
 from payroll.views import views
 
 urlpatterns = [
     path("", include("payroll.urls.component_urls")),
     path("", include("payroll.urls.tax_urls")),
-    path("get-language-code/", views.get_language_code, name="get-language-code"),
-    path("contract-create", views.contract_create, name="contract-create"),
+    path("contract-create/", views.contract_create, name="contract-create"),
     path(
-        "update-contract/<int:contract_id>",
+        "update-contract/<int:contract_id>/",
         views.contract_update,
         name="update-contract",
         kwargs={"model": Contract},
     ),
     path(
-        "update-contract-status/<int:contract_id>",
+        "update-contract-status/<int:contract_id>/",
         views.contract_status_update,
         name="update-contract-status",
     ),
     path(
-        "bulk-update-contract-status",
+        "bulk-update-contract-status/",
         views.bulk_contract_status_update,
         name="bulk-update-contract-status",
     ),
     path(
-        "update-contract-filing-status/<int:contract_id>",
+        "update-contract-filing-status/<int:contract_id>/",
         views.update_contract_filing_status,
         name="update-contract-filing-status",
     ),
     path(
-        "delete-contract/<int:contract_id>",
+        "delete-contract/<int:contract_id>/",
         views.contract_delete,
         name="delete-contract",
     ),
     path(
-        "delete-contract-modal/<int:contract_id>",
+        "delete-contract-modal/<int:contract_id>/",
         views.contract_delete,
         name="delete-contract-modal",
     ),
-    path("view-contract/", views.contract_view, name="view-contract"),
+    # path("view-contract/", views.contract_view, name="view-contract"),
     path(
         "single-contract-view/<int:contract_id>/",
         views.view_single_contract,
         name="single-contract-view",
     ),
-    path("payslip-pdf/<int:id>", views.payslip_pdf, name="payslip-pdf"),
-    path("contract-filter", views.contract_filter, name="contract-filter"),
-    path("settings", views.settings, name="payroll-settings"),
+    path("payslip-pdf/<int:id>/", views.payslip_pdf, name="payslip-pdf"),
+    # path("contract-filter/", views.contract_filter, name="contract-filter"),
+    path("settings/", views.settings, name="payroll-settings"),
     path(
         "payslip-status-update/<int:payslip_id>/",
         views.update_payslip_status,
         name="payslip-status-update",
     ),
     path(
-        "payslip-status-update-no-id",
+        "payslip-status-update-no-id/",
         views.update_payslip_status_no_id,
         name="payslip-status-update-no-id",
-    ),
-    path(
-        "bulk-payslip-status-update",
-        views.bulk_update_payslip_status,
-        name="bulk-payslip-status-update",
     ),
     path(
         "view-payslip/<int:payslip_id>/",
@@ -84,34 +81,49 @@ urlpatterns = [
         "delete-payslip/<int:payslip_id>/", views.delete_payslip, name="delete-payslip"
     ),
     path(
-        "contract-info-initial",
+        "contract-info-initial/",
         views.contract_info_initial,
         name="contract-info-initial",
     ),
     path(
         "view-payroll-dashboard/",
-        views.view_payroll_dashboard,
-        name="view-payroll-dashboard",
+        RedirectView.as_view(pattern_name="view-payroll-dashboard"),
+        name="view-payroll-dashboard-legacy",
     ),
     path(
-        "dashboard-employee-chart",
+        "dashboard-employee-chart/",
         views.dashboard_employee_chart,
         name="dashboard-employee-chart",
     ),
     path(
-        "dashboard-payslip-details",
+        "dashboard-payslip-details/",
         views.payslip_details,
         name="dashboard-payslip-details",
     ),
     path(
-        "dashboard-department-chart",
+        "dashboard-department-chart/",
         views.dashboard_department_chart,
         name="dashboard-department-chart",
     ),
     path(
-        "dashboard-contract-ending",
-        views.contract_ending,
+        "dashboard-department-chart-list/",
+        dashboard.DashboardDepartmentPayslip.as_view(),
+        name="dashboard-department-chart-list",
+    ),
+    # path(
+    #     "dashboard-contract-ending",
+    #     views.contract_ending,
+    #     name="dashboard-contract-ending",
+    # ),
+    path(
+        "dashboard-contract-ending/",
+        dashboard.DashboardContractList.as_view(),
         name="dashboard-contract-ending",
+    ),
+    path(
+        "dashboard-contract-expired/",
+        dashboard.DashboardContractListExpired.as_view(),
+        name="dashboard-contract-expired",
     ),
     path(
         "dashboard-export/",
@@ -119,18 +131,18 @@ urlpatterns = [
         name="dashboard-export",
     ),
     path(
-        "payslip-bulk-delete",
+        "payslip-bulk-delete/",
         views.payslip_bulk_delete,
         name="payslip-bulk-delete",
     ),
     path(
-        "update-batch-group-name",
+        "update-batch-group-name/",
         views.slip_group_name_update,
         name="update-batch-group-name",
     ),
-    path("contract-export", views.contract_export, name="contract-export"),
+    path("contract-export/", views.contract_export, name="contract-export"),
     path(
-        "contract-bulk-delete",
+        "contract-bulk-delete/",
         views.contract_bulk_delete,
         name="contract-bulk-delete",
     ),
@@ -167,9 +179,22 @@ urlpatterns = [
         name="delete-reimbursement-comment-file",
     ),
     path(
-        "initial-notice-period",
+        "initial-notice-period/",
         views.initial_notice_period,
         name="initial-notice-period",
+    ),
+    path("view-contract/", contracts.ContractsView.as_view(), name="view-contract"),
+    path("contract-filter/", contracts.ContractsList.as_view(), name="contract-filter"),
+    path("contracts-nav/", contracts.ContractsNav.as_view(), name="contracts-nav"),
+    path(
+        "contracts-export/",
+        contracts.ContractsExportView.as_view(),
+        name="contracts-export",
+    ),
+    path(
+        "contracts-detail-view/<int:pk>/",
+        contracts.ContractsDetailView.as_view(),
+        name="contracts-detail-view",
     ),
     # ===========================Auto payslip generate================================
     path(
@@ -178,23 +203,134 @@ urlpatterns = [
         name="auto-payslip-settings-view",
     ),
     path(
-        "create-auto-payslip",
+        "payroll-settings-view/",
+        settings_tabs.PayrollSettingsView.as_view(),
+        name="payroll-settings-view",
+    ),
+    path(
+        "payroll-settings-tab-view/",
+        settings_tabs.PayrollSettingsTabView.as_view(),
+        name="payroll-settings-tab-view",
+    ),
+    path(
+        "payroll-settings-salary-structure-tab/",
+        settings_tabs.PayrollSettingsSalaryStructureTab.as_view(),
+        name="payroll-settings-salary-structure-tab",
+    ),
+    path(
+        "payroll-settings-allowance-tab/",
+        settings_tabs.PayrollSettingsAllowanceTab.as_view(),
+        name="payroll-settings-allowance-tab",
+    ),
+    path(
+        "payroll-settings-deduction-tab/",
+        settings_tabs.PayrollSettingsDeductionTab.as_view(),
+        name="payroll-settings-deduction-tab",
+    ),
+    path(
+        "payroll-settings-auto-payslip-tab/",
+        settings_tabs.PayrollSettingsAutoPayslipTab.as_view(),
+        name="payroll-settings-auto-payslip-tab",
+    ),
+    path(
+        "create-auto-payslip/",
         views.create_or_update_auto_payslip,
         name="create-auto-payslip",
     ),
     path(
-        "update-auto-payslip/<int:auto_id>",
+        "update-auto-payslip/<int:auto_id>/",
         views.create_or_update_auto_payslip,
         name="update-auto-payslip",
     ),
     path(
-        "delete-auto-payslip/<int:auto_id>",
+        "delete-auto-payslip/<int:auto_id>/",
         views.delete_auto_payslip,
         name="delete-auto-payslip",
     ),
     path(
-        "activate-auto-payslip-generate",
+        "activate-auto-payslip-generate/",
         views.activate_auto_payslip_generate,
         name="activate-auto-payslip-generate",
+    ),
+    path(
+        "pay-slip-automation-list/",
+        payslip_automation.PaySlipAutomationListView.as_view(),
+        name="pay-slip-automation-list",
+    ),
+    path(
+        "pay-slip-automation-nav/",
+        payslip_automation.PaySlipAutomationNav.as_view(),
+        name="pay-slip-automation-nav",
+    ),
+    path(
+        "pay-slip-automation-create/",
+        payslip_automation.PaySlipAutomationFormView.as_view(),
+        name="pay-slip-automation-create",
+    ),
+    path(
+        "pay-slip-automation-update/<int:pk>/",
+        payslip_automation.PaySlipAutomationFormView.as_view(),
+        name="pay-slip-automation-update",
+    ),
+    path(
+        "pay-slip-automation-delete/<int:auto_id>/",
+        payslip_automation.DeleteAutoPayslipView.as_view(),
+        name="pay-slip-automation-delete",
+    ),
+    # ── Payroll Modern Dashboard ─────────────────────────────────────────────
+    path(
+        "dashboard/",
+        pay_dashboard.payroll_dashboard_view,
+        name="view-payroll-dashboard",
+    ),
+    path(
+        "dashboard/api/kpi/",
+        pay_dashboard.payroll_kpi_data,
+        name="payroll-dashboard-kpi",
+    ),
+    path(
+        "dashboard/api/trend/",
+        pay_dashboard.payroll_monthly_trend,
+        name="payroll-dashboard-trend",
+    ),
+    path(
+        "dashboard/api/department/",
+        pay_dashboard.payroll_department_cost,
+        name="payroll-dashboard-dept",
+    ),
+    path(
+        "dashboard/api/pipeline/",
+        pay_dashboard.payroll_status_pipeline,
+        name="payroll-dashboard-pipeline",
+    ),
+    path(
+        "dashboard/api/top-earners/",
+        pay_dashboard.payroll_top_earners,
+        name="payroll-dashboard-earners",
+    ),
+    path(
+        "dashboard/api/contracts/",
+        pay_dashboard.payroll_contract_status,
+        name="payroll-dashboard-contracts",
+    ),
+    path(
+        "dashboard/api/loans/",
+        pay_dashboard.payroll_loan_summary,
+        name="payroll-dashboard-loans",
+    ),
+    path(
+        "dashboard/api/reimbursement/",
+        pay_dashboard.payroll_reimbursement_summary,
+        name="payroll-dashboard-reimbursement",
+    ),
+    path(
+        "dashboard/api/salary-dist/",
+        pay_dashboard.payroll_salary_distribution,
+        name="payroll-dashboard-salary-dist",
+    ),
+    path(
+        "dashboard/api/components/",
+        pay_dashboard.payroll_component_breakdown,
+        name="payroll-dashboard-components",
     ),
 ]

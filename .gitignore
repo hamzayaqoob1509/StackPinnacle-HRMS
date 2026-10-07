@@ -57,9 +57,10 @@ coverage.xml
 # Django stuff:
 *.log
 local_settings.py
-TestDB_Horilla.sqlite3
-db.sqlite3
-db.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Flask stuff:
 instance/
@@ -109,7 +110,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-horillavenv/
 
 # Spyder project settings
 .spyderproject
@@ -132,9 +132,9 @@ dmypy.json
 *.pyc
 
 # migration files
-**/migrations/**
-!**/migrations
-!**/migrations/__init__.py
+#**/migrations/**
+#!**/migrations
+#!**/migrations/__init__.py
 
 # media file
 media/
@@ -153,3 +153,14 @@ whoosh_index/
 
 #PyCharm
 .idea/
+
+#macOS
+.DS_Store
+
+# Claude Code (never commit AI tooling configs to public repo)
+.claude/
+CLAUDE.md
+.mcp.json
+.mcp.safe.json
+.claudeignore
+.specify/

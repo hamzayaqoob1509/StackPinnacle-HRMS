@@ -5,13 +5,13 @@
   <div class="oh-main__titlebar oh-main__titlebar--left">
     <h1 class="oh-main__titlebar-title fw-bold">
         <a href="{% url 'attendance-overtime-view' %}" class='text-dark'>
-            {% trans "Hour Account" %}
+            {% trans "Hours Balance" %}
         </a>
       </h1>
     <a
       class="oh-main__titlebar-search-toggle"
       role="button"
-      aria-label="Toggle Search"
+      aria-label="{% trans 'Toggle Search' %}"
       @click="searchShow = !searchShow"
     >
       <ion-icon
@@ -40,7 +40,7 @@
         <input
           type="text"
           class="oh-input oh-input__icon"
-          aria-label="Search Input"
+          aria-label="{% trans 'Search Input' %}"
           id="attendance-search"
           name='search'
           placeholder="{% trans 'Search' %}"
@@ -78,7 +78,7 @@
               <div class="row">
                 <div class="col-sm-12 col-md-12 col-lg-6">
                   <div class="oh-input-group">
-                    <label class="oh-label" for="id_field">{% trans "Field" %}</label>
+                    <label class="oh-label" for="id_field">{% trans "Fields" %}</label>
                   </div>
                 </div>
                 <div class="col-sm-12 col-md-12 col-lg-6">

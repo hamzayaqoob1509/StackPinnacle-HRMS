@@ -210,8 +210,10 @@ def grant_prorata_leaves(employee, today=None, notify_recipients=True):
 
 
 def _notify(employee, granted, effective_date):
-    from django.contrib.auth.models import Permission, User
+    from django.contrib.auth.models import Permission
     from django.db.models import Q
+
+    from horilla_auth.models import HorillaUser
 
     summary = ", ".join(f"{days:g} {lt.name}" for lt, days in granted)
     message = (
@@ -219,8 +221,8 @@ def _notify(employee, granted, effective_date):
         f"({effective_date:%d %b %Y}): {summary}."
     )
     actor = (
-        User.objects.filter(username="Horilla Bot").first()
-        or User.objects.filter(is_superuser=True, is_active=True).first()
+        HorillaUser.objects.filter(username="Horilla Bot").first()
+        or HorillaUser.objects.filter(is_superuser=True, is_active=True).first()
     )
     if actor is None:
         return
@@ -234,7 +236,7 @@ def _notify(employee, granted, effective_date):
             content_type__app_label="leave", codename="add_availableleave"
         )
         recipients.update(
-            User.objects.filter(
+            HorillaUser.objects.filter(
                 Q(is_superuser=True)
                 | Q(user_permissions=perm)
                 | Q(groups__permissions=perm),
@@ -249,10 +251,6 @@ def _notify(employee, granted, effective_date):
             actor,
             recipient=[u for u in recipients if u is not None],
             verb=message,
-            verb_ar=message,
-            verb_de=message,
-            verb_es=message,
-            verb_fr=message,
             icon="calendar-outline",
             redirect=reverse("user-request-view"),
         )

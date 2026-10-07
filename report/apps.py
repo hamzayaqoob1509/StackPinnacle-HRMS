@@ -9,11 +9,20 @@ class ReportConfig(AppConfig):
         ready = super().ready()
         from django.urls import include, path
 
-        from horilla.horilla_settings import APPS
         from horilla.urls import urlpatterns
 
         urlpatterns.append(
             path("report/", include("report.urls")),
         )
+
+        # Load standard report definitions + optional subscription scheduler
+        try:
+            import report.metrics  # noqa: F401
+        except Exception:
+            pass
+        try:
+            import report.scheduler  # noqa: F401
+        except Exception:
+            pass
 
         return ready

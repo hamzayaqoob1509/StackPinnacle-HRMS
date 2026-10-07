@@ -1,0 +1,14 @@
+{% load static i18n basefilters %}
+<ul class="breadcrumb ms-4">
+    {% for breadcrumb in breadcrumbs|unique_breadcrumbs %}
+        <li {% if request.path in breadcrumb.url %} class="oh-breadcrumb-current"{% endif %} >
+                {% if breadcrumb.clickable and breadcrumb.found %}
+                    <a href="{{breadcrumb.url}}">{% trans breadcrumb.name %}</a>
+                {% elif not breadcrumb.clickable %}
+                    <span>{% trans breadcrumb.name %}</span>
+                {% else %}
+                    <a href="#">{% trans breadcrumb.name %}</a>
+                {% endif %}
+        </li>
+    {% endfor %}
+</ul>

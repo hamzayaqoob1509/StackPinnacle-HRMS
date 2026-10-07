@@ -27,7 +27,6 @@ from typing import Any
 
 from django import forms
 from django.contrib.auth.forms import UserCreationForm as UserForm
-from django.contrib.auth.models import User
 from django.forms import DateInput, ValidationError
 from django.template.loader import render_to_string
 from django.utils.translation import gettext_lazy as _
@@ -36,9 +35,15 @@ from base.forms import ModelForm
 from base.methods import reload_queryset
 from employee.filters import EmployeeFilter
 from employee.models import Employee, EmployeeBankDetails
+from horilla_auth.models import HorillaUser
 from horilla_widgets.widgets.horilla_multi_select_field import HorillaMultiSelectField
 from horilla_widgets.widgets.select_widgets import HorillaMultiSelectWidget
-from onboarding.models import CandidateTask, OnboardingStage, OnboardingTask
+from onboarding.models import (
+    CandidateStage,
+    CandidateTask,
+    OnboardingStage,
+    OnboardingTask,
+)
 from recruitment.models import Candidate
 
 
@@ -50,7 +55,7 @@ class UserCreationFormCustom(UserForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         reload_queryset(self.fields)
-        for _, field in self.fields.items():
+        for _unused, field in self.fields.items():
             widget = field.widget
             if isinstance(
                 widget,
@@ -77,7 +82,9 @@ class UserCreationFormCustom(UserForm):
                 )
             elif isinstance(widget, (forms.Select,)):
                 field.empty_label = f"---Choose {field.label}---"
-                field.widget.attrs.update({"class": "oh-select oh-select-2"})
+                field.widget.attrs.update(
+                    {"class": "oh-select oh-select-2 select2-hidden-accessible"}
+                )
             elif isinstance(widget, (forms.Textarea)):
                 field.widget.attrs.update(
                     {
@@ -134,7 +141,7 @@ class OnboardingCandidateForm(ModelForm):
 
 class UserCreationForm(UserCreationFormCustom):
     """
-    Form for User model
+    Form for HorillaUser model
     """
 
     class Meta:
@@ -142,7 +149,7 @@ class UserCreationForm(UserCreationFormCustom):
         Meta class to add some additional options
         """
 
-        model = User
+        model = HorillaUser
         fields = ["password1", "password2"]
 
 
@@ -150,6 +157,19 @@ class OnboardingViewTaskForm(ModelForm):
     """
     Form for OnboardingTask model
     """
+
+    # Full-width for every field - unset, the generic form grid split this
+    # form two-up (Task Title/Task Managers on the left, Candidates on the
+    # right), leaving a tall empty gap under the short Task Title/Is
+    # Required fields and letting the Task Managers widget's own controls
+    # (its Filter button) overflow the narrow half-column. Mirrors
+    # offboarding.forms.TaskForm's cols for the same reason.
+    cols = {
+        "task_title": 12,
+        "candidates": 12,
+        "managers": 12,
+        "is_required": 12,
+    }
 
     candidates = forms.ModelMultipleChoiceField(
         queryset=Candidate.objects.all(),
@@ -162,6 +182,7 @@ class OnboardingViewTaskForm(ModelForm):
         queryset=Employee.objects.all(),
         # widget=forms.SelectMultiple(attrs={"class": "select2-hidden-accessible "})
     )
+    is_required = forms.BooleanField(required=False, label=_("Is Required"))
 
     class Meta:
         """
@@ -193,7 +214,7 @@ class OnboardingViewTaskForm(ModelForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 required=True,
                 instance=self.instance,
@@ -201,19 +222,27 @@ class OnboardingViewTaskForm(ModelForm):
             label=_("Task Managers"),
         )
         reload_queryset(self.fields)
-        stage = self.initial.get("stage_id")
-        if stage:
-            # Adjust the queryset based on the 'stage'
-            candidate_ids = stage.candidate.all().values_list("candidate_id", flat=True)
-            cand_queryset = Candidate.objects.filter(id__in=candidate_ids)
-            self.fields["candidates"].queryset = cand_queryset
-            self.fields["candidates"].initial = cand_queryset
 
 
 class OnboardingTaskForm(ModelForm):
     """
     Form for OnboardingTaskModel
     """
+
+    # Full-width for every field - unset, the generic form grid split this
+    # form two-up the same way OnboardingViewTaskForm (the create-task form)
+    # did, leaving a tall empty gap under the short fields and letting the
+    # employee_id (Task Managers) widget's own Filter button overflow its
+    # narrow half-width column. Mirrors OnboardingViewTaskForm.cols and
+    # offboarding.forms.TaskForm.cols for the same reason - this is the
+    # form the Update-Task modal actually uses.
+    cols = {
+        "task_title": 12,
+        "candidates": 12,
+        "employee_id": 12,
+        "is_required": 12,
+        "stage_id": 12,
+    }
 
     class Meta:
         """
@@ -222,7 +251,7 @@ class OnboardingTaskForm(ModelForm):
 
         model = OnboardingTask
         fields = "__all__"
-        exclude = ["stage_id", "is_active"]
+        exclude = ["is_active"]
         widgets = {
             "candidates": forms.SelectMultiple(
                 attrs={"class": "oh-select oh-select-2 w-100 select2-hidden-accessible"}
@@ -236,7 +265,7 @@ class OnboardingTaskForm(ModelForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 required=True,
                 instance=self.instance,
@@ -274,7 +303,11 @@ class OnboardingViewStageForm(ModelForm):
         """
 
         model = OnboardingStage
-        fields = ["stage_title", "employee_id", "is_final_stage"]
+        fields = ["stage_title", "employee_id", "is_final_stage", "recruitment_id"]
+        labels = {
+            "stage_title": _("Stage Title"),
+            "is_final_stage": _("Is Final Stage"),
+        }
 
     def __init__(self, *args, **kwargs):
         """
@@ -287,7 +320,7 @@ class OnboardingViewStageForm(ModelForm):
             widget=HorillaMultiSelectWidget(
                 filter_route_name="employee-widget-filter",
                 filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
+                filter_instance_context_name="f",
                 filter_template_path="employee_filters.html",
                 required=True,
                 instance=self.instance,
@@ -400,3 +433,43 @@ class BankDetailsCreationForm(ModelForm):
         model = EmployeeBankDetails
         fields = "__all__"
         exclude = ["employee_id", "additional_info", "is_active"]
+
+
+class StageChangeForm(forms.ModelForm):
+    """
+    StageChangeForm
+    """
+
+    class Meta:
+        """
+        Meta class for additional options
+        """
+
+        model = CandidateStage
+        fields = [
+            "onboarding_stage_id",
+        ]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        new_stage = cleaned_data.get("onboarding_stage_id")
+        old_stage = self.instance.onboarding_stage_id
+        if (
+            new_stage
+            and old_stage
+            and new_stage.sequence is not None
+            and old_stage.sequence is not None
+        ):
+            pending_tasks = self.instance.pending_required_tasks(old_stage)
+            if pending_tasks.exists():
+                task_titles = ", ".join(
+                    pending_tasks.values_list("task_title", flat=True)
+                )
+                raise forms.ValidationError(
+                    _(
+                        "Complete the following required task(s) before "
+                        "moving to the next stage: %(tasks)s"
+                    )
+                    % {"tasks": task_titles}
+                )
+        return cleaned_data

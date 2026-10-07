@@ -8,17 +8,22 @@ from horilla_automations.views import cbvs, views
 
 urlpatterns = [
     path(
-        "configuration/mail-automations",
+        "settings/mail-automations-view/",
+        views.mail_automations_settings_view,
+        name="mail-automations-view",
+    ),
+    path(
+        "configuration/mail-automations/",
         cbvs.AutomationSectionView.as_view(),
         name="mail-automations",
     ),
     path(
-        "mail-automations-nav",
+        "mail-automations-nav/",
         cbvs.AutomationNavView.as_view(),
         name="mail-automations-nav",
     ),
     path(
-        "create-automation",
+        "create-automation/",
         cbvs.AutomationFormView.as_view(),
         name="create-automation",
     ),
@@ -28,12 +33,12 @@ urlpatterns = [
         name="update-automation",
     ),
     path(
-        "mail-automations-list-view",
+        "mail-automations-list-view/",
         cbvs.AutomationListView.as_view(),
         name="mail-automations-list-view",
     ),
     path(
-        "get-to-mail-field",
+        "get-to-mail-field/",
         views.get_to_field,
         name="get-to-mail-field",
     ),
@@ -48,12 +53,12 @@ urlpatterns = [
         name="delete-automation",
     ),
     path(
-        "load-automations",
+        "load-automations/",
         cbvs.LoadAutomationsView.as_view(),
         name="load-automations",
     ),
     path(
-        "refresh-automations",
+        "refresh-automations/",
         views.refresh_automations,
         name="refresh-automations",
     ),

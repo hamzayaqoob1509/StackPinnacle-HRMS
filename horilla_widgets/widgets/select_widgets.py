@@ -31,7 +31,7 @@ class HorillaMultiSelectWidget(forms.Widget):
         *args,
         filter_route_name,
         filter_class=None,
-        filter_instance_contex_name=None,
+        filter_instance_context_name=None,
         filter_template_path=None,
         instance=None,
         required=False,
@@ -42,7 +42,7 @@ class HorillaMultiSelectWidget(forms.Widget):
         self.filter_route_name = filter_route_name
         self.required = required
         self.filter_class = filter_class
-        self.filter_instance_contex_name = filter_instance_contex_name
+        self.filter_instance_context_name = filter_instance_context_name
         self.filter_template_path = filter_template_path
         self.instance = instance
         self.form = form
@@ -51,9 +51,23 @@ class HorillaMultiSelectWidget(forms.Widget):
 
     template_name = "horilla_widgets/horilla_multiselect_widget.html"
 
+    def value_from_datadict(self, data, files, name):
+        # forms.Widget's default returns data.get(name) -- a single scalar,
+        # not the list ModelMultipleChoiceField.clean() requires -- so a real
+        # submission with any option selected failed validation with "Enter
+        # a list of values." and the form just re-rendered instead of saving.
+        if hasattr(data, "getlist"):
+            return data.getlist(name)
+        return data.get(name)
+
     def get_context(self, name, value, attrs):
         # Get the default context from the parent class
         context = super().get_context(name, value, attrs)
+        # Django form widget templates don't receive `request` in their
+        # context by default, which breaks the {% get_company %} templatetag
+        # (theme lookup) used inside horilla_multiselect_widget.html. Pull it
+        # from the thread-local set by ThreadLocalMiddleware instead.
+        context["request"] = horilla_middlewares._thread_locals.request
         # Add your custom data to the context
         queryset = self.choices.queryset
         field = self.choices.field
@@ -81,8 +95,43 @@ class HorillaMultiSelectWidget(forms.Widget):
         )
         uid = get_short_uuid(5)
         context["section_id"] = uid
-        context[self.filter_instance_contex_name] = self.filter_class
+        context[self.filter_instance_context_name] = self.filter_class
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         ALL_INSTANCES[str(request.user.id)] = self
 
         return context
+
+
+class HorillaAjaxSelectWidget(forms.SelectMultiple):
+    """
+    A plain forms.SelectMultiple that defers option loading to an AJAX
+    search endpoint (see
+    horilla_widgets.generic_ajax.build_ajax_choices_response) instead of
+    pre-rendering the whole queryset as <option> tags -- for
+    ModelMultipleChoiceFields whose option list is large/expensive (e.g.
+    Permissions). SelectMultiple, not Select: FILTER_FOR_DBFIELD_DEFAULTS
+    (horilla/filters.py) makes every FK/M2M filter in this app a
+    ModelMultipleChoiceField, whose value_from_datadict expects a
+    multi-value widget -- pairing it with a single-value Select would
+    silently misparse a submitted id as several single-character ids.
+
+    The caller is responsible for trimming the field's queryset down to
+    just the currently selected instance(s) (or none) before rendering,
+    so the widget still displays correctly without an extra round trip --
+    see horilla.filters.HorillaFilterSet._apply_ajax_fields (the generic
+    ajax_fields mechanism) for the pattern. Everything else is fetched on
+    demand by the .oh-select-ajax initializer
+    (horilla_theme/static/horilla_theme/assets/js/htmxSelect2.js).
+    """
+
+    def __init__(self, *args, ajax_url="", placeholder="", **kwargs):
+        self.ajax_url = ajax_url
+        self.placeholder = placeholder
+        super().__init__(*args, **kwargs)
+
+    def build_attrs(self, base_attrs, extra_attrs=None):
+        attrs = super().build_attrs(base_attrs, extra_attrs)
+        attrs["class"] = (attrs.get("class", "") + " oh-select-ajax").strip()
+        attrs["data-ajax-url"] = self.ajax_url
+        attrs["data-placeholder"] = self.placeholder
+        return attrs

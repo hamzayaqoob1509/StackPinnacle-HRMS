@@ -5,7 +5,7 @@
         data-toggle="oh-modal-toggle" data-target="#objectCreateModal"
         hx-get="{% url 'request-new-attendance' %}" hx-target="#objectCreateModalTarget"
       >
-      <ion-icon name="add-sharp" class="mr-2 md hydrated" role="img" aria-label="add sharp"></ion-icon>
+      <ion-icon name="add-sharp" class="mr-2 md hydrated" role="img" aria-label="{% trans 'add sharp' %}"></ion-icon>
       {% trans "Create" %}
     </button>
   </div>
@@ -42,7 +42,7 @@
                 <img
                   src="https://ui-avatars.com/api/?name={{attendance.employee_id.employee_first_name}}+{{attendance.employee_id.employee_last_name}}&background=random"
                   class="oh-profile__image"
-                  alt="Mary Magdalene"
+                  alt="{% trans 'Employee' %}"
                 />
               </div>
               <span class="oh-profile__name oh-text--dark"

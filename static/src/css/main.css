@@ -9051,6 +9051,7 @@ body {
 .oh-btn--sq-sm {
   width: 28px;
   height: 28px;
+  padding: 0;
 }
 
 .oh-btn--inline {
@@ -9378,6 +9379,7 @@ body {
 .oh-btn--disabled {
   opacity: 0.6;
   cursor: not-allowed !important;
+  pointer-events: none;
 }
 .oh-btn--disabled:focus, .oh-btn--disabled:focus-visible {
   outline: none;

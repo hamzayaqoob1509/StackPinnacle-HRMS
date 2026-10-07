@@ -5,19 +5,48 @@ This page is used to register filter for recruitment models
 
 """
 
+import ast
 import uuid
 
 import django_filters
 from django import forms
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
+
+def _filter_has_referral(qs, name, value):
+    if value:
+        return qs.filter(referral__isnull=False)
+    return qs.filter(referral__isnull=True)
+
+
+def _filter_source_not_set(qs, name, value):
+    if value:
+        return qs.filter(Q(source__isnull=True) | Q(source=""), referral__isnull=True)
+    return qs
+
+
+def _filter_recruitment_by_obj_id(qs, name, value):
+    try:
+        return qs.filter(id=int(value))
+    except (ValueError, TypeError):
+        return qs
+
+
 from base.filters import FilterSet
+from base.models import Company, Department, JobPosition
+from employee.models import Employee
+from horilla.filters import HorillaFilterSet, filter_by_name
 from recruitment.models import (
     Candidate,
+    CandidateDocument,
     InterviewSchedule,
     LinkedInAccount,
     Recruitment,
     RecruitmentSurvey,
+    RecruitmentSurveyAnswer,
+    RejectReason,
+    Skill,
     SkillZone,
     SkillZoneCandidate,
     Stage,
@@ -27,7 +56,7 @@ from recruitment.models import (
 # from django.forms.widgets import Boo
 
 
-class CandidateFilter(FilterSet):
+class CandidateFilter(HorillaFilterSet):
     """
     Filter set class for Candidate model
 
@@ -36,9 +65,19 @@ class CandidateFilter(FilterSet):
     """
 
     name = django_filters.CharFilter(field_name="name", lookup_expr="icontains")
-    start_onboard = django_filters.CharFilter(
-        method="start_onboard_method", lookup_expr="icontains"
+    search = django_filters.CharFilter(method="search_by_name", lookup_expr="icontains")
+    has_referral = django_filters.BooleanFilter(
+        method=_filter_has_referral,
+        widget=django_filters.widgets.BooleanWidget(),
     )
+    source_not_set = django_filters.BooleanFilter(
+        method=_filter_source_not_set,
+        widget=django_filters.widgets.BooleanWidget(),
+    )
+
+    # start_onboard = django_filters.CharFilter(
+    #     method="start_onboard_method", lookup_expr="icontains"
+    # )
 
     candidate = django_filters.ModelMultipleChoiceFilter(
         queryset=Candidate.objects.all(),
@@ -83,6 +122,36 @@ class CandidateFilter(FilterSet):
         field_name="hired_date",
         widget=forms.DateInput(attrs={"type": "date"}),
     )
+    joining_date_from = django_filters.DateFilter(
+        field_name="joining_date",
+        lookup_expr="gte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    joining_date_till = django_filters.DateFilter(
+        field_name="joining_date",
+        lookup_expr="lte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    created_at_from = django_filters.DateFilter(
+        field_name="created_at",
+        lookup_expr="date__gte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    created_at_till = django_filters.DateFilter(
+        field_name="created_at",
+        lookup_expr="date__lte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    onboarding_end_date_from = django_filters.DateFilter(
+        field_name="onboarding_stage__onboarding_end_date",
+        lookup_expr="gte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    onboarding_end_date_till = django_filters.DateFilter(
+        field_name="onboarding_stage__onboarding_end_date",
+        lookup_expr="lte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
     interview_date = django_filters.DateFilter(
         field_name="candidate_interview__interview_date",
         widget=forms.DateInput(attrs={"type": "date"}),
@@ -107,6 +176,84 @@ class CandidateFilter(FilterSet):
         widget=django_filters.widgets.BooleanWidget(),
     )
 
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Job Position, Department, and Rejection Reason opt into
+    # AJAX-searched comboboxes instead of pre-rendering their whole
+    # queryset as <option> tags.
+    ajax_fields = {
+        "job_position_id": {
+            "key": "pipeline-candidate-job-position",
+            "queryset_fn": lambda request: JobPosition.objects.select_related(
+                "department_id"
+            ).all(),
+            "display_fn": lambda obj: str(obj),
+            "search_fields": ["job_position", "department_id__department"],
+            "placeholder": _("Select job position..."),
+        },
+        "job_position_id__department_id": {
+            "key": "pipeline-candidate-department",
+            "queryset_fn": lambda request: Department.objects.all(),
+            "display_fn": lambda obj: obj.department,
+            "search_fields": ["department"],
+            "placeholder": _("Select department..."),
+        },
+        "rejected_candidate__reject_reason_id": {
+            "key": "pipeline-candidate-reject-reason",
+            "queryset_fn": lambda request: RejectReason.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select rejection reason..."),
+        },
+        # The remaining fields below are only rendered on the standalone
+        # Candidates page's filter panel (cbv/candidates/filter.html),
+        # not the combined Pipeline panel above -- kept in the same
+        # ajax_fields dict since both share this one CandidateFilter class.
+        "recruitment_id": {
+            "key": "candidate-recruitment",
+            "queryset_fn": lambda request: Recruitment.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select recruitment..."),
+        },
+        "stage_id": {
+            "key": "candidate-stage",
+            "queryset_fn": lambda request: Stage.objects.select_related(
+                "recruitment_id"
+            ).all(),
+            "display_fn": lambda obj: f"{obj.stage} ({obj.recruitment_id.title})",
+            "search_fields": ["stage", "recruitment_id__title"],
+            "placeholder": _("Select stage..."),
+        },
+        "stage_id__stage_managers": {
+            "key": "candidate-stage-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+        "recruitment_id__company_id": {
+            "key": "candidate-company",
+            "queryset_fn": lambda request: Company.objects.all(),
+            "display_fn": lambda obj: obj.company,
+            "search_fields": ["company"],
+            "placeholder": _("Select company..."),
+        },
+        "recruitment_id__recruitment_managers": {
+            "key": "candidate-recruitment-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+        "skillzonecandidate_set__skill_zone_id": {
+            "key": "candidate-talent-pool",
+            "queryset_fn": lambda request: SkillZone.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select talent pool..."),
+        },
+    }
+
     def pipeline_search(self, queryset, _, value):
         """
         This method is used to include the candidates when they in the recruitment/stages
@@ -118,12 +265,16 @@ class CandidateFilter(FilterSet):
         ).distinct()
         return queryset
 
-    def start_onboard_method(self, queryset, _, value):
+    def search_by_name(self, queryset, _, value):
         """
-        This method will include the candidates whether they are on the onboarding pipline stage
+        search by name method
         """
-
-        return queryset.filter(onboarding_stage__isnull=False)
+        queryset = (
+            queryset.filter(name__icontains=value)
+            | queryset.filter(stage_id__stage__icontains=value)
+            | queryset.filter(stage_id__recruitment_id__title__icontains=value)
+        )
+        return queryset.distinct()
 
     class Meta:
         """
@@ -166,6 +317,7 @@ class CandidateFilter(FilterSet):
             "offer_letter_status",
             "candidate_rating__rating",
             "candidate_interview__employee_id",
+            "source",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -178,6 +330,60 @@ class CandidateFilter(FilterSet):
             form_fields[field].widget.attrs["id"] = str(uuid.uuid4())
 
         self._update_field_labels(form_fields)
+        choices = []
+        try:
+            survey_answers = RecruitmentSurveyAnswer.objects.all()
+            for survey in survey_answers:
+                candidate = survey.candidate_id
+                answer_json = survey.answer_json
+
+                # Parse JSON if stored as string
+                if isinstance(answer_json, str):
+                    try:
+                        answer_json = ast.literal_eval(answer_json)
+                    except Exception:
+                        continue
+
+                # Extract questions & answers
+                for question, answer_list in answer_json.items():
+                    if question == "csrfmiddlewaretoken":
+                        continue
+
+                    answer = (
+                        ", ".join(answer_list)
+                        if isinstance(answer_list, list)
+                        else str(answer_list)
+                    )
+
+                    choices.append(
+                        (
+                            candidate.pk,
+                            f"Q: {question} || Ans: {answer} || {candidate.get_full_name()}",
+                        )
+                    )
+        except:
+            pass
+
+        # Add filter dynamically
+        survey_answer_by = django_filters.MultipleChoiceFilter(
+            choices=choices,
+            field_name="recruitmentsurveyanswer__candidate_id",
+            label=_("Survey Answer By"),
+        )
+        self.filters["survey_answer_by"] = survey_answer_by
+        self.form.fields["survey_answer_by"] = survey_answer_by.field
+        self.form.fields["survey_answer_by"].widget.attrs.update(
+            {
+                "data-placeholder": _("Select survey answers..."),
+                # Was "survey-select" -- that class was never targeted by
+                # any select2 init handler (horilla_theme's htmxSelect2.js
+                # only auto-initializes ".oh-select"/".oh-select-ajax"),
+                # so this field always rendered as a bare unstyled
+                # <select multiple> regardless of how many choices it had.
+                "class": "oh-select w-100",
+                "style": "width:100% !important;",
+            }
+        )
 
     def _update_field_labels(self, form_fields):
         """Helper method to update field labels from model verbose names"""
@@ -196,7 +402,7 @@ class CandidateFilter(FilterSet):
             "interview_date": interview_date_label,
             "scheduled_from": f"{interview_date_label} From",
             "scheduled_till": f"{interview_date_label} Till",
-            "rejected_candidate__reject_reason_id": _("Reject Reason"),
+            "rejected_candidate__reject_reason_id": _("Rejection Reason"),
             "job_position_id__department_id": _("Department"),
             "stage_id__stage_type": _("Stage Type"),
             "stage_id__stage_managers": _("Stage Managers"),
@@ -228,6 +434,100 @@ class CandidateFilter(FilterSet):
     def filter_joining_set(self, queryset, name, value):
         return queryset.filter(joining_date__isnull=(not value))
 
+    def _build_custom_filter_fields(self):
+        """
+        Registry backing the Advanced section's "+ Add filter" builder
+        (see HorillaFilterSet._build_custom_filter_fields's docstring
+        for the two supported entry shapes) -- same "choose field, then
+        lookup, then value" pattern used by AttendanceFilters/
+        EmployeeFilter/AssetFilter. This model already has several
+        DateFilters declared (probation_end_from/till, joining_date_
+        from/till, created_at_from/till, onboarding_end_date_from/
+        till...) that were never actually rendered anywhere in the
+        template -- rather than adding yet more fixed inputs for each,
+        this exposes the underlying plain field+lookup shape directly,
+        offering the full gte/lte/gt/lt/exact set per field instead of
+        each one's previously-unreachable fixed direction.
+        """
+        fields = [
+            {
+                "key": "interview_date",
+                "field": "candidate_interview__interview_date",
+                "label": str(_("Interview Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "probation_end",
+                "field": "probation_end",
+                "label": str(_("Probation End")),
+                "type": "date_range",
+            },
+            {
+                "key": "schedule_date",
+                "field": "schedule_date",
+                "label": str(_("Schedule Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "joining_date",
+                "field": "joining_date",
+                "label": str(_("Joining Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "onboarding_end_date",
+                "field": "onboarding_stage__onboarding_end_date",
+                "label": str(_("Onboarding End Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "created_at",
+                "field": "created_at",
+                "label": str(_("Created At")),
+                "type": "date_range",
+            },
+        ]
+        for entry in fields:
+            entry["lookups"] = [
+                [lk, str(label)]
+                for lk, label in self.CUSTOM_FILTER_LOOKUPS[entry["type"]]
+            ]
+        return fields
+
+    def filter_queryset(self, queryset):
+        """
+        HorillaFilterSet._apply_custom_filters isn't wired into the base
+        filter_queryset automatically -- this is the minimal "call it at
+        the end" hookup, same as AttendanceFilters/FeedbackFilter/
+        AssetFilter.
+        """
+        queryset = super().filter_queryset(queryset)
+        return self._apply_custom_filters(queryset)
+
+
+class CandidateDocumentFilter(HorillaFilterSet):
+    """
+    Filter set class for CandidateDocument model
+    """
+
+    search = django_filters.CharFilter(field_name="title", lookup_expr="icontains")
+
+    class Meta:
+        model = CandidateDocument
+        fields = ["title", "status"]
+
+
+class SkillZoneCandidateFilter(HorillaFilterSet):
+    """
+    Filter set class for SkillZoneCandidate model
+    """
+
+    search = django_filters.CharFilter(field_name="reason", lookup_expr="icontains")
+
+    class Meta:
+        model = SkillZoneCandidate
+        fields = ["skill_zone_id", "candidate_id", "reason"]
+
 
 BOOLEAN_CHOICES = (
     ("", ""),
@@ -236,7 +536,7 @@ BOOLEAN_CHOICES = (
 )
 
 
-class RecruitmentFilter(FilterSet):
+class RecruitmentFilter(HorillaFilterSet):
     """
     Filter set class for Recruitment model
 
@@ -251,12 +551,6 @@ class RecruitmentFilter(FilterSet):
         field_name="title", method="onboarding_search"
     )
     description = django_filters.CharFilter(lookup_expr="icontains")
-    start_date = django_filters.DateFilter(
-        field_name="start_date", widget=forms.DateInput(attrs={"type": "date"})
-    )
-    end_date = django_filters.DateFilter(
-        field_name="end_date", widget=forms.DateInput(attrs={"type": "date"})
-    )
     start_from = django_filters.DateFilter(
         field_name="start_date",
         lookup_expr="gte",
@@ -274,6 +568,28 @@ class RecruitmentFilter(FilterSet):
             (False, "No"),
         ]
     )
+    obj_id = django_filters.CharFilter(method=_filter_recruitment_by_obj_id)
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism,
+    # see horilla.filters.HorillaFilterSet for the full explanation) --
+    # Recruitment Managers and Company opt into AJAX-searched comboboxes
+    # instead of pre-rendering their whole queryset as <option> tags.
+    ajax_fields = {
+        "recruitment_managers": {
+            "key": "pipeline-recruitment-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+        "company_id": {
+            "key": "pipeline-company",
+            "queryset_fn": lambda request: Company.objects.all(),
+            "display_fn": lambda obj: obj.company,
+            "search_fields": ["company"],
+            "placeholder": _("Select company..."),
+        },
+    }
 
     class Meta:
         """
@@ -286,8 +602,6 @@ class RecruitmentFilter(FilterSet):
             "company_id",
             "title",
             "is_event_based",
-            "start_date",
-            "end_date",
             "closed",
             "is_active",
             "is_published",
@@ -311,9 +625,12 @@ class RecruitmentFilter(FilterSet):
         first_name = parts[0]
         last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
 
-        job_queryset = queryset.filter(
-            open_positions__job_position__icontains=value
-        ) | queryset.filter(title__icontains=value)
+        job_queryset = (
+            queryset.filter(open_positions__job_position__icontains=value)
+            | queryset.filter(title__icontains=value)
+            | queryset.filter(stage_set__stage__icontains=value)
+            | queryset.filter(stage_set__candidate__name__icontains=value)
+        )
         if first_name and last_name:
             queryset = queryset.filter(
                 recruitment_managers__employee_first_name__icontains=first_name,
@@ -355,8 +672,86 @@ class RecruitmentFilter(FilterSet):
         )
         return queryset.distinct()
 
+    def _build_custom_filter_fields(self):
+        """
+        Registry backing the Advanced section's "+ Add filter" builder
+        (see HorillaFilterSet._build_custom_filter_fields's docstring
+        for the two supported entry shapes) -- same "choose field, then
+        lookup, then value" pattern used by AttendanceFilters/
+        EmployeeFilter/AssetFilter. Start Date/End Date used to each
+        have their own single-direction fixed input (start_from's gte
+        on start_date, end_till's lte on end_date) -- replaced with the
+        full gte/lte/gt/lt/exact set per field, plus Created At.
+        """
+        fields = [
+            {
+                "key": "start_date",
+                "field": "start_date",
+                "label": str(_("Start Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "end_date",
+                "field": "end_date",
+                "label": str(_("End Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "created_at",
+                "field": "created_at",
+                "label": str(_("Created At")),
+                "type": "date_range",
+            },
+        ]
+        for entry in fields:
+            entry["lookups"] = [
+                [lk, str(label)]
+                for lk, label in self.CUSTOM_FILTER_LOOKUPS[entry["type"]]
+            ]
+        return fields
 
-class StageFilter(FilterSet):
+    def filter_queryset(self, queryset):
+        """
+        HorillaFilterSet._apply_custom_filters isn't wired into the base
+        filter_queryset automatically -- this is the minimal "call it at
+        the end" hookup, same as AttendanceFilters/FeedbackFilter/
+        AssetFilter.
+        """
+        queryset = super().filter_queryset(queryset)
+        return self._apply_custom_filters(queryset)
+
+
+class SkillsFilter(FilterSet):
+
+    search = django_filters.CharFilter(field_name="title", lookup_expr="icontains")
+
+    class Meta:
+        model = Skill
+        fields = [
+            "title",
+        ]
+
+
+class RejectReasonFilter(FilterSet):
+
+    search = django_filters.CharFilter(method="filter_search")
+
+    class Meta:
+        model = RejectReason
+        fields = [
+            "title",
+        ]
+
+    def filter_search(self, queryset, _, value):
+        value = (value or "").strip()
+        if not value:
+            return queryset
+        return queryset.filter(
+            Q(title__icontains=value) | Q(description__icontains=value)
+        )
+
+
+class StageFilter(HorillaFilterSet):
     """
     Filter set class for Stage model
 
@@ -366,6 +761,60 @@ class StageFilter(FilterSet):
 
     search = django_filters.CharFilter(method="filter_by_name")
     candidate_name = django_filters.CharFilter(method="pipeline_search")
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Recruitment and Stage Managers opt into AJAX-searched comboboxes
+    # instead of pre-rendering their whole queryset as <option> tags.
+    ajax_fields = {
+        "recruitment_id": {
+            "key": "pipeline-stage-recruitment",
+            "queryset_fn": lambda request: Recruitment.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select recruitment..."),
+        },
+        "stage_managers": {
+            "key": "pipeline-stage-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+        # The four below are only rendered on the Stages configuration
+        # tab's own filter panel (cbv/stages/filter.html), not the
+        # combined Pipeline panel above -- kept in the same ajax_fields
+        # dict since both share this one StageFilter class.
+        "recruitment_id__recruitment_managers": {
+            "key": "stage-recruitment-managers",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+        "recruitment_id__job_position_id__department_id": {
+            "key": "stage-department",
+            "queryset_fn": lambda request: Department.objects.all(),
+            "display_fn": lambda obj: obj.department,
+            "search_fields": ["department"],
+            "placeholder": _("Select department..."),
+        },
+        "recruitment_id__company_id": {
+            "key": "stage-company",
+            "queryset_fn": lambda request: Company.objects.all(),
+            "display_fn": lambda obj: obj.company,
+            "search_fields": ["company"],
+            "placeholder": _("Select company..."),
+        },
+        "recruitment_id__job_position_id": {
+            "key": "stage-job-position",
+            "queryset_fn": lambda request: JobPosition.objects.select_related(
+                "department_id"
+            ).all(),
+            "display_fn": lambda obj: str(obj),
+            "search_fields": ["job_position", "department_id__department"],
+            "placeholder": _("Select job position..."),
+        },
+    }
 
     class Meta:
         """
@@ -385,31 +834,32 @@ class StageFilter(FilterSet):
 
     def filter_by_name(self, queryset, _, value):
         """
-        Filter queryset by first name or last name.
+        Filter queryset by stage title, recruitment title, managers, or candidates.
         """
-        # Split the search value into first name and last name
+        from django.db.models import Q
+
+        value = (value or "").strip()
+        if not value:
+            return queryset
+
         parts = value.split()
         first_name = parts[0]
         last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
-        recruitment_query = queryset.filter(recruitment_id__title__icontains=value)
-        # Filter the queryset by first name and last name
-        stage_queryset = queryset.filter(stage__icontains=value)
+
+        query = (
+            Q(stage__icontains=value)
+            | Q(recruitment_id__title__icontains=value)
+            | Q(candidate__name__icontains=value)
+        )
         if first_name and last_name:
-            queryset = queryset.filter(
+            query |= Q(
                 stage_managers__employee_first_name__icontains=first_name,
                 stage_managers__employee_last_name__icontains=last_name,
             )
         elif first_name:
-            queryset = queryset.filter(
-                stage_managers__employee_first_name__icontains=first_name
-            )
-        elif last_name:
-            queryset = queryset.filter(
-                stage_managers__employee_last_name__icontains=last_name
-            )
+            query |= Q(stage_managers__employee_first_name__icontains=first_name)
 
-        queryset = queryset | stage_queryset | recruitment_query
-        return queryset
+        return queryset.filter(query).distinct()
 
     def pipeline_search(self, queryset, _, value):
         """
@@ -422,8 +872,42 @@ class StageFilter(FilterSet):
         )
         return queryset.distinct()
 
+    def _build_custom_filter_fields(self):
+        """
+        Registry backing the Advanced section's "+ Add filter" builder
+        (see HorillaFilterSet._build_custom_filter_fields's docstring
+        for the two supported entry shapes) -- same "choose field, then
+        lookup, then value" pattern used by AttendanceFilters/
+        EmployeeFilter/AssetFilter. Created At is the only real date
+        column on this model, so it's the sole entry.
+        """
+        fields = [
+            {
+                "key": "created_at",
+                "field": "created_at",
+                "label": str(_("Created At")),
+                "type": "date_range",
+            },
+        ]
+        for entry in fields:
+            entry["lookups"] = [
+                [lk, str(label)]
+                for lk, label in self.CUSTOM_FILTER_LOOKUPS[entry["type"]]
+            ]
+        return fields
 
-class SurveyFilter(FilterSet):
+    def filter_queryset(self, queryset):
+        """
+        HorillaFilterSet._apply_custom_filters isn't wired into the base
+        filter_queryset automatically -- this is the minimal "call it at
+        the end" hookup, same as AttendanceFilters/FeedbackFilter/
+        AssetFilter.
+        """
+        queryset = super().filter_queryset(queryset)
+        return self._apply_custom_filters(queryset)
+
+
+class SurveyFilter(HorillaFilterSet):
     """
     SurveyFIlter
     """
@@ -439,6 +923,24 @@ class SurveyFilter(FilterSet):
         label="Question",
         field_name="question",
     )
+
+    search = django_filters.CharFilter(
+        lookup_expr="icontains",
+        field_name="question",
+    )
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Recruitment opts into an AJAX-searched combobox instead of
+    # pre-rendering its whole queryset as <option> tags.
+    ajax_fields = {
+        "recruitment_ids": {
+            "key": "survey-recruitment",
+            "queryset_fn": lambda request: Recruitment.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select recruitment..."),
+        },
+    }
 
     class Meta:
         """
@@ -457,7 +959,7 @@ class SurveyTemplateFilter(django_filters.FilterSet):
     SurveyTemplateFilter
     """
 
-    question = django_filters.CharFilter(
+    search = django_filters.CharFilter(
         lookup_expr="icontains",
         label="Title",
         field_name="title",
@@ -483,8 +985,8 @@ class CandidateReGroup:
         ("joining_date", "Date Joining"),
         ("probation_end", "Probation End"),
         ("offer_letter_status", "Offer Letter Status"),
-        ("rejected_candidate__reject_reason_id", "Reject Reason"),
-        ("skillzonecandidate_set__skill_zone_id", "Skill Zone"),
+        ("rejected_candidate__reject_reason_id", "Rejection Reason"),
+        ("skillzonecandidate_set__skill_zone_id", "Talent Pool"),
     ]
 
 
@@ -510,7 +1012,7 @@ class SkillZoneFilter(FilterSet):
         ]
 
 
-class SkillZoneCandFilter(FilterSet):
+class SkillZoneCandFilter(HorillaFilterSet):
     """
     Skillzone Candidate FIlter
     """
@@ -575,6 +1077,43 @@ class SkillZoneCandFilter(FilterSet):
         label=_("Joining Set"),
     )
 
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Candidate, Recruitment, Job Position, and Rejection Reason opt
+    # into AJAX-searched comboboxes instead of pre-rendering their whole
+    # queryset as <option> tags.
+    ajax_fields = {
+        "candidate_id": {
+            "key": "talent-pool-candidate",
+            "queryset_fn": lambda request: Candidate.objects.all(),
+            "display_fn": lambda obj: obj.name,
+            "search_fields": ["name"],
+            "placeholder": _("Search candidate..."),
+        },
+        "candidate_id__recruitment_id": {
+            "key": "talent-pool-recruitment",
+            "queryset_fn": lambda request: Recruitment.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select recruitment..."),
+        },
+        "candidate_id__job_position_id": {
+            "key": "talent-pool-job-position",
+            "queryset_fn": lambda request: JobPosition.objects.select_related(
+                "department_id"
+            ).all(),
+            "display_fn": lambda obj: str(obj),
+            "search_fields": ["job_position", "department_id__department"],
+            "placeholder": _("Select job position..."),
+        },
+        "candidate_id__rejected_candidate__reject_reason_id": {
+            "key": "talent-pool-reject-reason",
+            "queryset_fn": lambda request: RejectReason.objects.all(),
+            "display_fn": lambda obj: obj.title,
+            "search_fields": ["title"],
+            "placeholder": _("Select rejection reason..."),
+        },
+    }
+
     class Meta:
         """
         class Meta for additional options
@@ -620,7 +1159,7 @@ class SkillZoneCandFilter(FilterSet):
 
     def cand_search(self, queryset, _, value):
         """
-        This method to include candidate when search skill zone
+        This method to include candidate when search talent pool
         """
         return (
             queryset.filter(candidate_id__name__icontains=value)
@@ -628,7 +1167,7 @@ class SkillZoneCandFilter(FilterSet):
         ).distinct()
 
 
-class InterviewFilter(FilterSet):
+class InterviewFilter(HorillaFilterSet):
     """
     Filter set class for Candidate model
 
@@ -651,6 +1190,26 @@ class InterviewFilter(FilterSet):
         widget=forms.DateInput(attrs={"type": "date"}),
     )
 
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Candidate and Interviewer opt into AJAX-searched comboboxes
+    # instead of pre-rendering their whole queryset as <option> tags.
+    ajax_fields = {
+        "candidate_id": {
+            "key": "interview-candidate",
+            "queryset_fn": lambda request: Candidate.objects.all(),
+            "display_fn": lambda obj: obj.name,
+            "search_fields": ["name"],
+            "placeholder": _("Search candidate..."),
+        },
+        "employee_id": {
+            "key": "interview-employee",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
+
     class Meta:
         """
         Meta class to add the additional info
@@ -671,6 +1230,49 @@ class InterviewFilter(FilterSet):
         self.form["scheduled_till"].label = (
             f"{self.Meta.model()._meta.get_field('interview_date').verbose_name} Till"
         )
+
+    def _build_custom_filter_fields(self):
+        """
+        Registry backing the Advanced section's "+ Add filter" builder
+        (see HorillaFilterSet._build_custom_filter_fields's docstring
+        for the two supported entry shapes) -- same "choose field, then
+        lookup, then value" pattern used by AttendanceFilters/
+        EmployeeFilter/AssetFilter. Interview Date is a plain DateField
+        column, so the plain field+lookup shape applies directly,
+        offering the full gte/lte/gt/lt/exact set instead of the fixed
+        gte/lte scheduled_from/scheduled_till pair. Created At is
+        included too.
+        """
+        fields = [
+            {
+                "key": "interview_date",
+                "field": "interview_date",
+                "label": str(_("Interview Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "created_at",
+                "field": "created_at",
+                "label": str(_("Created At")),
+                "type": "date_range",
+            },
+        ]
+        for entry in fields:
+            entry["lookups"] = [
+                [lk, str(label)]
+                for lk, label in self.CUSTOM_FILTER_LOOKUPS[entry["type"]]
+            ]
+        return fields
+
+    def filter_queryset(self, queryset):
+        """
+        HorillaFilterSet._apply_custom_filters isn't wired into the base
+        filter_queryset automatically -- this is the minimal "call it at
+        the end" hookup, same as AttendanceFilters/FeedbackFilter/
+        AssetFilter.
+        """
+        queryset = super().filter_queryset(queryset)
+        return self._apply_custom_filters(queryset)
 
 
 class LinkedInAccountFilter(FilterSet):

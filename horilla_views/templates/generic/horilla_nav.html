@@ -5,7 +5,7 @@
     <a
       class="oh-main__titlebar-search-toggle"
       role="button"
-      aria-label="Toggle Search"
+      aria-label="{% trans 'Toggle Search' %}"
       @click="searchShow = !searchShow"
     >
       <ion-icon
@@ -18,10 +18,15 @@
   <form autocomplete="off"
     id="filterForm"
     onsubmit="event.preventDefault()"
-    hx-get="{{search_url}}?&referrer={{request.META.HTTP_REFERER}}&{{request.GET.urlencode}}"
+    hx-get="{{search_url}}"
+    hx-trigger="load, submit"
     hx-replace-url="false"
     hx-target="{{search_swap_target}}"
+    hx-timeout="15000"
     hx-on:submit="htmxLoadIndicator(this);"
+    hx-on::response-error="htmxLoadFailIndicator(this, event);"
+    hx-on::send-error="htmxLoadFailIndicator(this, event);"
+    hx-on::timeout="htmxLoadFailIndicator(this, event);"
     class="oh-main__titlebar oh-main__titlebar--right"
   >
     <input type="text" name="nav_url" value="{{request.path}}" hidden>
@@ -34,8 +39,8 @@
         type="text"
         class="oh-input oh-input__icon"
         name="search"
-        aria-label="Search Input"
-        placeholder="Search"
+        aria-label="{% trans 'Search Input' %}"
+        placeholder="{% trans 'Search' %}"
         autocomplete="false"
         autofocus ="true"
         onkeyup="
@@ -90,7 +95,7 @@
           ></a>
           {% if active_view.type == type.type %}
           <script>
-            $("form#filterForm.oh-main__titlebar oh-main__titlebar--right").attr('hx-get','{{type.url}}?&referrer={{request.META.HTTP_REFERER}}&{{request.GET.urlencode}}');
+            $("form#filterForm.oh-main__titlebar oh-main__titlebar--right").attr('hx-get','{{type.url}}');
             $(".oh-view-types .oh-view-type[data-type={{type.type}}] a").addClass("oh-btn--view-active")
 
           </script>
@@ -142,7 +147,7 @@
               // }
              "
              class="oh-btn oh-btn--secondary oh-btn--small w-100">
-              {% trans "Filter" %}
+              {% trans "Apply" %}
             </button>
           </div>
         </div>
@@ -159,7 +164,7 @@
       {% if group_by_fields %}
       <div class="oh-dropdown" x-data="{open: false}">
         <button class="oh-btn ml-2" @click="open = !open" onclick="event.preventDefault()">
-          <ion-icon name="library-outline" class="mr-1 md hydrated" role="img" aria-label="library outline"></ion-icon>
+          <ion-icon name="library-outline" class="mr-1 md hydrated" role="img" aria-label="{% trans 'library outline' %}"></ion-icon>
           {% trans "Group By" %}
           <div id="filterCount"></div>
         </button>
@@ -169,7 +174,7 @@
             <div class="row">
               <div class="col-sm-12 col-md-12 col-lg-6">
                 <div class="oh-input-group">
-                  <label class="oh-label" for="id_field">{% trans "Field" %}</label>
+                  <label class="oh-label" for="id_field">{% trans "Fields" %}</label>
                 </div>
               </div>
               <div class="col-sm-12 col-md-12 col-lg-6">
@@ -224,7 +229,7 @@
         name="add-sharp"
         class="mr-1 md hydrated"
         role="img"
-        aria-label="add sharp"
+        aria-label="{% trans 'add sharp' %}"
       ></ion-icon
       >{% trans "Create" %}
     </a>
@@ -287,7 +292,13 @@
 <script>
   filterCountUpdate("filterForm")
   $(document).ready(function () {
-    $("#filterForm select").parent().find("span").remove()
-    $("#filterForm select").select2()
+    // Only initialize filter selects that the global initializer (htmxSelect2.js)
+    // hasn't already handled — avoids double-init and the stray-widget cleanup it
+    // previously required.
+    $("#filterForm select").each(function () {
+      if (!$(this).hasClass("select2-hidden-accessible")) {
+        $(this).select2({ width: '100%' });
+      }
+    });
   });
 </script>

@@ -686,6 +686,22 @@ s_a[251] =
 s_a[252] =
     "Bulawayo|Harare|ManicalandMashonaland Central|Mashonaland East|Mashonaland West|Masvingo|Matabeleland North|Matabeleland South|Midlands";
 
+// Option labels below are user-facing. gettext() comes from Django's JS catalog,
+// which some standalone pages (e.g. the public application form) do not load —
+// fall back to English there instead of throwing a ReferenceError.
+function countryI18n(text) {
+    return typeof gettext === "function" ? gettext(text) : text;
+}
+
+function refreshSelect2(el) {
+    if (typeof $ === "undefined" || !el) return;
+    var $el = $(el);
+    if ($el.hasClass("select2-hidden-accessible") && $el.data("select2")) {
+        $el.select2("destroy");
+        $el.select2({ width: "100%" });
+    }
+}
+
 function populateStates(countryElementId, stateElementId) {
     var countryEl = document.getElementById(countryElementId);
     var stateEl = document.getElementById(stateElementId);
@@ -695,7 +711,7 @@ function populateStates(countryElementId, stateElementId) {
     var selectedState = stateEl.getAttribute('data-selected') || '';
 
     stateEl.length = 0;
-    stateEl.options[0] = new Option("Select State", "");
+    stateEl.options[0] = new Option(countryI18n("Select State"), "");
     stateEl.selectedIndex = 0;
 
     if (s_a[selectedCountryIndex]) {
@@ -709,6 +725,7 @@ function populateStates(countryElementId, stateElementId) {
             stateEl.options[stateEl.length] = option;
         }
     }
+    refreshSelect2(stateEl);
 }
 
 
@@ -720,7 +737,7 @@ function populateCountries(countryElementId, stateElementId) {
 
     var selectedCountry = countryEl.getAttribute('data-selected') || '';
     countryEl.length = 0;
-    countryEl.options[0] = new Option("Select Country", "");
+    countryEl.options[0] = new Option(countryI18n("Select Country"), "");
 
     for (var i = 0; i < country_arr.length; i++) {
         let country = country_arr[i].replace(/'/g, '`');
@@ -741,12 +758,14 @@ function populateCountries(countryElementId, stateElementId) {
             populateStates(countryElementId, stateElementId);
         };
     }
+    refreshSelect2(countryEl);
 }
 
 
 function initCountryStateDropdowns() {
     populateCountries("id_country", "id_state");
     populateCountries("country", "state");
+    populateCountries("id_employee_bank_details__country", "id_employee_bank_details__state");
 }
 
 document.addEventListener("DOMContentLoaded", function () {

@@ -8077,6 +8077,7 @@ body {
 .oh-btn--sq-sm {
   width: 28px;
   height: 28px;
+  padding: 0;
 }
 
 .oh-btn--inline {
@@ -8346,6 +8347,8 @@ body {
 }
 
 .oh-btn-group > * {
+  flex: 1 1 0%;
+  min-width: 0;
   border-right: 1px solid hsl(213, 22%, 93%);
 }
 .oh-btn-group > *:last-child {
@@ -8389,6 +8392,7 @@ body {
 .oh-btn--disabled {
   opacity: 0.6;
   cursor: not-allowed !important;
+  pointer-events: none;
 }
 .oh-btn--disabled:focus, .oh-btn--disabled:focus-visible {
   outline: none;

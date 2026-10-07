@@ -12,11 +12,11 @@ from itertools import groupby
 from django import template
 from django.forms.widgets import SelectMultiple, Textarea
 from django.template import TemplateSyntaxError
-from django.template.defaultfilters import register
 
-from attendance.models import AttendanceValidationCondition
+from attendance.models import Attendance, AttendanceValidationCondition
 from attendance.views.views import strtime_seconds
 from base.models import EmployeeShiftSchedule
+from employee.models import Employee
 from horilla.horilla_middlewares import _thread_locals
 
 register = template.Library()
@@ -75,13 +75,21 @@ def is_clocked_in(user):
         employee = user.employee_get
     except:
         return False
+    today = date.today()
+    yesterday = today - timedelta(days=1)
     last_attendance = (
-        employee.employee_attendances.all().order_by("attendance_date", "id").last()
+        employee.employee_attendances.filter(attendance_date__in=[yesterday, today])
+        .order_by("attendance_date", "id")
+        .last()
     )
     if last_attendance is not None:
-        last_activity = employee.employee_attendance_activities.filter(
-            attendance_date=last_attendance.attendance_date
-        ).last()
+        last_activity = (
+            employee.employee_attendance_activities.filter(
+                attendance_date=last_attendance.attendance_date
+            )
+            .order_by("id")
+            .last()
+        )
         return False if last_activity is None else last_activity.clock_out is None
     return False
 
@@ -241,3 +249,8 @@ def get_item(list, i):
         return list[i]
     except:
         return None
+
+
+@register.filter
+def get_employee_specific_holidays(specific_holiday_dict, employee_pk):
+    return specific_holiday_dict.get(employee_pk, set())

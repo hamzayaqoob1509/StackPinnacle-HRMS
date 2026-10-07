@@ -1,3 +1,4 @@
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from attendance.models import *
@@ -41,7 +42,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             employee_id=employee_id, attendance_date=attendance_date
         ).exists():
             raise ValidationError(
-                ("Attendance for this employee on the current date already exists.")
+                _("Attendance for this employee on the current date already exists.")
             )
         return data
 
@@ -225,6 +226,8 @@ class UserAttendanceListSerializer(serializers.ModelSerializer):
 
 
 class UserAttendanceDetailedSerializer(serializers.ModelSerializer):
+    shift_name = serializers.CharField(source="shift_id.employee_shift", read_only=True)
+
     class Meta:
         model = Attendance
         fields = "__all__"

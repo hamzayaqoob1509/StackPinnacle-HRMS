@@ -11,11 +11,13 @@ from urllib.parse import parse_qs
 
 from django.contrib import messages
 from django.db.models import ProtectedError, Q
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
+from django.views.decorators.http import require_http_methods
 
 from attendance.filters import AttendanceFilters, AttendanceRequestReGroup
 from attendance.forms import (
@@ -24,12 +26,7 @@ from attendance.forms import (
     BulkAttendanceRequestForm,
     NewRequestForm,
 )
-from attendance.methods.utils import (
-    get_diff_dict,
-    get_employee_last_name,
-    paginator_qry,
-    shift_schedule_today,
-)
+from attendance.methods.utils import get_diff_dict, paginator_qry, shift_schedule_today
 from attendance.models import (
     Attendance,
     AttendanceActivity,
@@ -53,7 +50,21 @@ from horilla.decorators import (
     manager_can_enter,
     permission_required,
 )
+from horilla.http.response import HorillaRedirect
 from notifications.signals import notify
+
+
+def _clean_requested_data_none_strings(requested_data):
+    """
+    AttendanceRequestForm.clean() stringifies every value before storing
+    requested_data as JSON (see forms.py), turning an absent/None field such
+    as work_type_id or shift_id into the literal string "None" instead of
+    null. Convert any such literal "None" strings back to real None so they
+    don't get passed as-is to a FK field on Attendance.objects.update().
+    """
+    return {
+        key: None if value == "None" else value for key, value in requested_data.items()
+    }
 
 
 @login_required
@@ -160,14 +171,7 @@ def request_new(request):
             if form.is_valid():
                 instance = form.save(commit=False)
                 messages.success(request, _("Attendance request created"))
-                return HttpResponse(
-                    render(
-                        request,
-                        "requests/attendance/request_new_form.html",
-                        {"form": form},
-                    ).content.decode("utf-8")
-                    + "<script>location.reload();</script>"
-                )
+                return HorillaRedirect(request)
         return render(
             request,
             "requests/attendance/request_new_form.html",
@@ -200,23 +204,9 @@ def request_new(request):
             if form.new_instance is not None:
                 form.new_instance.save()
                 messages.success(request, _("New attendance request created"))
-                return HttpResponse(
-                    render(
-                        request,
-                        "requests/attendance/request_new_form.html",
-                        {"form": form},
-                    ).content.decode("utf-8")
-                    + "<script>location.reload();</script>"
-                )
+                return HorillaRedirect(request)
             messages.success(request, _("Update request updated"))
-            return HttpResponse(
-                render(
-                    request,
-                    "requests/attendance/request_new_form.html",
-                    {"form": form},
-                ).content.decode("utf-8")
-                + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(
         request,
         "requests/attendance/request_new_form.html",
@@ -225,20 +215,24 @@ def request_new(request):
 
 
 @login_required
+@hx_request_required
 def create_batch_attendance(request):
     form = BatchAttendanceForm()
     previous_form_data = request.GET.urlencode()
     previous_url = request.GET.get("previous_url")
     # Split the string at "?" and extract the first part, then reattach the "?"
-    previous_url = previous_url.split("?")[0] + "?"
-    if "attendance-update" in previous_url:
-        hx_target = "#updateAttendanceModalBody"
-    elif "edit-validate-attendance" in previous_url:
-        hx_target = "#editValidateAttendanceRequestModalBody"
-    elif "request-attendance" in previous_url:
-        hx_target = "#objectUpdateModalTarget"
-    elif "attendance-create" in previous_url:
-        hx_target = "#addAttendanceModalBody"
+    if previous_url:
+        previous_url = previous_url.split("?")[0] + "?"
+        if "attendance-update" in previous_url:
+            hx_target = "#updateAttendanceModalBody"
+        elif "edit-validate-attendance" in previous_url:
+            hx_target = "#editValidateAttendanceRequestModalBody"
+        elif "request-attendance" in previous_url:
+            hx_target = "#objectUpdateModalTarget"
+        elif "attendance-create" in previous_url:
+            hx_target = "#addAttendanceModalBody"
+        else:
+            hx_target = "#objectCreateModalTarget"
     else:
         hx_target = "#objectCreateModalTarget"
     if request.method == "POST":
@@ -260,6 +254,7 @@ def create_batch_attendance(request):
 
 
 @login_required
+@hx_request_required
 def get_batches(request):
     batches = BatchAttendance.objects.all()
     return render(
@@ -273,7 +268,7 @@ def update_title(request):
     try:
         batch = BatchAttendance.objects.filter(id=batch_id).first()
         if (
-            request.user.has_perm("attendance.change_attendancegeneralsettings")
+            request.user.has_perm("attendance.change_attendancegeneralsetting")
             or request.user == batch.created_by
         ):
             title = request.POST.get("title")
@@ -317,7 +312,12 @@ def attendance_request_changes(request, attendance_id):
     """
     This method is used to store the requested changes to the instance
     """
-    attendance = Attendance.objects.get(id=attendance_id)
+    attendance = Attendance.find(attendance_id)
+    if not attendance:
+        return HorillaRedirect(
+            request, message=_("No Attendance found matching the query.")
+        )
+
     if request.GET.get("previous_url"):
         form = AttendanceRequestForm(initial=request.GET.dict())
     else:
@@ -355,7 +355,7 @@ def attendance_request_changes(request, attendance_id):
         if shift_id is None or not len(shift_id):
             form.add_error("shift_id", "This field is required")
         if form.is_valid():
-            # commit already set to False
+            # commit already set to False in the form save method
             # so the changes not affected to the db
             instance = form.save()
             instance.employee_id = attendance.employee_id
@@ -376,33 +376,21 @@ def attendance_request_changes(request, attendance_id):
                 reporting_manager = (
                     attendance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
                 )
-                user_last_name = get_employee_last_name(attendance)
                 notify.send(
                     request.user,
                     recipient=reporting_manager,
-                    verb=f"{employee.employee_first_name} {user_last_name}'s\
-                          attendance update request for {attendance.attendance_date} is created",
-                    verb_ar=f"تم إنشاء طلب تحديث الحضور لـ {employee.employee_first_name} \
-                        {user_last_name }في {attendance.attendance_date}",
-                    verb_de=f"Die Anfrage zur Aktualisierung der Anwesenheit von \
-                        {employee.employee_first_name} {user_last_name} \
-                            für den {attendance.attendance_date} wurde erstellt",
-                    verb_es=f"Se ha creado la solicitud de actualización de asistencia para {employee.employee_first_name}\
-                          {user_last_name} el {attendance.attendance_date}",
-                    verb_fr=f"La demande de mise à jour de présence de {employee.employee_first_name}\
-                          {user_last_name} pour le {attendance.attendance_date} a été créée",
+                    verb=gettext_noop(
+                        "%(employee_name)s's attendance update request for %(attendance_date)s is created"
+                    ),
+                    verb_params={
+                        "employee_name": str(employee.get_full_name()),
+                        "attendance_date": str(attendance.attendance_date),
+                    },
                     redirect=reverse("request-attendance-view")
                     + f"?id={attendance.id}",
                     icon="checkmark-circle-outline",
                 )
-            return HttpResponse(
-                render(
-                    request,
-                    "requests/attendance/form.html",
-                    {"form": form, "attendance_id": attendance_id},
-                ).content.decode("utf-8")
-                + "<script>location.reload();</script>"
-            )
+            return HorillaRedirect(request)
     return render(
         request,
         "requests/attendance/form.html",
@@ -417,7 +405,12 @@ def validate_attendance_request(request, attendance_id):
     args:
         attendance_id : attendance id
     """
-    attendance = Attendance.objects.get(id=attendance_id)
+    attendance = Attendance.find(attendance_id)
+    if not attendance:
+        return HorillaRedirect(
+            request, message=_("No Attendance found matching the query.")
+        )
+
     first_dict = attendance.serialize()
     empty_data = {
         "employee_id": None,
@@ -435,12 +428,17 @@ def validate_attendance_request(request, attendance_id):
         other_dict = first_dict
         first_dict = empty_data
     else:
-        other_dict = json.loads(attendance.requested_data)
-    requests_ids_json = request.GET.get("requests_ids")
+        requested_data = attendance.requested_data or {}
+        other_dict = (
+            requested_data
+            if isinstance(requested_data, dict)
+            else json.loads(requested_data)
+        )
+    requests_ids_json = request.session.get("ordered_ids_attendance", [])
     previous_instance_id = next_instance_id = attendance.pk
     if requests_ids_json:
         previous_instance_id, next_instance_id = closest_numbers(
-            json.loads(requests_ids_json), attendance_id
+            requests_ids_json, attendance_id
         )
     return render(
         request,
@@ -457,11 +455,17 @@ def validate_attendance_request(request, attendance_id):
 
 @login_required
 @manager_can_enter("attendance.change_attendance")
+@require_http_methods(["POST"])
 def approve_validate_attendance_request(request, attendance_id):
     """
     This method is used to validate the attendance requests
     """
-    attendance = Attendance.objects.get(id=attendance_id)
+    attendance = Attendance.find(attendance_id)
+    if not attendance:
+        return HorillaRedirect(
+            request, message=_("No Attendance found matching the query.")
+        )
+
     prev_attendance_date = attendance.attendance_date
     prev_attendance_clock_in_date = attendance.attendance_clock_in_date
     prev_attendance_clock_in = attendance.attendance_clock_in
@@ -469,24 +473,20 @@ def approve_validate_attendance_request(request, attendance_id):
     attendance.is_validate_request_approved = True
     attendance.is_validate_request = False
     attendance.request_description = None
+    attendance.approved_by = request.user.employee_get
     attendance.save()
     if attendance.requested_data is not None:
-        requested_data = json.loads(attendance.requested_data)
-        requested_data["attendance_clock_out"] = (
-            None
-            if requested_data["attendance_clock_out"] == "None"
-            else requested_data["attendance_clock_out"]
-        )
-        requested_data["attendance_clock_out_date"] = (
-            None
-            if requested_data["attendance_clock_out_date"] == "None"
-            else requested_data["attendance_clock_out_date"]
+        requested_data = _clean_requested_data_none_strings(
+            json.loads(attendance.requested_data)
         )
         Attendance.objects.filter(id=attendance_id).update(**requested_data)
         # DUE TO AFFECT THE OVERTIME CALCULATION ON SAVE METHOD, SAVE THE INSTANCE ONCE MORE
         attendance = Attendance.objects.get(id=attendance_id)
         attendance.save()
-
+    if attendance.request_type == "create_request":
+        attendance.request_type = "created_request"
+        attendance.requested_data = None
+        attendance.save()
     if (
         attendance.attendance_clock_out is None
         or attendance.attendance_clock_out_date is None
@@ -530,22 +530,15 @@ def approve_validate_attendance_request(request, attendance_id):
         early_out(
             attendance, start_time=start_time_sec, end_time=end_time_sec, shift=shift
         )
-
     messages.success(request, _("Attendance request has been approved"))
     employee = attendance.employee_id
     notify.send(
         request.user,
         recipient=employee.employee_user_id,
-        verb=f"Your attendance request for \
-            {attendance.attendance_date} is validated",
-        verb_ar=f"تم التحقق من طلب حضورك في تاريخ \
-            {attendance.attendance_date}",
-        verb_de=f"Ihr Anwesenheitsantrag für das Datum \
-            {attendance.attendance_date} wurde bestätigt",
-        verb_es=f"Se ha validado su solicitud de asistencia \
-            para la fecha {attendance.attendance_date}",
-        verb_fr=f"Votre demande de présence pour la date \
-            {attendance.attendance_date} est validée",
+        verb=gettext_noop(
+            "Your attendance request for %(attendance_date)s is validated"
+        ),
+        verb_params={"attendance_date": str(attendance.attendance_date)},
         redirect=reverse("request-attendance-view") + f"?id={attendance.id}",
         icon="checkmark-circle-outline",
     )
@@ -553,27 +546,43 @@ def approve_validate_attendance_request(request, attendance_id):
         reporting_manager = (
             attendance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
         )
-        user_last_name = get_employee_last_name(attendance)
         notify.send(
             request.user,
             recipient=reporting_manager,
-            verb=f"{employee.employee_first_name} {user_last_name}'s\
-                  attendance request for {attendance.attendance_date} is validated",
-            verb_ar=f"تم التحقق من طلب الحضور لـ {employee.employee_first_name} \
-                {user_last_name} في {attendance.attendance_date}",
-            verb_de=f"Die Anwesenheitsanfrage von {employee.employee_first_name} \
-                {user_last_name} für den {attendance.attendance_date} wurde validiert",
-            verb_es=f"Se ha validado la solicitud de asistencia de \
-                {employee.employee_first_name} {user_last_name} para el {attendance.attendance_date}",
-            verb_fr=f"La demande de présence de {employee.employee_first_name} \
-                {user_last_name} pour le {attendance.attendance_date} a été validée",
+            verb=gettext_noop(
+                "%(employee_name)s's attendance request for %(attendance_date)s is validated"
+            ),
+            verb_params={
+                "employee_name": str(employee.get_full_name()),
+                "attendance_date": str(attendance.attendance_date),
+            },
             redirect=reverse("request-attendance-view") + f"?id={attendance.id}",
             icon="checkmark-circle-outline",
         )
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    if request.headers.get("HX-Request"):
+        return HttpResponse(
+            f"""
+            <script>
+                $('#validateAttendanceRequest').removeClass('oh-modal--show');
+                (function(id, storeKey) {{
+                    var ids = JSON.parse($('#' + storeKey).attr('data-ids') || '[]');
+                    var idx = ids.indexOf(String(id));
+                    if (idx > -1) {{
+                        ids.splice(idx, 1);
+                        $('#' + storeKey).attr('data-ids', JSON.stringify(ids));
+                        setStoredSelection(storeKey, ids);
+                    }}
+                }})({attendance_id}, 'selectedInstances');
+                $('.reload-record').click();
+                $('#reloadMessagesButton').click();
+            </script>
+            """
+        )
+    return HorillaRedirect(request)
 
 
 @login_required
+@require_http_methods(["POST"])
 def cancel_attendance_request(request, attendance_id):
     """
     This method is used to cancel attendance request
@@ -601,33 +610,54 @@ def cancel_attendance_request(request, attendance_id):
             notify.send(
                 request.user,
                 recipient=employee.employee_user_id,
-                verb=f"Your attendance request for {attendance.attendance_date} is rejected",
-                verb_ar=f"تم رفض طلبك للحضور في تاريخ {attendance.attendance_date}",
-                verb_de=f"Ihre Anwesenheitsanfrage für {attendance.attendance_date} wurde abgelehnt",
-                verb_es=f"Tu solicitud de asistencia para el {attendance.attendance_date} ha sido rechazada",
-                verb_fr=f"Votre demande de présence pour le {attendance.attendance_date} est rejetée",
+                verb=gettext_noop(
+                    "Your attendance request for %(attendance_date)s is rejected"
+                ),
+                verb_params={"attendance_date": str(attendance.attendance_date)},
                 icon="close-circle-outline",
+                redirect=reverse("request-attendance-view"),
             )
     except (Attendance.DoesNotExist, OverflowError):
         messages.error(request, _("Attendance request not found"))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    if request.headers.get("HX-Request"):
+        return HttpResponse(
+            f"""
+            <script>
+                $('#validateAttendanceRequest').removeClass('oh-modal--show');
+                (function(id, storeKey) {{
+                    var ids = JSON.parse($('#' + storeKey).attr('data-ids') || '[]');
+                    var idx = ids.indexOf(String(id));
+                    if (idx > -1) {{
+                        ids.splice(idx, 1);
+                        $('#' + storeKey).attr('data-ids', JSON.stringify(ids));
+                        setStoredSelection(storeKey, ids);
+                    }}
+                }})({attendance_id}, 'selectedInstances');
+                $('.reload-record').click();
+                $('#reloadMessagesButton').click();
+            </script>
+            """
+        )
+    return HorillaRedirect(request)
 
 
 @login_required
+@hx_request_required
 def select_all_filter_attendance_request(request):
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
+    context = {}
 
     if page_number == "all":
         if request.user.has_perm("attendance.view_attendance"):
-            employee_filter = AttendanceFilters(
-                request.GET,
+            attendance_filter = AttendanceFilters(
+                filters,
                 queryset=Attendance.objects.filter(is_validate_request=True),
             )
         else:
-            employee_filter = AttendanceFilters(
-                request.GET,
+            attendance_filter = AttendanceFilters(
+                filters,
                 queryset=Attendance.objects.filter(
                     employee_id__employee_user_id=request.user, is_validate_request=True
                 )
@@ -639,14 +669,14 @@ def select_all_filter_attendance_request(request):
 
         # Get the filtered queryset
 
-        filtered_employees = employee_filter.qs
+        filtered_attendance = attendance_filter.qs
 
-        employee_ids = [str(emp.id) for emp in filtered_employees]
-        total_count = filtered_employees.count()
+        attendance_ids = [str(att.id) for att in filtered_attendance]
+        total_count = filtered_attendance.count()
 
-        context = {"employee_ids": employee_ids, "total_count": total_count}
+        context = {"employee_ids": attendance_ids, "total_count": total_count}
 
-        return JsonResponse(context)
+    return JsonResponse(context)
 
 
 @login_required
@@ -655,9 +685,18 @@ def bulk_approve_attendance_request(request):
     """
     This method is used to validate the attendance requests
     """
-    ids = request.POST["ids"]
-    ids = json.loads(ids)
+    ids = json.loads(request.POST.get("ids", "[]"))
+    filtered_ids = []
+    if not ids and len(ids) <= 0:
+        messages.error(request, _("No attendance request selected"))
+        return redirect(reverse("request-attendance-view"))
     for attendance_id in ids:
+        attendance = Attendance.objects.get(id=attendance_id)
+        if attendance.employee_id != request.user.employee_get:
+            filtered_ids.append(attendance_id)
+    if request.user.is_superuser:
+        filtered_ids = ids
+    for attendance_id in filtered_ids:
         attendance = Attendance.objects.get(id=attendance_id)
         prev_attendance_date = attendance.attendance_date
         prev_attendance_clock_in_date = attendance.attendance_clock_in_date
@@ -666,18 +705,11 @@ def bulk_approve_attendance_request(request):
         attendance.is_validate_request_approved = True
         attendance.is_validate_request = False
         attendance.request_description = None
+        attendance.approved_by = request.user.employee_get
         attendance.save()
         if attendance.requested_data is not None:
-            requested_data = json.loads(attendance.requested_data)
-            requested_data["attendance_clock_out"] = (
-                None
-                if requested_data["attendance_clock_out"] == "None"
-                else requested_data["attendance_clock_out"]
-            )
-            requested_data["attendance_clock_out_date"] = (
-                None
-                if requested_data["attendance_clock_out_date"] == "None"
-                else requested_data["attendance_clock_out_date"]
+            requested_data = _clean_requested_data_none_strings(
+                json.loads(attendance.requested_data)
             )
             Attendance.objects.filter(id=attendance_id).update(**requested_data)
             # DUE TO AFFECT THE OVERTIME CALCULATION ON SAVE METHOD, SAVE THE INSTANCE ONCE MORE
@@ -738,16 +770,10 @@ def bulk_approve_attendance_request(request):
         notify.send(
             request.user,
             recipient=employee.employee_user_id,
-            verb=f"Your attendance request for \
-                {attendance.attendance_date} is validated",
-            verb_ar=f"تم التحقق من طلب حضورك في تاريخ \
-                {attendance.attendance_date}",
-            verb_de=f"Ihr Anwesenheitsantrag für das Datum \
-                {attendance.attendance_date} wurde bestätigt",
-            verb_es=f"Se ha validado su solicitud de asistencia \
-                para la fecha {attendance.attendance_date}",
-            verb_fr=f"Votre demande de présence pour la date \
-                {attendance.attendance_date} est validée",
+            verb=gettext_noop(
+                "Your attendance request for %(attendance_date)s is validated"
+            ),
+            verb_params={"attendance_date": str(attendance.attendance_date)},
             redirect=reverse("request-attendance-view") + f"?id={attendance.id}",
             icon="checkmark-circle-outline",
         )
@@ -755,20 +781,16 @@ def bulk_approve_attendance_request(request):
             reporting_manager = (
                 attendance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
             )
-            user_last_name = get_employee_last_name(attendance)
             notify.send(
                 request.user,
                 recipient=reporting_manager,
-                verb=f"{employee.employee_first_name} {user_last_name}'s\
-                    attendance request for {attendance.attendance_date} is validated",
-                verb_ar=f"تم التحقق من طلب الحضور لـ {employee.employee_first_name} \
-                    {user_last_name} في {attendance.attendance_date}",
-                verb_de=f"Die Anwesenheitsanfrage von {employee.employee_first_name} \
-                    {user_last_name} für den {attendance.attendance_date} wurde validiert",
-                verb_es=f"Se ha validado la solicitud de asistencia de \
-                    {employee.employee_first_name} {user_last_name} para el {attendance.attendance_date}",
-                verb_fr=f"La demande de présence de {employee.employee_first_name} \
-                    {user_last_name} pour le {attendance.attendance_date} a été validée",
+                verb=gettext_noop(
+                    "%(employee_name)s's attendance request for %(attendance_date)s is validated"
+                ),
+                verb_params={
+                    "employee_name": str(employee.get_full_name()),
+                    "attendance_date": str(attendance.attendance_date),
+                },
                 redirect=reverse("request-attendance-view") + f"?id={attendance.id}",
                 icon="checkmark-circle-outline",
             )
@@ -781,8 +803,10 @@ def bulk_reject_attendance_request(request):
     """
     This method is used to delete bulk attendance request
     """
-    ids = request.POST["ids"]
-    ids = json.loads(ids)
+    ids = json.loads(request.POST.get("ids", "[]"))
+    if not ids and len(ids) <= 0:
+        messages.error(request, _("No attendance request selected"))
+        return redirect(reverse("request-attendance-view"))
     for attendance_id in ids:
         try:
             attendance = Attendance.objects.get(id=attendance_id)
@@ -808,12 +832,13 @@ def bulk_reject_attendance_request(request):
                 notify.send(
                     request.user,
                     recipient=employee.employee_user_id,
-                    verb=f"Your attendance request for {attendance.attendance_date} is rejected",
-                    verb_ar=f"تم رفض طلبك للحضور في تاريخ {attendance.attendance_date}",
-                    verb_de=f"Ihre Anwesenheitsanfrage für {attendance.attendance_date} wurde abgelehnt",
-                    verb_es=f"Tu solicitud de asistencia para el {attendance.attendance_date} ha sido rechazada",
-                    verb_fr=f"Votre demande de présence pour le {attendance.attendance_date} est rejetée",
+                    verb=gettext_noop(
+                        "Your attendance request for %(attendance_date)s is rejected"
+                    ),
+                    verb_params={"attendance_date": str(attendance.attendance_date)},
                     icon="close-circle-outline",
+                    redirect=reverse("request-attendance-view")
+                    + f"?id={attendance.id}",
                 )
         except (Attendance.DoesNotExist, OverflowError):
             messages.error(request, _("Attendance request not found"))
@@ -826,7 +851,12 @@ def edit_validate_attendance(request, attendance_id):
     """
     This method is used to edit and update the validate request attendance
     """
-    attendance = Attendance.objects.get(id=attendance_id)
+    attendance = Attendance.find(attendance_id)
+    if not attendance:
+        return HorillaRedirect(
+            request, message=_("No Attendance found matching the query.")
+        )
+
     initial = attendance.serialize()
     if request.GET.get("previous_url"):
         initial = request.GET.dict()
@@ -855,20 +885,20 @@ def edit_validate_attendance(request, attendance_id):
                 instance.save()
             return HttpResponse(
                 f"""
-                                <script>
-                                $('#editValidateAttendanceRequest').removeClass('oh-modal--show');
-                                $('[data-target="#validateAttendanceRequest"][data-attendance-id={attendance.id}]').click();
-                                $('#messages').html(
-                                `
+                    <script>
+                        $('#editValidateAttendanceRequest').removeClass('oh-modal--show');
+                        $('[data-target="#validateAttendanceRequest"][data-attendance-id={attendance.id}]').click();
+                        $('#messages').html(
+                            `
                                 <div class="oh-alert-container">
-                                <div class="oh-alert oh-alert--animated oh-alert--success">
-                                Attendance request updated.
+                                    <div class="oh-alert oh-alert--animated oh-alert--success">
+                                        Attendance request updated.
+                                    </div>
                                 </div>
-                                </div>
-                                `
-                                )
-                                </script>
-                                """
+                            `
+                        )
+                    </script>
+                """
             )
     return render(
         request,

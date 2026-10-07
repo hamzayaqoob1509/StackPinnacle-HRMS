@@ -22,7 +22,7 @@ from urllib.parse import parse_qs
 from django import template
 from django.contrib import messages
 from django.contrib.auth import login
-from django.contrib.auth.models import User
+from django.contrib.staticfiles import finders
 from django.core.files.base import ContentFile
 from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
@@ -33,7 +33,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
-from django.views.decorators.csrf import csrf_exempt
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods, require_POST
 
 from base.backends import ConfiguredEmailBackend
@@ -42,18 +42,16 @@ from base.methods import (
     generate_pdf,
     get_key_instances,
     get_pagination,
+    sanitize_mail_template_body,
     sortby,
 )
 from base.models import HorillaMailTemplate, JobPosition
 from employee.models import Employee, EmployeeBankDetails, EmployeeWorkInformation
 from horilla import settings
-from horilla.decorators import (
-    hx_request_required,
-    logger,
-    login_required,
-    permission_required,
-)
+from horilla.decorators import hx_request_required, login_required, permission_required
 from horilla.group_by import group_by_queryset as general_group_by
+from horilla.http.response import HorillaRedirect
+from horilla_auth.models import HorillaUser
 from horilla_documents.models import Document
 from notifications.signals import notify
 from onboarding.decorators import (
@@ -134,11 +132,7 @@ def stage_save(form, recruitment, request, rec_id):
     notify.send(
         request.user.employee_get,
         recipient=users,
-        verb="You are chosen as onboarding stage manager",
-        verb_ar="لقد تم اختيارك كمدير مرحلة التدريب.",
-        verb_de="Sie wurden als Onboarding-Stage-Manager ausgewählt.",
-        verb_es="Ha sido seleccionado/a como responsable de etapa de incorporación.",
-        verb_fr="Vous avez été choisi(e) en tant que responsable de l'étape d'intégration.",
+        verb=gettext_noop("You are chosen as onboarding stage manager"),
         icon="people-circle",
         redirect=reverse("onboarding-view"),
     )
@@ -180,26 +174,70 @@ def stage_update(request, stage_id, recruitment_id):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as onboarding stage manager",
-                verb_ar="لقد تم اختيارك كمدير مرحلة التدريب.",
-                verb_de="Sie wurden als Onboarding-Stage-Manager ausgewählt.",
-                verb_es="Ha sido seleccionado/a como responsable de etapa de incorporación.",
-                verb_fr="Vous avez été choisi(e) en tant que responsable de l'étape d'intégration.",
+                verb=gettext_noop("You are chosen as onboarding stage manager"),
                 icon="people-circle",
                 redirect=reverse("onboarding-view"),
             )
-            response = render(
-                request,
-                "onboarding/stage_update.html",
-                {"form": form, "stage_id": stage_id, "recruitment_id": recruitment_id},
-            )
-            return HttpResponse(
-                response.content.decode("utf-8") + "<script>location.reload();</script>"
-            )
+            if request.META.get("HTTP_HX_REQUEST") == "true":
+                return HttpResponse(
+                    """
+                    <script>
+                      (function () {
+                        const activeTab = document.querySelector(".oh-tabs__tab--active");
+                        const target = activeTab ? activeTab.getAttribute("data-target") : null;
+                        if (target && window.htmx) {
+                          htmx.ajax("GET", window.location.href, {
+                            target: target,
+                            swap: "outerHTML",
+                            select: target
+                          });
+                        }
+                        $("#reloadMessagesButton").click();
+                        $("#genericModal").removeClass("oh-modal--show");
+                      })();
+                    </script>
+                    """
+                )
+            return HorillaRedirect(request)
     return render(
         request,
         "onboarding/stage_update.html",
         {"form": form, "stage_id": stage_id, "recruitment_id": recruitment_id},
+    )
+
+
+@login_required
+@recruitment_manager_can_enter("onboarding.change_onboardingstage")
+def update_stage_order(request, pk):
+    """
+    This method is used to update the stage sequence of the onboarding
+    """
+    recruitment = Recruitment.find(pk)
+    if not recruitment:
+        return HorillaRedirect(request, message=_("Recruitment not found."))
+
+    if request.method == "POST":
+        try:
+            order = json.loads(request.POST.get("order", "[]"))
+            for index, stage_id in enumerate(order):
+                stage = recruitment.onboarding_stage.get(id=stage_id)
+                stage.sequence = index + 1
+                stage.save()
+            messages.success(request, _("Sequence Updated Successfully"))
+            return JsonResponse({"status": "success"})
+        except Exception as e:
+            messages.error(request, _("Error Updating Sequence.."))
+            return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+    stages = recruitment.onboarding_stage.order_by("sequence")
+
+    return render(
+        request,
+        "cbv/pipeline/onboarding/stage_order.html",
+        {
+            "stages": stages,
+            "recruitment": recruitment,
+        },
     )
 
 
@@ -225,7 +263,7 @@ def stage_delete(request, stage_id):
         messages.error(request, _("Stage not found."))
     except ProtectedError:
         messages.error(request, _("There are candidates in this stage..."))
-    return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
+    return HorillaRedirect(request)
 
 
 @login_required
@@ -243,7 +281,9 @@ def task_creation(request):
     POST : return onboarding view
     """
     stage_id = request.GET.get("stage_id")
-    stage = OnboardingStage.objects.get(id=stage_id)
+    stage = OnboardingStage.objects.filter(id=stage_id).first()
+    if not stage:
+        return HttpResponse()
     form = OnboardingViewTaskForm(initial={"stage_id": stage})
 
     if request.method == "POST":
@@ -253,7 +293,10 @@ def task_creation(request):
             stage_id = form_data.cleaned_data["stage_id"]
             managers = form_data.cleaned_data["managers"]
             title = form_data.cleaned_data["task_title"]
-            onboarding_task = OnboardingTask(task_title=title, stage_id=stage_id)
+            is_required = form_data.cleaned_data["is_required"]
+            onboarding_task = OnboardingTask(
+                task_title=title, stage_id=stage_id, is_required=is_required
+            )
             onboarding_task.save()
             onboarding_task.employee_id.set(managers)
             onboarding_task.candidates.set(candidates)
@@ -272,16 +315,12 @@ def task_creation(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as an onboarding task manager",
-                verb_ar="لقد تم اختيارك كمدير مهام التدريب.",
-                verb_de="Sie wurden als Onboarding-Aufgabenmanager ausgewählt.",
-                verb_es="Ha sido seleccionado/a como responsable de tareas de incorporación.",
-                verb_fr="Vous avez été choisi(e) en tant que responsable des tâches d'intégration.",
+                verb=gettext_noop("You are chosen as an onboarding task manager"),
                 icon="people-circle",
                 redirect=reverse("onboarding-view"),
             )
             messages.success(request, _("New task created successfully..."))
-            return HttpResponse(status=204, headers={"HX-Refresh": "true"})
+            return HorillaRedirect(request)
     return render(
         request, "onboarding/task_form.html", {"form": form, "stage_id": stage_id}
     )
@@ -324,15 +363,11 @@ def task_update(
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as an onboarding task manager",
-                verb_ar="لقد تم اختيارك كمدير مهام التدريب.",
-                verb_de="Sie wurden als Onboarding-Aufgabenmanager ausgewählt.",
-                verb_es="Ha sido seleccionado/a como responsable de tareas de incorporación.",
-                verb_fr="Vous avez été choisi(e) en tant que responsable des tâches d'intégration.",
+                verb=gettext_noop("You are chosen as an onboarding task manager"),
                 icon="people-circle",
                 redirect=reverse("onboarding-view"),
             )
-            return HttpResponse(status=204, headers={"HX-Refresh": "true"})
+            return HorillaRedirect(request)
     return render(
         request,
         "onboarding/task_update.html",
@@ -412,7 +447,9 @@ def candidate_update(request, obj_id):
     GET : return candidate update form template
     POST : return candidate view
     """
-    candidate = Candidate.objects.get(id=obj_id)
+    candidate = Candidate.find(obj_id)
+    if not candidate:
+        return HorillaRedirect(request, message=_("Candidate not found."))
     form = OnboardingCandidateForm(instance=candidate)
     if request.method == "POST":
         form = OnboardingCandidateForm(request.POST, request.FILES, instance=candidate)
@@ -454,7 +491,9 @@ def candidate_delete(request, obj_id):
                 )
             ),
         )
-    return redirect(candidates_view)
+    if request.META.get("HTTP_HX_REQUEST"):
+        return HttpResponse(status=204)
+    return redirect(reverse("candidates-view"))
 
 
 @login_required
@@ -479,15 +518,20 @@ def candidates_single_view(request, id, **kwargs):
                 _("%(recruitment)s has no stage..")
                 % {"recruitment": candidate.recruitment_id},
             )
+        # OnboardingTask lost its own recruitment_id when tasks moved under
+        # stages, so filtering on it raises FieldError for any recruitment that
+        # has tasks. Reach the recruitment through the task's stage instead.
         if tasks := OnboardingTask.objects.filter(
-            recruitment_id=candidate.recruitment_id
+            stage_id__recruitment_id=candidate.recruitment_id
         ):
             for task in tasks:
                 if not CandidateTask.objects.filter(
                     candidate_id=candidate, onboarding_task_id=task
                 ).exists():
                     CandidateTask(
-                        candidate_id=candidate, onboarding_task_id=task
+                        candidate_id=candidate,
+                        stage_id=task.stage_id,
+                        onboarding_task_id=task,
                     ).save()
 
     recruitment = candidate.recruitment_id
@@ -562,6 +606,7 @@ def candidates_view(request):
 
 
 @login_required
+@hx_request_required
 @permission_required(perm="recruitment.view_candidate")
 def hired_candidate_view(request):
     previous_data = request.GET.urlencode()
@@ -621,112 +666,279 @@ def candidate_filter(request):
     )
 
 
+# @login_required
+# @all_manager_can_enter("recruitment.view_recruitment")
+# def email_send(request):
+#     """
+#     function used to send onboarding portal for hired candidates .
+
+#     Parameters:
+#     request (HttpRequest): The HTTP request object.
+
+#     Returns:
+#     GET : return json response
+#     """
+#     host = request.get_host()
+#     protocol = "https" if request.is_secure() else "http"
+#     candidates = request.POST.getlist("ids")
+#     other_attachments = request.FILES.getlist("other_attachments")
+#     template_attachment_ids = request.POST.getlist("template_attachment_ids")
+#     email_backend = ConfiguredEmailBackend()
+#     if not candidates:
+#         messages.info(request, _("Please choose candidates"))
+#         return HttpResponse("<script>window.location.reload()</script>")
+
+#     bodys = list(
+#         HorillaMailTemplate.objects.filter(id__in=template_attachment_ids).values_list(
+#             "body", flat=True
+#         )
+#     )
+
+#     attachments_other = []
+#     for file in other_attachments:
+#         attachments_other.append((file.name, file.read(), file.content_type))
+#         file.close()
+#     for cand_id in candidates:
+#         attachments = list(set(attachments_other) | set([]))
+#         candidate = Candidate.objects.get(id=cand_id)
+#         if not request.GET.get("no_portal"):
+#             if candidate.converted_employee_id:
+#                 messages.info(
+#                     request, _(f"{candidate} has already been converted to employee.")
+#                 )
+#                 continue
+#             for html in bodys:
+#                 # due to not having solid template we first need to pass the context
+#                 template_bdy = template.Template(html)
+#                 context = template.Context(
+#                     {"instance": candidate, "self": request.user.employee_get}
+#                 )
+#                 render_bdy = template_bdy.render(context)
+#                 attachments.append(
+#                     (
+#                         "Document",
+#                         generate_pdf(
+#                             render_bdy, {}, path=False, title="Document"
+#                         ).content,
+#                         "application/pdf",
+#                     )
+#                 )
+#             token = secrets.token_hex(15)
+#             existing_portal = OnboardingPortal.objects.filter(candidate_id=candidate)
+#             if existing_portal.exists():
+#                 new_portal = existing_portal.first()
+#                 new_portal.token = token
+#                 new_portal.used = False
+#                 new_portal.count = 0
+#                 new_portal.profile = None
+#                 new_portal.save()
+#             else:
+#                 OnboardingPortal(candidate_id=candidate, token=token).save()
+#             html_message = render_to_string(
+#                 "onboarding/mail_templates/default.html",
+#                 {
+#                     "portal": f"{protocol}://{host}/onboarding/user-creation/{token}",
+#                     "instance": candidate,
+#                     "host": host,
+#                     "protocol": protocol,
+#                 },
+#                 request=request,
+#             )
+#             email = EmailMessage(
+#                 subject=f"Hello {candidate.name}, Congratulations on your selection!",
+#                 body=html_message,
+#                 to=[candidate.email],
+#             )
+#             email.content_subtype = "html"
+#             email.attachments = attachments
+#             try:
+#                 email.send()
+#                 # to check ajax or not
+#                 messages.success(request, _("Portal link sent to the candidate"))
+#             except Exception as e:
+#                 logger.error(e)
+#                 messages.error(request, _("Mail not send to %(candidate_name)s") % {"candidate_name": candidate.name})
+#             candidate.start_onboard = True
+#             candidate.save()
+#         try:
+#             onboarding_candidate = CandidateStage()
+#             onboarding_candidate.onboarding_stage_id = (
+#                 candidate.recruitment_id.onboarding_stage.first()
+#             )
+#             onboarding_candidate.candidate_id = candidate
+#             onboarding_candidate.save()
+#             messages.success(request, _("Candidate Added to Onboarding Stage"))
+#         except Exception as e:
+#             logger.error(e)
+
+#     return HttpResponse("<script>window.location.reload()</script>")
+
+
+import logging
+from email.mime.image import MIMEImage
+
+from django.core.mail import EmailMultiAlternatives
+
+logger = logging.getLogger(__name__)
+
+
 @login_required
 @all_manager_can_enter("recruitment.view_recruitment")
 def email_send(request):
-    """
-    function used to send onboarding portal for hired candidates .
-
-    Parameters:
-    request (HttpRequest): The HTTP request object.
-
-    Returns:
-    GET : return json response
-    """
     host = request.get_host()
     protocol = "https" if request.is_secure() else "http"
+    no_portal = request.GET.get("no_portal") == "True"
+
     candidates = request.POST.getlist("ids")
     other_attachments = request.FILES.getlist("other_attachments")
     template_attachment_ids = request.POST.getlist("template_attachment_ids")
-    email_backend = ConfiguredEmailBackend()
-    if not candidates:
-        messages.info(request, "Please choose candidates")
-        return HttpResponse("<script>window.location.reload()</script>")
 
+    email_backend = ConfiguredEmailBackend()
+    display_email_name = email_backend.dynamic_from_email_with_display_name
+
+    if not candidates:
+        messages.info(request, _("Please choose candidates"))
+        return HorillaRedirect(request)
+
+    # Fetch PDF templates
     bodys = list(
         HorillaMailTemplate.objects.filter(id__in=template_attachment_ids).values_list(
             "body", flat=True
         )
     )
 
+    # Collect uploaded attachments
     attachments_other = []
     for file in other_attachments:
         attachments_other.append((file.name, file.read(), file.content_type))
         file.close()
+
     for cand_id in candidates:
-        attachments = list(set(attachments_other) | set([]))
         candidate = Candidate.objects.get(id=cand_id)
-        if not request.GET.get("no_portal"):
-            if candidate.converted_employee_id:
-                messages.info(
-                    request, _(f"{candidate} has already been converted to employee.")
+        attachments = list(attachments_other)
+
+        # Prevent duplicate onboarding
+        if candidate.converted_employee_id:
+            messages.info(
+                request,
+                _("%(candidate)s has already been converted to employee.")
+                % {"candidate": candidate},
+            )
+            continue
+
+        # Generate PDFs
+        for html in bodys:
+            template_bdy = template.Template(sanitize_mail_template_body(html))
+            context = template.Context(
+                {"instance": candidate, "self": request.user.employee_get}
+            )
+            render_bdy = template_bdy.render(context)
+
+            attachments.append(
+                (
+                    "Document.pdf",
+                    generate_pdf(render_bdy, {}, path=False, title="Document").content,
+                    "application/pdf",
                 )
-                continue
-            for html in bodys:
-                # due to not having solid template we first need to pass the context
-                template_bdy = template.Template(html)
-                context = template.Context(
-                    {"instance": candidate, "self": request.user.employee_get}
-                )
-                render_bdy = template_bdy.render(context)
-                attachments.append(
-                    (
-                        "Document",
-                        generate_pdf(
-                            render_bdy, {}, path=False, title="Document"
-                        ).content,
-                        "application/pdf",
-                    )
-                )
-            token = secrets.token_hex(15)
-            existing_portal = OnboardingPortal.objects.filter(candidate_id=candidate)
-            if existing_portal.exists():
-                new_portal = existing_portal.first()
-                new_portal.token = token
-                new_portal.used = False
-                new_portal.count = 0
-                new_portal.profile = None
-                new_portal.save()
+            )
+
+        # Create / reset portal
+        token = secrets.token_hex(15)
+        portal, _createdcreated = OnboardingPortal.objects.get_or_create(
+            candidate_id=candidate
+        )
+        portal.token = token
+        portal.used = False
+        portal.count = 0
+        portal.profile = None
+        portal.save()
+
+        # Render email HTML
+        html_message = render_to_string(
+            "onboarding/mail_templates/default.html",
+            {
+                "portal": f"{protocol}://{host}/onboarding/user-creation/{token}",
+                "instance": candidate,
+                "host": host,
+                "protocol": protocol,
+                "use_cid_logo": True,
+            },
+            request=request,
+        )
+
+        # ✅ Use EmailMultiAlternatives (IMPORTANT)
+        email = EmailMultiAlternatives(
+            subject=f"Hello {candidate.name}, Congratulations on your selection!",
+            body=html_message,
+            from_email=display_email_name,
+            to=[candidate.email],
+            reply_to=[display_email_name],
+        )
+
+        email.attach_alternative(html_message, "text/html")
+
+        # Attach files
+        for attachment in attachments:
+            email.attach(*attachment)
+
+        # ✅ Attach company logo INLINE
+        try:
+            company = candidate.recruitment_id.company_id
+            if company and company.icon and os.path.exists(company.icon.path):
+                image_path = company.icon.path
             else:
-                OnboardingPortal(candidate_id=candidate, token=token).save()
-            html_message = render_to_string(
-                "onboarding/mail_templates/default.html",
-                {
-                    "portal": f"{protocol}://{host}/onboarding/user-creation/{token}",
-                    "instance": candidate,
-                    "host": host,
-                    "protocol": protocol,
-                },
-                request=request,
+                image_path = finders.find("images/ui/horilla-sticker-round.png")
+
+            if image_path:
+                with open(image_path, "rb") as f:
+                    logo = MIMEImage(f.read())
+                    logo.add_header("Content-ID", "<company_logo>")
+                    logo.add_header(
+                        "Content-Disposition",
+                        "inline",
+                        filename=os.path.basename(image_path),
+                    )
+                    email.attach(logo)
+        except Exception as e:
+            logger.error(f"Company logo attach failed: {e}")
+
+        # Send mail, unless the caller only wants onboarding started. The
+        # "Start Onboarding" action posts ?no_portal=True for exactly this.
+        if no_portal:
+            messages.success(
+                request,
+                _("%(candidate)s added to onboarding") % {"candidate": candidate.name},
             )
-            email = EmailMessage(
-                subject=f"Hello {candidate.name}, Congratulations on your selection!",
-                body=html_message,
-                to=[candidate.email],
-            )
-            email.content_subtype = "html"
-            email.attachments = attachments
+        else:
             try:
                 email.send()
-                # to check ajax or not
-                messages.success(request, "Portal link sent to the candidate")
+                messages.success(request, _("Portal link sent to the candidate"))
             except Exception as e:
                 logger.error(e)
-                messages.error(request, f"Mail not send to {candidate.name}")
-            candidate.start_onboard = True
-            candidate.save()
+                messages.error(
+                    request,
+                    _("Mail not sent to %(candidate_name)s")
+                    % {"candidate_name": candidate.name},
+                )
+                # continue
+
+        # Mark onboarding started without triggering Candidate.save() validation
+        # (which can fail with "Choose valid choice" on job_position_id when the
+        # candidate's job position has been removed from recruitment.open_positions).
+        Candidate.objects.filter(pk=candidate.pk).update(start_onboard=True)
+        candidate.start_onboard = True
+
+        # ✅ SAFE onboarding stage insert
         try:
-            onboarding_candidate = CandidateStage()
-            onboarding_candidate.onboarding_stage_id = (
-                candidate.recruitment_id.onboarding_stage.first()
+            stage = candidate.recruitment_id.onboarding_stage.first()
+            CandidateStage.objects.get_or_create(
+                candidate_id=candidate,
+                defaults={"onboarding_stage_id": stage},
             )
-            onboarding_candidate.candidate_id = candidate
-            onboarding_candidate.save()
-            messages.success(request, "Candidate Added to Onboarding Stage")
         except Exception as e:
             logger.error(e)
 
-    return HttpResponse("<script>window.location.reload()</script>")
+    return HorillaRedirect(request)
 
 
 def onboarding_query_grouper(request, queryset):
@@ -900,7 +1112,6 @@ def kanban_view(request):
             "filter_dict": filter_dict,
             "stage_form": stage_form,
             "status": status,
-            "choices": choices,
             "pd": previous_data,
             "card": True,
         },
@@ -922,32 +1133,29 @@ def user_creation(request, token):
     GET : return user creation form template
     POST : return user_save function
     """
+    onboarding_portal = OnboardingPortal.objects.filter(token=token).first()
+    if not onboarding_portal or onboarding_portal.used is True:
+        return render(request, "404.html")
+    if onboarding_portal.count == 3:
+        return redirect("employee-bank-details", token)
+    candidate = onboarding_portal.candidate_id
+    user = HorillaUser.objects.filter(username=candidate.email).first()
+    form = UserCreationForm(instance=user)
     try:
-        onboarding_portal = OnboardingPortal.objects.get(token=token)
-        if not onboarding_portal or onboarding_portal.used is True:
-            return render(request, "404.html")
-        if onboarding_portal.count == 3:
-            return redirect("employee-bank-details", token)
-        candidate = onboarding_portal.candidate_id
-        user = User.objects.filter(username=candidate.email).first()
-        form = UserCreationForm(instance=user)
-        try:
-            if request.method == "POST":
-                form = UserCreationForm(request.POST, instance=user)
-                if form.is_valid():
-                    return user_save(form, onboarding_portal, request, token)
-        except Exception:
-            messages.error(request, _("User with email-id already exists.."))
-        return render(
-            request,
-            "onboarding/user_creation.html",
-            {
-                "form": form,
-                "company": onboarding_portal.candidate_id.recruitment_id.company_id,
-            },
-        )
-    except Exception as error:
-        return HttpResponse(error)
+        if request.method == "POST":
+            form = UserCreationForm(request.POST, instance=user)
+            if form.is_valid():
+                return user_save(form, onboarding_portal, request, token)
+    except Exception:
+        messages.error(request, _("User with email-id already exists.."))
+    return render(
+        request,
+        "onboarding/user_creation.html",
+        {
+            "form": form,
+            "company": onboarding_portal.candidate_id.recruitment_id.company_id,
+        },
+    )
 
 
 def user_save(form, onboarding_portal, request, token):
@@ -992,6 +1200,7 @@ def profile_view(request, token):
         profile = request.FILES.get("profile")
         if profile is not None:
             candidate.profile = profile
+            candidate.save()
             onboarding_portal.profile = profile
             onboarding_portal.count = 2
             onboarding_portal.save()
@@ -1031,34 +1240,71 @@ def employee_creation(request, token):
         "dob": candidate.dob,
     }
     session_key = request.session.session_key
-    user = portal_user[session_key]
-    if Employee.objects.filter(email=user).exists():
+    user = portal_user.get(session_key)
+    if user is None:
+        # Fallback for direct/opened links where in-memory portal state is absent.
+        user = HorillaUser.objects.filter(username=candidate.email).first()
+    elif not getattr(user, "pk", None):
+        # Related filters require a saved instance; resolve persisted user by email/username.
+        user = HorillaUser.objects.filter(username=candidate.email).first() or user
+
+    if user is None:
+        messages.error(
+            request,
+            _("Please create your account first before continuing employee creation."),
+        )
+        return redirect("user-creation", token)
+
+    user_email = getattr(user, "email", None) or candidate.email
+    if Employee.objects.filter(email=user_email).exists():
         messages.success(request, _("Employee with email id already exists."))
-        return redirect("login")
-    if Employee.objects.filter(employee_user_id=user).first() is not None:
-        employee = Employee.objects.filter(employee_user_id=user).first()
+        return redirect("login/")
+    employee_qs = (
+        Employee.objects.filter(employee_user_id=user)
+        if getattr(user, "pk", None)
+        else Employee.objects.none()
+    )
+    if employee_qs.first() is not None:
+        employee = employee_qs.first()
         if employee.employee_bank_details:
             messages.success(request, _("Employee already exists.."))
-            return redirect("login")
-        initial = Employee.objects.filter(employee_user_id=user).first().__dict__
+            return redirect("login/")
+        initial = employee.__dict__
 
     form = EmployeeCreationForm(
         initial=initial,
     )
     # form.errors.clear()
     if request.method == "POST":
-        instance = Employee.objects.filter(employee_user_id=user).first()
+        instance = employee_qs.first() if getattr(user, "pk", None) else None
         form = EmployeeCreationForm(
             request.POST,
             instance=instance,
         )
         if form.is_valid():
-            user.save()
+            if user is None:
+                messages.error(
+                    request,
+                    _(
+                        "User account was not found. Please complete account creation and try again."
+                    ),
+                )
+                return redirect("user-creation", token)
+            if not getattr(user, "pk", None):
+                user.save()
+            # This user was constructed directly from the portal's account-creation
+            # form, never through authenticate(), so it has no `.backend` attribute.
+            # login() requires one whenever more than one AUTHENTICATION_BACKENDS is
+            # configured (always true here -- see horilla/settings/base.py) and
+            # otherwise raises ValueError, hard-crashing the final onboarding step.
+            user.backend = "base.auth_backends.CompanyScopedBackend"
             login(request, user)
             employee_personal_info = form.save(commit=False)
             employee_personal_info.employee_user_id = user
             employee_personal_info.email = candidate.email
-            if candidate.profile:  # 896
+            if candidate.profile and candidate.profile.storage.exists(
+                candidate.profile.name
+            ):  # 896
                 filename = os.path.basename(candidate.profile.name)
                 employee_personal_info.employee_profile.save(
                     filename, ContentFile(candidate.profile.read()), save=False
@@ -1116,8 +1362,13 @@ def employee_bank_details(request, token):
     GET : return bank details creation template
     POST : return employee_bank_details_save function
     """
-    onboarding_portal = OnboardingPortal.objects.get(token=token)
-    user = User.objects.filter(username=onboarding_portal.candidate_id.email).first()
+    onboarding_portal = OnboardingPortal.objects.filter(token=token).first()
+    if not onboarding_portal:
+        return HorillaRedirect(request, message=_("Onboarding portal not found."))
+
+    user = HorillaUser.objects.filter(
+        username=onboarding_portal.candidate_id.email
+    ).first()
     employee = Employee.objects.filter(employee_user_id=user).first()
     bank_info = EmployeeBankDetails.objects.filter(employee_id=employee).first()
     form = BankDetailsCreationForm(instance=bank_info)
@@ -1212,12 +1463,14 @@ def candidate_task_update(request, taskId):
     notify.send(
         request.user.employee_get,
         recipient=users,
-        verb=f"The task {candidate_task.onboarding_task_id} of\
-            {candidate_task.candidate_id} was updated to {candidate_task.status}.",
-        verb_ar=f"تم تحديث المهمة {candidate_task.onboarding_task_id} للمرشح {candidate_task.candidate_id} إلى {candidate_task.status}.",
-        verb_de=f"Die Aufgabe {candidate_task.onboarding_task_id} des Kandidaten {candidate_task.candidate_id} wurde auf {candidate_task.status} aktualisiert.",
-        verb_es=f"La tarea {candidate_task.onboarding_task_id} del candidato {candidate_task.candidate_id} se ha actualizado a {candidate_task.status}.",
-        verb_fr=f"La tâche {candidate_task.onboarding_task_id} du candidat {candidate_task.candidate_id} a été mise à jour à {candidate_task.status}.",
+        verb=gettext_noop(
+            "The task %(onboarding_task_id)s of %(candidate_id)s was updated to %(status)s."
+        ),
+        verb_params={
+            "onboarding_task_id": str(candidate_task.onboarding_task_id),
+            "candidate_id": str(candidate_task.candidate_id),
+            "status": str(candidate_task.status),
+        },
         icon="people-circle",
         redirect=reverse("onboarding-view"),
     )
@@ -1240,12 +1493,16 @@ def get_status(request, task_id):
     """
     cand_id = request.GET.get("cand_id")
     cand_stage = request.GET.get("cand_stage")
-    cand_stage_obj = CandidateStage.objects.get(id=cand_stage)
-    onboarding_task = OnboardingTask.objects.get(id=task_id)
-    candidate = Candidate.objects.get(id=cand_id)
+    if not cand_id or not cand_stage:
+        return HorillaRedirect(request, message=_("Missing required parameters."))
+    cand_stage_obj = CandidateStage.find(cand_stage)
+    onboarding_task = OnboardingTask.find(task_id)
+    candidate = Candidate.find(cand_id)
     candidate_task = CandidateTask.objects.filter(
         candidate_id=candidate, onboarding_task_id=onboarding_task
     ).first()
+    if not cand_stage_obj or not onboarding_task or not candidate or not candidate_task:
+        return HorillaRedirect(request, message=_("Object not found."))
     status = candidate_task.status
 
     return render(
@@ -1277,10 +1534,20 @@ def assign_task(request, task_id):
     stage_id = request.GET.get("stage_id")
     cand_id = request.GET.get("cand_id")
     cand_stage = request.GET.get("cand_stage")
-    cand_stage_obj = CandidateStage.objects.get(id=cand_stage)
-    onboarding_task = OnboardingTask.objects.get(id=task_id)
-    candidate = Candidate.objects.get(id=cand_id)
-    onboarding_stage = OnboardingStage.objects.get(id=stage_id)
+    if not stage_id or not cand_id or not cand_stage:
+        return HorillaRedirect(request, message=_("Missing required parameters."))
+    cand_stage_obj = CandidateStage.find(cand_stage)
+    onboarding_task = OnboardingTask.find(task_id)
+    candidate = Candidate.find(cand_id)
+    onboarding_stage = OnboardingStage.find(stage_id)
+    if (
+        not cand_stage_obj
+        or not onboarding_task
+        or not candidate
+        or not onboarding_stage
+    ):
+        return HorillaRedirect(request, message=_("Object not found."))
+
     cand_task, created = CandidateTask.objects.get_or_create(
         candidate_id=candidate,
         stage_id=onboarding_stage,
@@ -1333,12 +1600,13 @@ def candidate_stage_update(request, candidate_id, recruitment_id):
         notify.send(
             request.user.employee_get,
             recipient=users,
-            verb=f"The stage of {candidate_stage.candidate_id} \
-                was updated to {candidate_stage.onboarding_stage_id}.",
-            verb_ar=f"تم تحديث مرحلة المرشح {candidate_stage.candidate_id} إلى {candidate_stage.onboarding_stage_id}.",
-            verb_de=f"Die Phase des Kandidaten {candidate_stage.candidate_id} wurde auf {candidate_stage.onboarding_stage_id} aktualisiert.",
-            verb_es=f"La etapa del candidato {candidate_stage.candidate_id} se ha actualizado a {candidate_stage.onboarding_stage_id}.",
-            verb_fr=f"L'étape du candidat {candidate_stage.candidate_id} a été mise à jour à {candidate_stage.onboarding_stage_id}.",
+            verb=gettext_noop(
+                "The stage of %(candidate_id)s was updated to %(onboarding_stage_id)s."
+            ),
+            verb_params={
+                "candidate_id": str(candidate_stage.candidate_id),
+                "onboarding_stage_id": str(candidate_stage.onboarding_stage_id),
+            },
             icon="people-circle",
             redirect=reverse("onboarding-view"),
         )
@@ -1411,7 +1679,7 @@ def candidate_task_bulk_update(request):
     count = CandidateTask.objects.filter(
         candidate_id__id__in=candidate_id_list, onboarding_task_id=task
     ).update(status=status)
-    # messages.success(request,f"{count} candidate's task status updated successfully")
+    # messages.success(request, _("%(count)s candidate's task status updated successfully") % {"count": count})
 
     return JsonResponse(
         {"message": _("Candidate onboarding stage updated"), "type": "success"}
@@ -1456,7 +1724,6 @@ def onboard_candidate_chart(request):
 
 @login_required
 @permission_required("candidate.change_candidate")
-@csrf_exempt
 @require_POST
 def update_joining(request):
     """
@@ -1514,6 +1781,7 @@ def view_dashboard(request):
 
 
 @login_required
+@hx_request_required
 @permission_required(perm="recruitment.view_candidate")
 def dashboard_stage_chart(request):
     recruitment = request.GET.get("recruitment")
@@ -1553,10 +1821,18 @@ def candidate_sequence_update(request):
     """
     This method is used to update the sequence of candidate
     """
-    sequence_data = json.loads(request.POST["sequenceData"])
+    seq_data = request.POST.get("sequenceData")
+    if not seq_data:
+        messages.error(request, _("Missing required parameter: sequenceData."))
+        return JsonResponse(
+            {"error": "Missing required parameter: sequenceData"}, status=400
+        )
+    sequence_data = json.loads(request.POST.get("sequenceData"))
     updated = False
     for cand_id, seq in sequence_data.items():
-        cand = CandidateStage.objects.get(id=cand_id)
+        cand = CandidateStage.find(cand_id)
+        if not cand:
+            continue
         if cand.sequence != seq:
             cand.sequence = seq
             cand.save()
@@ -1574,11 +1850,19 @@ def stage_sequence_update(request):
     """
     This method is used to update the sequence of the stages
     """
-    sequence_data = json.loads(request.POST["sequenceData"])
+    seq_data = request.POST.get("sequenceData")
+    if not seq_data:
+        messages.error(request, _("Missing required parameter: sequenceData."))
+        return JsonResponse(
+            {"error": "Missing required parameter: sequenceData"}, status=400
+        )
+    sequence_data = json.loads(request.POST.get("sequenceData"))
     updated = False
 
     for stage_id, seq in sequence_data.items():
-        stage = OnboardingStage.objects.get(id=stage_id)
+        stage = OnboardingStage.find(stage_id)
+        if not stage:
+            continue
         if stage.sequence != seq:
             stage.sequence = seq
             stage.save()
@@ -1612,7 +1896,9 @@ def onboarding_send_mail(request, candidate_id):
     """
     This method is used to send mail to the candidate from onboarding view
     """
-    candidate = Candidate.objects.get(id=candidate_id)
+    candidate = Candidate.objects.filter(id=candidate_id).first()
+    if not candidate:
+        return HttpResponse()
     candidate_mail = candidate.email
     response = render(
         request, "onboarding/send_mail_form.html", {"candidate": candidate}
@@ -1649,7 +1935,6 @@ def onboarding_send_mail(request, candidate_id):
 
 @login_required
 @stage_manager_can_enter("recruitment.change_stage")
-@csrf_exempt
 @require_POST
 def update_probation_end(request):
     """
@@ -1738,9 +2023,13 @@ def change_task_status(request):
     """
     This method is to update the candidate task
     """
-    task_id = request.GET["task_id"]
-    candidate_task = CandidateTask.objects.get(id=task_id)
-    status = request.GET["status"]
+    task_id = request.GET.get("task_id")
+    status = request.GET.get("status")
+    if not task_id or not status:
+        return HorillaRedirect(request, message=_("Task ID or status is missing"))
+    candidate_task = CandidateTask.find(task_id)
+    if not candidate_task:
+        return HorillaRedirect(request, message=_("Candidate task not found"))
     if status in [
         "todo",
         "scheduled",
@@ -1750,7 +2039,11 @@ def change_task_status(request):
     ]:
         candidate_task.status = status
         candidate_task.save()
-    return HttpResponse("Success")
+        messages.success(request, _("Task status updated successfully."))
+
+    return HttpResponse(
+        "<script>$('#reloadMessagesButton').click(); $('#myOnboardingReload').click(); </script>"
+    )
 
 
 @login_required
@@ -1763,20 +2056,20 @@ def update_offer_letter_status(request):
     status = request.GET.get("status")
     candidate = None
     if not candidate_id or not status:
-        messages.error(request, "candidate or status is missing")
+        messages.error(request, _("candidate or status is missing"))
         return redirect("/onboarding/candidates-view/")
     if not status in ["not_sent", "sent", "accepted", "rejected", "joined"]:
-        messages.error(request, "Please Pass valid status")
+        messages.error(request, _("Please Pass valid status"))
         return redirect("/onboarding/candidates-view/")
     try:
         candidate = Candidate.objects.get(id=candidate_id)
     except Candidate.DoesNotExist:
-        messages.error(request, "Candidate not found")
+        messages.error(request, _("Candidate not found"))
         return redirect("/onboarding/candidates-view/")
     if status in ["not_sent", "sent", "accepted", "rejected", "joined"]:
         candidate.offer_letter_status = status
         candidate.save()
-    messages.success(request, "Status of offer letter updated successfully")
+    messages.success(request, _("Status of offer letter updated successfully"))
     url = "/onboarding/candidates-view/"
     return HttpResponse(
         f"""
@@ -1806,31 +2099,42 @@ def add_to_rejected_candidates(request):
         if form.is_valid():
             form.save()
             form = RejectedCandidateForm()
-            messages.success(request, "Candidate reject reason saved")
-            return HttpResponse("<script>window.location.reload()</script>")
+            messages.success(request, _("Candidate reject reason saved"))
+            return HorillaRedirect(request)
     return render(request, "onboarding/rejection/form.html", {"form": form})
 
 
 @login_required
-@hx_request_required
-@permission_required("recruitment.delete_rejectedcandidate")
-def delete_candidate_rejection(request, rej_id):
+@permission_required("recruitment.change_candidate")
+@require_http_methods(["POST"])
+def undo_rejected_candidate(request, candidate_id):
     """
-    This method is used to delete candidate rejection
+    Remove candidate from rejected list.
     """
-    try:
-        instance = RejectedCandidate.objects.filter(id=rej_id).first()
-        if instance:
-            instance.delete()
-            messages.success(request, "Candidate rejection deleted successfully")
-        else:
-            messages.error(request, "Candidate rejection not found")
-    except Exception as e:
-        messages.error(request, "Error occurred while deleting candidate rejection")
-    return HttpResponse("<script>window.location.reload()</script>")
+    deleted_count, __ = RejectedCandidate.objects.filter(
+        candidate_id=candidate_id
+    ).delete()
+    if deleted_count:
+        messages.success(request, _("Candidate removed from rejected list"))
+    else:
+        messages.info(request, _("Candidate is not in rejected list"))
+
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        response = HttpResponse(
+            "<script>"
+            "$('#applyFilter').click();"
+            "$('#reloadMessagesButton').click();"
+            "</script>"
+        )
+        # Also trigger via HX-Trigger header so listeners (#applyFilter / #reloadMessagesButton)
+        # fire even when the button uses hx-swap="none" (which discards the response body).
+        response["HX-Trigger"] = "reloadCandidatesList"
+        return response
+    return HorillaRedirect(request)
 
 
 @login_required
+@hx_request_required
 def candidate_select(request):
     """
     This method is used for select all in candidate
@@ -1880,13 +2184,26 @@ def candidate_select_filter(request):
         context = {"employee_ids": employee_ids, "total_count": total_count}
 
         return JsonResponse(context)
+    else:
+        messages.error(request, _("Invalid page number"))
+        return JsonResponse(
+            {"message": _("Invalid page number")}, status=400, safe=False
+        )
 
 
+@login_required
+@permission_required("recruitment.change_candidate")
 def offer_letter_bulk_status_update(request):
     """
     This function is used to bulk update the offerletter status
     """
-    ids = json.loads(request.GET.get("ids", []))
+    letter_ids = request.GET.get("ids")
+
+    if not letter_ids:
+        messages.error(request, _("No offer letters selected for status update."))
+        return JsonResponse("Missing required parameter: ids", safe=False, status=400)
+
+    ids = json.loads(letter_ids)
     status = request.GET.get("status")
     for id in ids:
         try:
@@ -1894,28 +2211,34 @@ def offer_letter_bulk_status_update(request):
             if candidate.offer_letter_status != status:
                 candidate.offer_letter_status = status
                 candidate.save()
-                messages.success(request, "offer letter status updated successfully")
+                messages.success(request, _("offer letter status updated successfully"))
             else:
-                messages.error(request, "Status already in {} status".format(status))
+                messages.error(request, _("Status already in {} status").format(status))
         except:
-            messages.error(request, "Candidate doesnot exist")
+            messages.error(request, _("Candidate doesnot exist"))
 
     return JsonResponse("success", safe=False)
 
 
+@login_required
+@permission_required("recruitment.delete_candidate")
 def onboarding_candidate_bulk_delete(request):
     """
     This function is used to bulk delete onboarding candidates
     """
 
-    ids = json.loads(request.GET.get("ids", []))
-    status = request.GET.get("status")
+    cand_ids = request.GET.get("ids")
+    if not cand_ids:
+        messages.error(request, _("No candidates selected for deletion."))
+        return JsonResponse("Missing required parameter: ids", safe=False, status=400)
+
+    ids = json.loads(cand_ids)
     for id in ids:
         try:
             candidate = Candidate.objects.filter(id=int(id)).first()
             candidate.delete()
-            messages.success(request, "candidate deleted successfully")
+            messages.success(request, _("candidate deleted successfully"))
         except:
-            messages.error(request, "Candidate doesnot exist")
+            messages.error(request, _("Candidate doesnot exist"))
 
     return JsonResponse("success", safe=False)

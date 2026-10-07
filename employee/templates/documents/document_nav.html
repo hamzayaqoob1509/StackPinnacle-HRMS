@@ -10,7 +10,7 @@
 			<a
 				class="oh-main__titlebar-search-toggle"
 				role="button"
-				aria-label="Toggle Search"
+				aria-label="{% trans 'Toggle Search' %}"
 				@click="searchShow = !searchShow"
 			>
 				<ion-icon
@@ -23,11 +23,8 @@
 	<div class="oh-main__titlebar oh-main__titlebar--right">
 		{% if documents %}
 		<form
-			hx-get="{% url 'document-request-view' %}"
+			hx-get="{% url 'document-request-filter-view' %}"
 			hx-target="#view-container"
-			hx-select="#view-container"
-			hx-swap="outerHTML"
-			hx-disinherit="*"
 			id="filterForm"
 			class="d-flex"
 			onsubmit = "event.preventDefault()"
@@ -43,7 +40,7 @@
 				<input
 					type="text"
 					class="oh-input oh-input__icon"
-					aria-label="Search Input"
+					aria-label="{% trans 'Search Input' %}"
 					placeholder="{% trans 'Search' %}"
 					name="search"
 					onkeyup="$('.filterButton').click()"
@@ -165,7 +162,7 @@
 								<button
 									class="oh-btn oh-btn--secondary oh-btn--small w-100 filterButton"
 								>
-									{% trans "Filter" %}
+									{% trans "Apply" %}
 								</button>
 							</div>
 						</div>
@@ -187,7 +184,7 @@
 							style="display: none"
 						>
 							<ul class="oh-dropdown__items">
-								{% if perms.horilla_documnets.change_documentrequest or request.user|is_reportingmanager %}
+								{% if perms.horilla_documents.change_documentrequest or request.user|is_reportingmanager %}
 
 								<li class="oh-dropdown__item">
 									<a class="oh-dropdown__link mb-2 bulk_approve" style="cursor: pointer;" onclick="validateDocsIds(event);"

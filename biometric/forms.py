@@ -8,6 +8,7 @@ employee biometric data, COSEC users, and related configurations.
 
 from django import forms
 from django.db.models import Q
+from django.template.loader import render_to_string
 from django.utils.translation import gettext_lazy as _
 
 from base.forms import Form, ModelForm
@@ -28,6 +29,19 @@ class BiometricDeviceForm(ModelForm):
     and other relevant settings. Additionally, it excludes fields related to scheduler
     settings and device activation status.
     """
+
+    cols = {
+        "name": 12,
+        "machine_type": 12,
+        "machine_ip": 12,
+        "port": 12,
+        "cosec_username": 12,
+        "cosec_password": 12,
+        "anviz_request_id": 12,
+        "api_url": 12,
+        "api_key": 12,
+        "api_secret": 12,
+    }
 
     class Meta:
         """
@@ -74,6 +88,8 @@ class BiometricDeviceSchedulerForm(ModelForm):
     It includes a field for entering the scheduler duration in the format HH:MM.
     """
 
+    cols = {"scheduler_duration": 12}
+
     class Meta:
         """
         Meta class to add additional options
@@ -82,7 +98,7 @@ class BiometricDeviceSchedulerForm(ModelForm):
         model = BiometricDevices
         fields = ["scheduler_duration"]
         labels = {
-            "scheduler_duration": _("Enter the duration in the format HH:MM"),
+            "scheduler_duration": _("Interval duration"),
         }
 
 
@@ -194,12 +210,14 @@ class COSECUserForm(Form):
         cleaned_data = super().clean()
         if len(cleaned_data["name"]) > 15:
             raise forms.ValidationError(
-                "Maximum 15 characters allowed for Name in COSEC Biometric Device"
+                _("Maximum 15 characters allowed for Name in COSEC Biometric Device")
             )
         if cleaned_data["validity_enable"]:
             if cleaned_data.get("validity_end_date") is None:
                 raise forms.ValidationError(
-                    "When the Validity field is enabled, a Validity End Date is required."
+                    _(
+                        "When the Validity field is enabled, a Validity End Date is required."
+                    )
                 )
 
 
@@ -281,6 +299,15 @@ class DahuaUserForm(Form):
             }
         )
 
+    def as_p(self):
+        """
+        Render the form fields as HTML table rows with Bootstrap styling.
+        """
+
+        context = {"form": self}
+        table_html = render_to_string("normal_form.html", context)
+        return table_html
+
     def clean(self):
         cleaned_data = super().clean()
         device = None
@@ -341,6 +368,15 @@ class MapBioUsers(ModelForm):
                 Q(id__in=already_mapped_employees) | Q(is_active=False)
             )
         self.fields["user_id"].required = True
+
+    def as_p(self):
+        """
+        Render the form fields as HTML table rows with Bootstrap styling.
+        """
+
+        context = {"form": self}
+        table_html = render_to_string("normal_form.html", context)
+        return table_html
 
     def clean(self):
         cleaned_data = super().clean()

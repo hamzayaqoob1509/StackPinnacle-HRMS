@@ -41,6 +41,7 @@
 .oh-btn--sq-sm {
   width: 28px;
   height: 28px;
+  padding: 0;
 }
 
 .oh-btn--inline {
@@ -377,6 +378,8 @@
 }
 
 .oh-btn-group > * {
+  flex: 1 1 0%;
+  min-width: 0;
   border-right: 1px solid $border-light-color;
 
   &:last-child {
@@ -427,6 +430,7 @@
 .oh-btn--disabled {
   opacity: 0.6;
   cursor: not-allowed !important;
+  pointer-events: none;
 
   &:focus,
   &:focus-visible {

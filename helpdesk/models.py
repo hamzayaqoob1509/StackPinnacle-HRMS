@@ -1,46 +1,49 @@
 import os
-from datetime import datetime
+from datetime import date, datetime
 
-from django import apps
 from django.db import models
-from django.db.models.signals import post_delete, post_save
 from django.forms import ValidationError
+from django.middleware.csrf import get_token
+from django.urls import reverse_lazy
+from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _
 
 from base.horilla_company_manager import HorillaCompanyManager
 from base.models import Company, Department, JobPosition, Tags
 from employee.models import Employee
 from horilla import horilla_middlewares
+from horilla.horilla_middlewares import _thread_locals
 from horilla.models import HorillaModel, upload_path
 from horilla_audit.methods import get_diff
 from horilla_audit.models import HorillaAuditInfo, HorillaAuditLog
+from horilla_views.cbv_methods import render_template
 
 PRIORITY = [
-    ("low", "Low"),
-    ("medium", "Medium"),
-    ("high", "High"),
+    ("low", _("Low")),
+    ("medium", _("Medium")),
+    ("high", _("High")),
 ]
 MANAGER_TYPES = [
-    ("department", "Department"),
-    ("job_position", "Job Position"),
-    ("individual", "Individual"),
+    ("department", _("Department")),
+    ("job_position", _("Job Position")),
+    ("individual", _("Individual")),
 ]
 
 TICKET_TYPES = [
-    ("suggestion", "Suggestion"),
-    ("complaint", "Complaint"),
-    ("service_request", "Service Request"),
-    ("meeting_request", "Meeting Request"),
-    ("anounymous_complaint", "Anonymous Complaint"),
-    ("others", "Others"),
+    ("suggestion", _("Suggestion")),
+    ("complaint", _("Complaint")),
+    ("service_request", _("Service Request")),
+    ("meeting_request", _("Meeting Request")),
+    ("anounymous_complaint", _("Anonymous Complaint")),
+    ("others", _("Others")),
 ]
 
 TICKET_STATUS = [
-    ("new", "New"),
-    ("in_progress", "In Progress"),
-    ("on_hold", "On Hold"),
-    ("resolved", "Resolved"),
-    ("canceled", "Canceled"),
+    ("new", _("New")),
+    ("in_progress", _("In Progress")),
+    ("on_hold", _("On Hold")),
+    ("resolved", _("Resolved")),
+    ("canceled", _("Canceled")),
 ]
 
 
@@ -60,7 +63,26 @@ class DepartmentManager(HorillaModel):
     company_id = models.ForeignKey(
         Company, null=True, editable=False, on_delete=models.PROTECT
     )
+
     objects = HorillaCompanyManager("manager__employee_work_info__company_id")
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+
+        url = reverse_lazy("department-manager-update-view", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("department-manager-delete", kwargs={"dep_id": self.pk})
+        return url
+
+    def get_instance_id(self):
+        return self.id
 
     class Meta:
         unique_together = ("department", "manager")
@@ -74,9 +96,9 @@ class DepartmentManager(HorillaModel):
 
 
 class TicketType(HorillaModel):
-    title = models.CharField(max_length=100, unique=True, verbose_name=_("Title"))
+    title = models.CharField(max_length=100, verbose_name=_("Title"))
     type = models.CharField(choices=TICKET_TYPES, max_length=50, verbose_name=_("Type"))
-    prefix = models.CharField(max_length=3, unique=True, verbose_name=_("Prefix"))
+    prefix = models.CharField(max_length=3, verbose_name=_("Prefix"))
     company_id = models.ForeignKey(
         Company, null=True, editable=False, on_delete=models.PROTECT
     )
@@ -84,6 +106,33 @@ class TicketType(HorillaModel):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        from base.auth_backends import stamp_company_on_create
+
+        stamp_company_on_create(self)
+        super().save(*args, **kwargs)
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("ticket-update-form", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_delete_instance(self):
+        """
+        to get instance for delete
+        """
+
+        return self.pk
 
     class Meta:
         verbose_name = _("Ticket Type")
@@ -94,15 +143,20 @@ class Ticket(HorillaModel):
 
     title = models.CharField(max_length=50)
     employee_id = models.ForeignKey(
-        Employee, on_delete=models.PROTECT, related_name="ticket", verbose_name="Owner"
+        Employee,
+        on_delete=models.PROTECT,
+        related_name="ticket",
+        verbose_name=_("Owner"),
     )
     ticket_type = models.ForeignKey(
         TicketType,
         on_delete=models.PROTECT,
-        verbose_name="Ticket Type",
+        verbose_name=_("Ticket Type"),
     )
     description = models.TextField(max_length=255)
-    priority = models.CharField(choices=PRIORITY, max_length=100, default="low")
+    priority = models.CharField(
+        choices=PRIORITY, max_length=100, default="low", verbose_name=_("Priority")
+    )
     created_date = models.DateField(auto_now_add=True)
     resolved_date = models.DateField(blank=True, null=True)
     assigning_type = models.CharField(
@@ -149,6 +203,208 @@ class Ticket(HorillaModel):
         elif self.assigning_type == "individual":
             raised_on = Employee.objects.get(id=obj_id)
         return raised_on
+
+    def get_ticket_id_col(self):
+        """
+        This method is used to get the ticket id
+        """
+        today = date.today()
+        ticket_id = f"{self.ticket_type.prefix}-{self.pk:03d}"
+
+        if self.status == "resolved" or self.status == "canceled":
+            return ticket_id
+
+        if self.deadline is None:
+            return ticket_id
+
+        if self.deadline == today:
+            due_text = _("Due today")
+        else:
+            days_diff = (self.deadline - today).days
+            if days_diff < 0:
+                days_diff = abs(days_diff)
+                due_text = format_lazy(
+                    _("Overdue by {} days"),
+                    days_diff,
+                )
+            else:
+                due_text = format_lazy(
+                    _("Due in {} days"),
+                    days_diff,
+                )
+
+        if self.deadline < today:
+            icon_class = "danger"
+        elif self.deadline == today:
+            icon_class = "warning"
+        else:
+            icon_class = "success"
+
+        col = f"""
+            <span
+                class='
+                    d-flex
+                    justify-content-between
+                    align-items-center
+                '
+            >
+                {ticket_id}
+                <span title='{due_text}'>
+                    <ion-icon
+                        class="text-{icon_class}"
+                        name="time-sharp"
+                    >
+                    </ion-icon>
+                </span>
+            </span>
+        """
+        return col
+
+    def get_ticket_detail_url(self):
+        """
+        This method is used to get the ticket detail url
+        """
+        return reverse_lazy("ticket-detail", kwargs={"ticket_id": self.pk})
+
+    def get_assigned_to(self):
+        """
+        This method is used to get the assigned to
+        """
+        assigned_to = self.assigned_to.all()
+        if assigned_to:
+            assigned_to = ", ".join([emp.get_full_name() for emp in assigned_to])
+
+        return assigned_to
+
+    def get_tags_col(self):
+        """
+        This method is used to get the tags column
+        """
+        tags = self.tags.all()
+        if tags:
+            tags = ", ".join([tag.title for tag in tags])
+
+        return tags
+
+    def get_priority_stars(self):
+        """
+        This method is used to get the priority stars
+        """
+        request = getattr(_thread_locals, "request", None)
+        csrf_token = get_token(request)
+        rating_inputs = ""
+        checked_value = {"low": "1", "medium": "2", "high": "3"}.get(self.priority, "1")
+
+        for i in "321":
+            checked = "checked" if i == checked_value else ""
+            title = {"1": _("Low"), "2": _("Medium"), "3": _("High")}[i]
+
+            rating_inputs += f"""
+                <input type="radio" id="star{i}{self.id}" name="rating" class="rating-radio" value="{i}" {checked} />
+                <label for="star{i}{self.id}" title="{title}"></label>
+            """
+
+        html = f"""
+            <form hx-swap="none" hx-post="{reverse_lazy('update-priority', kwargs = {'ticket_id' : self.id})}" method="post">
+                <input type="hidden" name="csrfmiddlewaretoken" value="{csrf_token}">
+                <div class="d-flex">
+                    <div class="oh-rate" onclick="event.stopPropagation()">
+                        {rating_inputs}
+                    </div>
+                    <button type="submit" hidden="true" onclick="event.stopPropagation()"></button>
+                </div>
+            </form>
+        """
+        return html
+
+    def row_colors(self):
+        """
+        This method is used to get the row colors
+        """
+        if self.status == "new":
+            return "row-status--blue"
+        elif self.status == "in_progress":
+            return "row-status--orange"
+        elif self.status == "on_hold":
+            return "row-status--red"
+        elif self.status == "resolved":
+            return "row-status--yellowgreen"
+        elif self.status == "canceled":
+            return "row-status--gray"
+
+    def ticket_action_col(self):
+        """
+        This method is used to get the ticket actions
+        """
+        request = getattr(_thread_locals, "request", None)
+        tab_name = request.GET.get("ticket_tab", "my_tickets")
+        claim_request = self.claimrequest_set.filter(
+            employee_id=request.user.employee_get
+        ).first()
+        return render_template(
+            "cbv/pipeline/pipeline_action_col.html",
+            {"ticket": self, "tab": tab_name, "claim_request": claim_request},
+        )
+
+    def kanban_action_method(self):
+        """
+        This method is used to get the ticket kanban actions
+        """
+        request = getattr(_thread_locals, "request", None)
+        tab_name = request.GET.get("ticket_tab", "my_tickets")
+        claim_request = self.claimrequest_set.filter(
+            employee_id=request.user.employee_get
+        ).first()
+        return render_template(
+            "cbv/pipeline/kanban_action_method.html",
+            {"ticket": self, "tab": tab_name, "claim_request": claim_request},
+        )
+
+    def get_status_col(self):
+        """
+        This method is used to get the status column
+        """
+
+        from helpdesk.methods import is_department_manager
+
+        request = getattr(_thread_locals, "request", None)
+        options = ""
+        for status, name in TICKET_STATUS:
+            selected = "selected" if status == self.status else ""
+            options += f"""
+                <option value="{status}" {selected}>
+                    {name}
+                </option>
+            """
+
+        col = self.get_status_display()
+        if (
+            request.user.employee_get == self.employee_id
+            or request.user.has_perm("helpdesk.change_ticket")
+            or request.user.employee_get in self.assigned_to.all()
+            or is_department_manager(request, self)
+        ):
+            col = f"""
+                <div onclick="event.stopPropagation()" >
+                    <select
+                        hx-post="{reverse_lazy('ticket-status-change', kwargs={'ticket_id': self.id})}"
+                        name="status"
+                        id="status"
+                        hx-swap="none"
+                        hx-on-htmx-after-request="$('#reloadMessagesButton').click();$(`#offboardingStageContainer{{instance.stage_id.pk}}`).find('.reload-record').click()"
+                        name="status"
+                        class="w-100"
+                        style="
+                            border: 1px solid hsl(213deg, 22%, 84%);
+                            padding: 0.3rem 0.8rem 0.3rem 0.3rem;
+                            border-radius: 0rem;
+                        "
+                    >
+                        {options}
+                    </select>
+                </div>
+            """
+        return col
 
     def __str__(self):
         return self.title
@@ -235,7 +491,7 @@ class Attachment(HorillaModel):
     def save(self, *args, **kwargs):
         self.get_file_format()
 
-        super().save(self, *args, **kwargs)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return os.path.basename(self.file.name)
@@ -258,16 +514,9 @@ class FAQCategory(HorillaModel):
         return self.title
 
     def save(self, *args, **kwargs):
-        request = getattr(horilla_middlewares._thread_locals, "request", None)
-        selected_company = request.session.get("selected_company")
-        if (
-            not self.id
-            and not self.company_id
-            and selected_company
-            and selected_company != "all"
-        ):
-            self.company_id = Company.find(selected_company)
+        from base.auth_backends import stamp_company_on_create
 
+        stamp_company_on_create(self)
         super().save()
 
     class Meta:
@@ -289,16 +538,9 @@ class FAQ(HorillaModel):
         return self.question
 
     def save(self, *args, **kwargs):
-        request = getattr(horilla_middlewares._thread_locals, "request", None)
-        selected_company = request.session.get("selected_company")
-        if (
-            not self.id
-            and not self.company_id
-            and selected_company
-            and selected_company != "all"
-        ):
-            self.company_id = Company.find(selected_company)
+        from base.auth_backends import stamp_company_on_create
 
+        stamp_company_on_create(self)
         super().save()
 
     class Meta:

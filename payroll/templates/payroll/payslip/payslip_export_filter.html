@@ -1,19 +1,19 @@
 {% load i18n %}
-<div class="oh-modal__dialog">
-	<div class="oh-modal__dialog-header">
-		{% if report %}
-		<h2 class="oh-modal__dialog-title">{% trans "Payslip Report" %}</h2>
-		{% else %}
-		<h2 class="oh-modal__dialog-title">{% trans "Export Payslips" %}</h2>
-		{% endif %}
-		<button class="oh-modal__close" aria-label="Close">
-			<ion-icon name="close-outline"></ion-icon>
-		</button>
-		<div
-			class="oh-modal__dialog-body p-0 pt-2"
-			id="payslipReportModalBody"
-		>
-			<form
+<div class="oh-modal__dialog-header pb-0">
+	{% if report %}
+	<h2 class="text-md font-semibold mb-3">{% trans "Payslip Report" %}</h2>
+	{% else %}
+	<h2 class="text-md font-semibold mb-3">{% trans "Export Payslips" %}</h2>
+	{% endif %}
+	<button class="oh-modal__close" aria-label={% trans 'Close' %}>
+		<ion-icon name="close-outline"></ion-icon>
+	</button>
+</div>
+<div
+	class="oh-modal__dialog-body"
+	id="payslipReportModalBody"
+>
+		<form
 				{% if report %}
 					action="{%url 'payslip-detailed-export' %}"
 				{% else %}
@@ -80,28 +80,6 @@
 												>{% trans "Employee" %}
 											</label>
 											{{ export_filter.form.employee_id }}
-										</div>
-									</div>
-								</div>
-								<div class="row">
-									<div class="col-sm-6">
-										<div class="oh-input-group">
-											<label
-												class="oh-label"
-												for="{{export_filter.form.start_date.id_for_label}}"
-												>{% trans "Start Date" %}</label
-											>
-											{{ export_filter.form.start_date }}
-										</div>
-									</div>
-									<div class="col-sm-6">
-										<div class="oh-input-group">
-											<label
-												class="oh-label"
-												for="{{export_filter.form.end_date.id_for_label}}"
-												>{% trans "End Date" %}</label
-											>
-											{{ export_filter.form.end_date }}
 										</div>
 									</div>
 								</div>
@@ -261,5 +239,3 @@
 				</div>
 			</form>
 		</div>
-	</div>
-</div>

@@ -23,7 +23,7 @@
 							<ion-icon name="transgender-outline"></ion-icon>
 							<span>{% trans "Gender" %}</span>
 						</span>
-						<span class="oh-profile__info-value">{% trans employee.get_gender_display %}</span>
+						<span class="oh-profile__info-value">{{employee.get_gender_display}}</span>
 					</li>
 
 					<li class="oh-profile__card-info-item">
@@ -204,14 +204,6 @@
 											</span>
 											<span
 												class="oh-profile__info-value dateformat_changer">{{employee.employee_work_info.contract_end_date|default:_("None")}}</span>
-										</li>
-										<li class="oh-profile__card-info-item">
-											<span class="oh-profile__info-label mb-1">
-												<ion-icon name="ribbon-outline"></ion-icon>
-												<span>{% trans "Probation / Internship End" %}</span>
-											</span>
-											<span
-												class="oh-profile__info-value dateformat_changer">{{employee.get_probation_end_date|default:_("None")}}</span>
 										</li>
 									</ul>
 								</div>

@@ -13,25 +13,52 @@ that require device IDs.
 
 from django.urls import path
 
+from biometric.cbv import biometric
+
 from . import views
 from .models import BiometricDevices
 
 urlpatterns = [
+    path(
+        "biometric-device-add/",
+        biometric.BiometricFormView.as_view(),
+        name="biometric-device-add",
+    ),
+    path(
+        "biometric-device-edit/<uuid:pk>/",
+        biometric.BiometricFormView.as_view(),
+        name="biometric-device-edit",
+    ),
+    path(
+        "biometric-card-view/",
+        biometric.BiometricCardView.as_view(),
+        name="biometric-card-view",
+    ),
+    path(
+        "biometric-navbar/",
+        biometric.BiometricNavBar.as_view(),
+        name="biometric-navbar",
+    ),
+    path(
+        "biometric-device-schedule/<uuid:pk>/",
+        biometric.BiometricSheduleForm.as_view(),
+        name="biometric-device-schedule",
+    ),
     path(
         "view-biometric-devices/",
         views.biometric_devices_view,
         name="view-biometric-devices",
     ),
     path(
-        "biometric-device-live-capture",
+        "biometric-device-live-capture/",
         views.biometric_device_live,
         name="biometric-device-live-capture",
     ),
-    path(
-        "biometric-device-schedule/<uuid:device_id>/",
-        views.biometric_device_schedule,
-        name="biometric-device-schedule",
-    ),
+    # path(
+    #     "biometric-device-schedule/<uuid:device_id>/",
+    #     views.biometric_device_schedule,
+    #     name="biometric-device-schedule",
+    # ),
     path(
         "biometric-device-unschedule/<uuid:device_id>/",
         views.biometric_device_unschedule,
@@ -52,16 +79,16 @@ urlpatterns = [
         views.biometric_device_bulk_fetch_logs,
         name="biometric-device-bulk-fetch-logs",
     ),
-    path(
-        "biometric-device-add",
-        views.biometric_device_add,
-        name="biometric-device-add",
-    ),
-    path(
-        "biometric-device-edit/<uuid:device_id>/",
-        views.biometric_device_edit,
-        name="biometric-device-edit",
-    ),
+    # path(
+    #     "biometric-device-add",
+    #     views.biometric_device_add,
+    #     name="biometric-device-add",
+    # ),
+    # path(
+    #     "biometric-device-edit/<uuid:device_id>/",
+    #     views.biometric_device_edit,
+    #     name="biometric-device-edit",
+    # ),
     path(
         "biometric-device-delete/<uuid:device_id>/",
         views.biometric_device_delete,
@@ -79,12 +106,12 @@ urlpatterns = [
         kwargs={"model": BiometricDevices},
     ),
     path(
-        "search-employee-in-device",
+        "search-employee-in-device/",
         views.search_employee_device,
         name="search-employee-in-device",
     ),
     path(
-        "find-employee-badge-id",
+        "find-employee-badge-id/",
         views.find_employee_badge_id,
         name="find-employee-badge-id",
     ),
@@ -104,22 +131,22 @@ urlpatterns = [
         name="add-dahua-biometric-user",
     ),
     path(
-        "delete-dahua-user/<uuid:obj_id>",
+        "delete-dahua-user/<uuid:obj_id>/",
         views.delete_dahua_user,
         name="delete-dahua-user",
     ),
     path(
-        "delete-dahua-user",
+        "delete-dahua-user/",
         views.delete_dahua_user,
         name="delete-dahua-user",
     ),
     path(
-        "delete-etimeoffice-user",
+        "delete-etimeoffice-user/",
         views.delete_etimeoffice_user,
         name="delete-etimeoffice-user",
     ),
     path(
-        "delete-etimeoffice-user/<uuid:obj_id>",
+        "delete-etimeoffice-user/<uuid:obj_id>/",
         views.delete_etimeoffice_user,
         name="delete-etimeoffice-user",
     ),
@@ -144,12 +171,12 @@ urlpatterns = [
         name="delete-cosec-user",
     ),
     path(
-        "biometric-users-bulk-delete",
+        "biometric-users-bulk-delete/",
         views.bio_users_bulk_delete,
         name="biometric-users-bulk-delete",
     ),
     path(
-        "cosec-users-bulk-delete",
+        "cosec-users-bulk-delete/",
         views.cosec_users_bulk_delete,
         name="cosec-users-bulk-delete",
     ),

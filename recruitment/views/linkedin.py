@@ -1,24 +1,17 @@
 import json
-import logging
-import os
-import re
-
-import requests
-from django.contrib import messages
-from django.shortcuts import redirect, render
-from django.urls import reverse
-
-logger = logging.getLogger(__name__)
-import json
 
 import requests
 from bs4 import BeautifulSoup
-from django.conf import settings
-from django.http import HttpResponse, JsonResponse
+from django.contrib import messages
+from django.http import HttpResponse
+from django.shortcuts import redirect
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
-from horilla_views.cbv_methods import login_required, permission_required
-from recruitment.models import LinkedInAccount, Recruitment
+from horilla.config import logger
+from horilla.decorators import login_required, permission_required
+from horilla.http.response import HorillaRedirect
+from recruitment.models import LinkedInAccount
 
 
 @login_required
@@ -30,8 +23,13 @@ def update_isactive_linkedin(request, obj_id):
     - is_active: Boolean value representing the state of LinkedInAccount,
     - obj_id: Id of LinkedInAccount object.
     """
+    linkedin_account = LinkedInAccount.find(obj_id)
+    if not linkedin_account:
+        return HorillaRedirect(
+            request, message=_("No LinkedIn Account found matching the query.")
+        )
+
     is_active = request.POST.get("is_active")
-    linkedin_account = LinkedInAccount.objects.get(id=obj_id)
     if is_active == "on":
         linkedin_account.is_active = True
         messages.success(request, _("LinkedIn Account activated successfully."))
@@ -52,37 +50,26 @@ def delete_linkedin_account(request, pk, return_redirect=True):
     try:
         if return_redirect:
             LinkedInAccount.objects.get(id=pk).delete()
-            messages.success(request, "Linkedin data deleted")
+            messages.success(request, _("LinkedIn data deleted"))
             return redirect(reverse("linkedin-setting-list"))
     except Exception as e:
-        logger(e)
-        messages.error(request, "Something went wrong")
-
-
-@login_required
-def check_linkedin(request):
-    import requests
-
-    url = "https://www.linkedin.com/oauth/v2/userinfo"
-    data = {
-        "grant_type": "authorization_code",
-        "code": "AQXepuwNjedxqn6A7XE75IBHWGdCGeuWqB8ZmhlA9oFbKIHtSBzsKaPwJ5uw4opHURUAwNbi3asSUkJvjmR57BNqgK-Snw_2nUhuRp_S3cTRtFcCrE4JZKIZpy_aTWokL3tr1BFGu0zfgzK1uSU5zYClUeQ4j4bTNkCmvjVAQ8T_4T9JdJ8MZg8m84tMMsuvbniMXOGrdURJXJsmBHckyFnaFD0Mp9Fahl85BGYXqtm0czifPhOJH3TuP2GQQb8fQoNH9rDWcXoNW9D0Jchkv-gs_7_p3cz_U0Dqa_6g_Qdj-5uGdTjPiZlKZNCjPNOsK28lilGOtybHipJ8kVkhoW_tg774Zg",
-        "redirect_uri": "https://www.linkedin.com/developers/tools/oauth/redirect",
-        "client_id": "86bnqwzxrmxdy6",
-        "client_secret": "WPL_AP1.op0BkkK4xDn5ANwP.RuayNw==",
-    }
-
-    response = requests.post(url, data=data)
-    return JsonResponse(response)
+        logger.error(e)
+        messages.error(request, _("Something went wrong"))
+    return HorillaRedirect(request)
 
 
 @login_required
 def validate_linkedin_token(request, pk):
-    linkedin_account = LinkedInAccount.objects.filter(id=pk).first()
+    linkedin_account = LinkedInAccount.find(pk)
+    if not linkedin_account:
+        return HorillaRedirect(
+            request, message=_("No LinkedIn Account found matching the query.")
+        )
+
     access_token = linkedin_account.api_token
     url = "https://api.linkedin.com/v2/userinfo"
     headers = {"Authorization": f"Bearer {access_token}"}
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers, timeout=30)
     if response.status_code == 200:
         messages.success(request, _("LinkedIn connection success."))
     else:
@@ -99,7 +86,6 @@ def html_to_text(html):
     )
 
 
-@login_required
 def post_recruitment_in_linkedin(
     request, recruitment, linkedin_acc, feed_type="feed", group_id=None
 ):
@@ -142,7 +128,7 @@ def post_recruitment_in_linkedin(
         "Authorization": f"Bearer {linkedin_acc.api_token}",
         "Content-Type": "application/json",
     }
-    response = requests.post(url, headers=headers, data=payload)
+    response = requests.post(url, headers=headers, data=payload, timeout=30)
     if response.status_code == 201:
         response_data = response.json()
         recruitment.linkedin_post_id = response_data.get("id")  # Store post ID
@@ -152,7 +138,6 @@ def post_recruitment_in_linkedin(
         recruitment.save()
 
 
-@login_required
 def delete_post(recruitment):
     """Delete recruitment post from LinkedIn"""
     linkedin_post_id = recruitment.linkedin_post_id
@@ -165,7 +150,7 @@ def delete_post(recruitment):
         "Content-Type": "application/json",
     }
 
-    response = requests.delete(url, headers=headers)
+    response = requests.delete(url, headers=headers, timeout=30)
     if response.status_code == 204:
         recruitment.linkedin_post_id = None
         recruitment.save()

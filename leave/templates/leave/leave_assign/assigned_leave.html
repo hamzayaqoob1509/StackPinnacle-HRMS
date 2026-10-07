@@ -16,7 +16,7 @@
 	<div class="oh-sticky-dropdown--header">
 		<div class="oh-dropdown" x-data="{open: false}">
 		  <button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-			  role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+			  role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
 		  <div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
 			<ul class="oh-dropdown__items" id="fieldContainerTable">
 			</ul>
@@ -62,7 +62,7 @@
                 <div class="oh-profile oh-profile--md">
                     <div class="oh-profile__avatar mr-1">
                         <img src="{{available_leave.employee_id.get_avatar}}"
-                            class="oh-profile__image" alt="Mary Magdalene" />
+                            class="oh-profile__image" alt="{{ available_leave.employee_id }}" />
                     </div>
                     <span class="oh-profile__name oh-text--dark">{{available_leave.employee_id}}</span>
                 </div>
@@ -84,7 +84,7 @@
                         </button>
                     {% endif %}
                     {% if request.user|is_reportingmanager or perms.leave.delete_availableleave %}
-                    <a class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100" hx-confirm="{% trans 'Are you sure you want to delete ?' %}"
+                    <a class="oh-btn oh-btn--danger w-100" hx-confirm="{% trans 'Are you sure you want to delete ?' %}"
                         id="delete-link" hx-post="{% url 'assign-delete' available_leave.id %}?{{pd}}" hx-target="#assignedLeaves" title="{% trans 'Delete' %}">
                         <ion-icon name="trash-outline"></ion-icon></a>
                     {% endif %}

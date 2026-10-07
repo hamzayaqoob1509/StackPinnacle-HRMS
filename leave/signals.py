@@ -8,7 +8,7 @@ from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 
 from horilla.methods import get_horilla_model_class
-from leave.models import LeaveRequest
+from leave.models import LeaveRequest, LeaveRequestConditionApproval
 
 if apps.is_installed("attendance"):
 
@@ -75,7 +75,7 @@ if apps.is_installed("attendance"):
 
         else:
             for date in period_dates:
-                WorkRecords.objects.filter(
+                WorkRecords._base_manager.filter(
                     is_leave_record=True,
                     date=date,
                     employee_id=instance.employee_id,
@@ -85,7 +85,9 @@ if apps.is_installed("attendance"):
     def leaverequest_pre_delete(sender, instance, **kwargs):
         from attendance.models import WorkRecords
 
-        work_records = WorkRecords.objects.filter(leave_request_id=instance).delete()
+        work_records = WorkRecords._base_manager.filter(
+            leave_request_id=instance
+        ).delete()
 
 
 # @receiver(post_migrate)
@@ -130,3 +132,14 @@ def add_missing_leave_to_workrecords(sender, **kwargs):
 
     except Exception as e:
         print(f"Error in leave/work records sync: {e}")
+
+
+@receiver(post_save, sender=LeaveRequestConditionApproval)
+def auto_approve_self_approval_stage(sender, instance, created, **kwargs):
+    """
+    When an approver in the multiple-approval chain is the same employee who
+    submitted the leave request, automatically approve their stage so the
+    request is not stuck and can progress to the next approver.
+    """
+    if created and instance.manager_id == instance.leave_request_id.employee_id:
+        sender.objects.filter(pk=instance.pk).update(is_approved=True)

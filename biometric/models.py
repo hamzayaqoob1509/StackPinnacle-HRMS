@@ -10,12 +10,14 @@ import requests
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
 from django.db import models
+from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
 
 from base.horilla_company_manager import HorillaCompanyManager
 from base.models import Company
 from employee.models import Employee
 from horilla.models import HorillaModel
+from horilla_views.cbv_methods import render_template
 
 
 def validate_schedule_time_format(value):
@@ -120,6 +122,105 @@ class BiometricDevices(HorillaModel):
 
     def __str__(self):
         return f"{self.name} - {self.machine_type}"
+
+    def get_card_details(self):
+        """
+        return card details based on machine type
+        """
+
+        if self.machine_type in ["zk", "cosec"]:
+            return (
+                f"{_('Machine IP')} : {self.machine_ip}<br>{_('Port No')} : {self.port}"
+            )
+        elif self.machine_type == "anviz":
+            return f"{_('API Url')} : {self.api_url}"
+        else:
+            return ""
+
+    def render_live_capture_html(self):
+        """
+        live capture button
+        """
+        html = render_template(
+            "biometric/live_capture.html",
+            {
+                "device": self,
+            },
+        )
+        return html
+
+    def render_actions_html(self):
+        """
+        actions buttons
+        """
+        html = render_template(
+            "biometric/actions_html.html",
+            {
+                "device": self,
+            },
+        )
+
+        return html
+
+    def card_action(self):
+        """
+        render card data
+        """
+        return render_template(
+            path="cbv/biometric_card_action.html",
+            context={"device": self},
+        )
+
+    def archive_status(self):
+        """
+        archive status
+        """
+        if self.is_active:
+            return _("Archive")
+        else:
+            return _("Un-Archive")
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("biometric-device-edit", kwargs={"pk": self.pk})
+        return url
+
+    def get_archive_url(self):
+        """
+        This method to get archive url
+        """
+        url = reverse_lazy("biometric-device-archive", kwargs={"device_id": self.pk})
+        return url
+
+    def get_fetch_url(self):
+        """
+        This method to get Fetch Logs url
+        """
+        url = reverse_lazy("biometric-device-fetch-logs", kwargs={"device_id": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("biometric-device-delete", kwargs={"device_id": self.pk})
+        return url
+
+    def get_machine_type(self):
+        """
+        return machine type from choices
+        """
+
+        return dict(self.BIO_DEVICE_TYPE).get(self.machine_type)
+
+    def get_avatar(self):
+        """
+        Method will retun the api to the avatar or path to the profile image
+        """
+        url = f"https://ui-avatars.com/api/?name={self.name}&background=random"
+        return url
 
     def clean(self, *args, **kwargs):
         super().clean(*args, **kwargs)

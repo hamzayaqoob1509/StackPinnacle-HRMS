@@ -11,9 +11,9 @@ from datetime import date
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.templatetags.static import static
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
+from django.utils.formats import localize
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
@@ -63,12 +63,6 @@ class Project(HorillaModel):
         related_name="project_managers",
         verbose_name=_("Project Managers"),
     )
-    members = models.ManyToManyField(
-        Employee,
-        blank=True,
-        related_name="project_members",
-        verbose_name=_("Project Members"),
-    )
     status = models.CharField(
         choices=PROJECT_STATUS, max_length=250, default="new", verbose_name=_("Status")
     )
@@ -102,19 +96,8 @@ class Project(HorillaModel):
         """
         employees = self.managers.all()
         if employees:
-            employee_names_string = "<br>".join(
-                [str(employee) for employee in employees]
-            )
-            return employee_names_string
-
-    def get_members(self):
-        """
-        members column
-        """
-        employees = self.members.all()
-        if employees:
-            employee_names_string = "<br>".join(
-                [str(employee) for employee in employees]
+            employee_names_string = ", ".join(
+                [str(employee.get_full_name()) for employee in employees]
             )
             return employee_names_string
 
@@ -128,14 +111,12 @@ class Project(HorillaModel):
     def get_document_html(self):
         if self.document:
             document_url = self.document.url
-            image_url = static("images/ui/project/document.png")
             return format_html(
                 '<a href="{0}" style="text-decoration: none" rel="noopener noreferrer" class="oh-btn oh-btn--light" target="_blank" onclick="event.stopPropagation();">'
                 '<span class="oh-file-icon oh-file-icon--pdf"></span>'
                 "&nbsp View"
                 "</a>",
                 document_url,
-                image_url,
             )
 
     def redirect(self):
@@ -148,12 +129,11 @@ class Project(HorillaModel):
 
         if (
             employee in self.managers.all()
-            or employee in self.members.all()
             or any(employee in task.task_managers.all() for task in self.task_set.all())
             or any(employee in task.task_members.all() for task in self.task_set.all())
             or request.user.has_perm("project.view_project")
         ):
-            return f"onclick=\"window.location.href='{url}?view=list'\""
+            return f"onclick=\"window.location.href='{url}?view=card'\""
         return ""
 
     def get_detail_url(self):
@@ -193,6 +173,23 @@ class Project(HorillaModel):
             task_count,
         )
 
+    def get_card_view_subtitle(self):
+
+        col = format_html(
+            """
+                <div class="my-2">{status_label} : <span class="font-semibold">{status}</span></div>
+                <div class="mb-2">{start_label} : <span class="dateformat_changer font-semibold"> {start} </span></div>
+                <div>{end_label} : <span class="dateformat_changer font-semibold"> {end} </span></div>
+            """,
+            status_label=_("Status"),
+            start_label=_("Start date"),
+            end_label=_("End date"),
+            status=self.get_status_display(),
+            start=localize(self.start_date),
+            end=localize(self.end_date),
+        )
+        return col
+
     def get_delete_url(self):
         """
         This method to get delete url
@@ -216,9 +213,9 @@ class Project(HorillaModel):
         archive status
         """
         if self.is_active:
-            return "Archive"
+            return _("Archive")
         else:
-            return "Un-Archive"
+            return _("Un-Archive")
 
     def clean(self) -> None:
         # validating end date
@@ -232,7 +229,12 @@ class Project(HorillaModel):
         is_new, request = self.pk is None, getattr(
             horilla_middlewares._thread_locals, "request", None
         )
-        if is_new and (cid := request.session.get("selected_company")) and cid != "all":
+        if (
+            is_new
+            and request is not None
+            and (cid := request.session.get("selected_company"))
+            and cid != "all"
+        ):
             self.company_id = Company.find(cid)
         super().save(*args, **kwargs)
         if is_new:
@@ -250,6 +252,7 @@ class Project(HorillaModel):
 
         verbose_name = _("Project")
         verbose_name_plural = _("Projects")
+        ordering = ["-id"]
 
 
 class ProjectStage(HorillaModel):
@@ -362,7 +365,11 @@ class Task(HorillaModel):
     objects = HorillaCompanyManager("project__company_id")
 
     def clean(self) -> None:
-        if self.end_date is not None and self.project.end_date is not None:
+        if (
+            self.end_date is not None
+            and self.project is not None
+            and self.project.end_date is not None
+        ):
             if (
                 self.project.end_date < self.end_date
                 or self.project.start_date > self.end_date
@@ -374,7 +381,7 @@ class Task(HorillaModel):
                         )
                     }
                 )
-        if self.end_date < date.today():
+        if self.end_date is not None and self.end_date < date.today():
             self.status = "expired"
 
     class Meta:
@@ -385,6 +392,7 @@ class Task(HorillaModel):
         unique_together = ["project", "title"]
         verbose_name = _("Task")
         verbose_name_plural = _("Tasks")
+        ordering = ["-id"]
 
     def __str__(self):
         return f"{self.title}"
@@ -396,6 +404,52 @@ class Task(HorillaModel):
 
         return self.project if self.project else "None"
 
+    @property
+    def is_overdue(self):
+        """
+        Past its end date and not completed -- checked against the date
+        directly rather than trusting self.status == "expired", since that
+        transition only happens when clean() runs (i.e. on an explicit
+        form save), not passively as time passes.
+        """
+        return bool(
+            self.end_date
+            and self.status != "completed"
+            and self.end_date < date.today()
+        )
+
+    @property
+    def is_due_soon(self):
+        """
+        Due within the next 2 days and not already overdue/completed --
+        used for the card view's due-date indicator.
+        """
+        if not self.end_date or self.is_overdue or self.status == "completed":
+            return False
+        return self.end_date <= date.today() + datetime.timedelta(days=2)
+
+    @property
+    def due_status_display(self):
+        """
+        Human-readable due-state label for the card ("Overdue by 3 days",
+        "Due today", "Due in 2 days", ...), empty when there's nothing
+        worth flagging (no end date, or already completed).
+        """
+        if not self.end_date or self.status == "completed":
+            return ""
+        days = (self.end_date - date.today()).days
+        if days < 0:
+            return (
+                _("Overdue by 1 day")
+                if days == -1
+                else _("Overdue by %(days)d days") % {"days": -days}
+            )
+        if days == 0:
+            return _("Due today")
+        if days == 1:
+            return _("Due tomorrow")
+        return _("Due in %(days)d days") % {"days": days}
+
     def task_detail_view(self):
         """
         detail view of task
@@ -403,6 +457,25 @@ class Task(HorillaModel):
 
         url = reverse("task-detail-view", kwargs={"pk": self.pk})
         return url
+
+    def card_view_subtitle(self):
+        """
+        subtitle for card view
+        """
+        col = format_html(
+            """
+                <div class="my-2">{project_label} : <span class="font-semibold">{project}</span></div>
+                <div class="mb-2">{stage_label} : <span class="font-semibold">{stage}</span></div>
+                <div>{end_label} : <span class="dateformat_changer font-semibold">{end}</span></div>
+            """,
+            project_label=_("Project Name"),
+            stage_label=_("Stage Name"),
+            end_label=_("End date"),
+            project=self.if_project(),
+            stage=self.stage,
+            end=localize(self.end_date),
+        )
+        return col
 
     def status_column(self):
         """
@@ -416,7 +489,9 @@ class Task(HorillaModel):
         """
         managers = self.task_managers.all()
         if managers:
-            managers_name_string = "<br>".join([str(manager) for manager in managers])
+            managers_name_string = ", ".join(
+                [str(manager.get_full_name()) for manager in managers]
+            )
             return managers_name_string
         else:
             return ""
@@ -427,7 +502,9 @@ class Task(HorillaModel):
         """
         members = self.task_members.all()
         if members:
-            members_name_string = "<br>".join([str(member) for member in members])
+            members_name_string = ", ".join(
+                [str(member.get_full_name()) for member in members]
+            )
             return members_name_string
         else:
             return ""
@@ -436,21 +513,6 @@ class Task(HorillaModel):
         """
         This method for get custom column for action.
         """
-        # request = getattr(_thread_locals, "request", None)
-        # is_task_manager = self.task_manager == request.user
-        # print(self.title)
-        # is_project_manager = self.project.manager == request.user if self.project else False
-        # print(self.project)
-        # has_permission = request.user.has_perm('project.view_task')  # Replace 'your_app' with your app name
-
-        # if is_task_manager or is_project_manager or has_permission:
-        #     return render_template(
-        #         "cbv/tasks/task_actions.html",
-        #         {"instance": self}
-        #     )
-        # else:
-        #     return ""
-
         return render_template(
             path="cbv/tasks/task_actions.html",
             context={"instance": self},
@@ -563,9 +625,6 @@ class TimeSheet(HorillaModel):
     description = models.TextField(blank=True, null=True, verbose_name=_("Description"))
     objects = HorillaCompanyManager("project_id__company_id")
 
-    class Meta:
-        ordering = ("-id",)
-
     def clean(self):
         if self.project_id is None:
             raise ValidationError({"project_id": "Project name is Required."})
@@ -581,13 +640,20 @@ class TimeSheet(HorillaModel):
                     not employee in task.task_managers.all()
                     and not employee in task.task_members.all()
                     and not employee in task.project.managers.all()
-                    and not employee in task.project.members.all()
                 ):
                     raise ValidationError(_("Employee not included in this task"))
             elif self.project_id:
+                project = self.project_id
                 if (
-                    not employee in self.project_id.managers.all()
-                    and not employee in self.project_id.members.all()
+                    not employee in project.managers.all()
+                    and not any(
+                        employee in task.task_managers.all()
+                        for task in project.task_set.all()
+                    )
+                    and not any(
+                        employee in task.task_members.all()
+                        for task in project.task_set.all()
+                    )
                 ):
                     raise ValidationError(_("Employee not included in this project"))
             if self.date > datetime.datetime.today().date():
@@ -606,6 +672,16 @@ class TimeSheet(HorillaModel):
 
         return render_template(
             path="cbv/timesheet/actions.html",
+            context={"instance": self},
+        )
+
+    def get_description_col(self):
+        """
+        This method for get custom column for action.
+        """
+
+        return render_template(
+            path="cbv/timesheet/description_col.html",
             context={"instance": self},
         )
 
@@ -631,7 +707,7 @@ class TimeSheet(HorillaModel):
         This method to get delete url
         """
         url = reverse_lazy("delete-time-sheet", kwargs={"time_sheet_id": self.pk})
-        message = _("Are you sure you want to delete this time sheet?")
+        message = _("Are you sure you want to delete this timesheet?")
         return f"'{url}'" + "," + f"'{message}'"
 
     def detail_view(self):
@@ -642,5 +718,5 @@ class TimeSheet(HorillaModel):
         return url
 
     class Meta:
-        verbose_name = _("Time Sheet")
-        verbose_name_plural = _("Time Sheets")
+        verbose_name = _("Timesheet")
+        verbose_name_plural = _("Timesheets")

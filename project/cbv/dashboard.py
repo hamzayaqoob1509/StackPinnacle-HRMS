@@ -13,7 +13,6 @@ from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
-from base.methods import get_subordinates
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaDetailedView, HorillaListView
 from project.cbv.cbv_decorators import is_projectmanager_or_member_or_perms
@@ -32,6 +31,7 @@ class ProjectsDueInMonth(HorillaListView):
     bulk_select_option = False
     columns = [(_("Project"), "title", "get_avatar")]
     show_filter_tags = False
+    show_toggle_form = False
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -40,7 +40,7 @@ class ProjectsDueInMonth(HorillaListView):
             task_filter = queryset.filter(
                 Q(task__task_members=employee) | Q(task__task_manager=employee)
             )
-            project_filter = queryset.filter(Q(manager=employee) | Q(members=employee))
+            project_filter = queryset.filter(Q(manager=employee))
             queryset = task_filter | project_filter
             today = datetime.date.today()
             first_day = today.replace(day=1)
@@ -56,13 +56,14 @@ class ProjectsDueInMonth(HorillaListView):
         self.search_url = reverse("projects-due-in-this-month")
 
     row_attrs = """
-                hx-get='{get_detail_url}?instance_ids={ordered_ids}'
-                hx-target="#genericModalBody"
-                data-target="#genericModal"
-                data-toggle="oh-modal-toggle"
-                """
+        hx-get='{get_detail_url}?instance_ids={ordered_ids}'
+        hx-target="#genericModalBody"
+        data-target="#genericModal"
+        data-toggle="oh-modal-toggle"
+    """
 
 
+@method_decorator(login_required, name="dispatch")
 class ProjectDetailView(HorillaDetailedView):
     """
     detail view of the projects
@@ -72,14 +73,26 @@ class ProjectDetailView(HorillaDetailedView):
     title = _("Details")
     header = {"title": "title", "subtitle": "", "avatar": "get_avatar"}
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        instnce_id = resolve(self.request.path_info).kwargs.get("pk")
+    cols = {
+        "get_managers": 12,
+        "description": 12,
+    }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        instance_id = resolve(self.request.path_info).kwargs.get("pk")
         employee = self.request.user.employee_get
-        project = Project.objects.get(id=instnce_id)
+        project = Project.objects.filter(id=instance_id).first()
+        if not project:
+            return context
         if (
             employee in project.managers.all()
-            or employee in project.members.all()
+            or any(
+                employee in task.task_managers.all() for task in project.task_set.all()
+            )
+            or any(
+                employee in task.task_members.all() for task in project.task_set.all()
+            )
             or self.request.user.has_perm("project.view_project")
         ):
             self.actions = [
@@ -87,11 +100,13 @@ class ProjectDetailView(HorillaDetailedView):
                     "action": _("View Project"),
                     "icon": "create-outline",
                     "attrs": """
-                    class = "oh-btn oh-btn--info w-100"
+                    class = "oh-btn oh-btn--light-bkg w-100"
                     {redirect}
                 """,
                 }
             ]
+        context["actions"] = self.actions
+        return context
 
     def get_queryset(self) -> QuerySet[Any]:
         queryset = super().get_queryset()
@@ -103,7 +118,6 @@ class ProjectDetailView(HorillaDetailedView):
         get_field = self.model()._meta.get_field
         return [
             (get_field("managers").verbose_name, "get_managers"),
-            (get_field("members").verbose_name, "get_members"),
             (get_field("status").verbose_name, "get_status_display"),
             (_("No of Tasks"), "task_count"),
             (get_field("start_date").verbose_name, "start_date"),

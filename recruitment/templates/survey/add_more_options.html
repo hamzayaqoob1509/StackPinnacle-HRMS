@@ -1,14 +1,14 @@
 {% load i18n %}
-<div id="optionDiv">
+<div id="optionDiv{{ field_counts }}" style="padding-right: 0px;">
   <div
-    class="oh-input__group pt-3"
+    class="oh-input__group pt-2"
     id="{{ current_hx_target }}"
-    style="display: flex"
+    style="display: flex; align-items: center; gap: 8px; padding-right: 0px;"
   >
-    {{field_html}}
+    <div style="flex: 1">{{field_html}}</div>
     <a
       hx-get="{% url 'add-remove-options-field' %}"
-      class="oh-btn oh-btn--danger-outline oh-btn--light-bkg"
+      class="oh-btn oh-btn--danger oh-btn--sq-sm d-flex align-items-center justify-content-center flex-shrink-0"
       hx-target="#{{ current_hx_target }}"
       hx-swap="outerHTML"
       id="delete-link"
@@ -22,7 +22,7 @@
       hx-swap="outerHTML"
       hx-post="{% url 'add-remove-options-field' %}"
       role="button"
-      style="color: green"
+      class="text-primary-600"
       id="addMoreOptions"
       >{% trans "Add more option.." %}</a
     >

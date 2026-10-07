@@ -11,7 +11,7 @@ aria-hidden="true"
     <span class="oh-modal__dialog-title" id="uploadPhotoModalLabel"
       >{% trans "Upload Photo" %}</span
     >
-    <button class="oh-modal__close" aria-label="Close">
+    <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
       <ion-icon name="close-outline"></ion-icon>
     </button>
   </div>
@@ -23,10 +23,10 @@ aria-hidden="true"
           <img
           src="{{form.instance.get_avatar}}"
           class="oh-profile-section__modal-image preview"
-          alt="Username"
+          alt="{{ form.instance }}"
           />
         </div>
-        <input type="file" name='employee_profile' id="id_employee_profile" class="oh-input oh-input--file oh-input--file-sm mt-4" />
+        <input type="file" name='employee_profile' id="id_employee_profile" class="oh-input oh-input--file oh-input--file-sm mt-4"  accept="image/*" />
         <div class="d-flex justify-content-between w-100 align-items-center mt-4">
           <button class="oh-btn oh-btn--light-danger mr-1" hx-target='#personalMessage' hx-delete="{% url 'remove-own-profile-image' %}"><ion-icon class="me-1" name="trash-outline"></ion-icon>{% trans "Delete Image" %}</button>
           <button

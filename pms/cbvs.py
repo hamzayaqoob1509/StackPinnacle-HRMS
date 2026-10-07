@@ -8,10 +8,15 @@ from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
-from base.methods import filter_own_and_subordinate_recordes, is_reportingmanager
+from base.methods import (
+    filter_own_and_subordinate_recordes,
+    is_reportingmanager,
+    sanitize_mail_template_body,
+)
 from employee.models import Employee
 from horilla import horilla_middlewares
 from horilla.decorators import login_required, owner_can_enter, permission_required
+from horilla.methods import handle_no_permission
 from horilla_views.generic.cbv import views
 from pms import models
 from pms.filters import BonusPointSettingFilter, EmployeeBonusPointFilter
@@ -53,20 +58,23 @@ class BonusPointSettingNavView(views.HorillaNavView):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.create_attrs = f"""
-            hx-get="{reverse_lazy("create-bonus-point-setting")}"
-            hx-target="#genericModalBody"
-            data-toggle="oh-modal-toggle"
-            data-target="#genericModal"
-        """
+        if self.request.user.has_perm("pms.add_bonuspointsetting"):
+            self.create_attrs = f"""
+                onclick="event.stopPropagation();"
+                hx-get="{reverse_lazy("create-bonus-point-setting")}"
+                hx-target="#genericModalBody"
+                data-toggle="oh-modal-toggle"
+                data-target="#genericModal"
+            """
 
-    nav_title = _("Bonus Point Setting")
+    nav_title = _("Bonus Point Settings")
     search_url = reverse_lazy("bonus-point-setting-list-view")
-    search_swap_target = "#listContainer"
+    search_swap_target = "#bonusPointSettingListContainer"
+    template_name = "generic/inline_nav.html"
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(permission_required("pms.change_bonuspointsetting"), name="dispatch")
+@method_decorator(permission_required("pms.add_bonuspointsetting"), name="dispatch")
 class BonusPointSettingFormView(views.HorillaFormView):
     """
     BonusPointSettingForm View
@@ -130,10 +138,15 @@ class BonusPointSettingListView(views.HorillaListView):
         ("Is Active", "is_active_toggle"),
     ]
 
+    header_attrs = {
+        "action": """ style="width:150px !important" """,
+    }
+
 
 # ================Models for EmployeeBonusPoint==============
 
 
+@method_decorator(login_required, name="dispatch")
 class EmployeeBonusPointSectionView(views.HorillaSectionView):
     """
     EmployeeBonusPoint SectionView
@@ -150,6 +163,7 @@ class EmployeeBonusPointSectionView(views.HorillaSectionView):
     template_name = "bonus/employee_bonus_point_section.html"
 
 
+@method_decorator(login_required, name="dispatch")
 class EmployeeBonusPointNavView(views.HorillaNavView):
     """
     BonusPoint nav view
@@ -184,14 +198,13 @@ class EmployeeBonusPointNavView(views.HorillaNavView):
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
         (
             "employee_id__employee_work_info__employee_type_id",
-            _("Employement Type"),
+            _("Employment Type"),
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(permission_required("pms.change_employeebonuspoint"), name="dispatch")
 class EmployeeBonusPointFormView(views.HorillaFormView):
     """
     BonusPointForm View
@@ -201,6 +214,16 @@ class EmployeeBonusPointFormView(views.HorillaFormView):
     model = models.EmployeeBonusPoint
     new_display_title = _("Create Employee Bonus Point ")
     # template_name = "bonus/bonus_form.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        perm = (
+            "pms.change_employeebonuspoint"
+            if kwargs.get("pk")
+            else "pms.add_employeebonuspoint"
+        )
+        if is_reportingmanager(request) or request.user.has_perm(perm):
+            return super().dispatch(request, *args, **kwargs)
+        return handle_no_permission(request)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -233,6 +256,7 @@ class EmployeeBonusPointFormView(views.HorillaFormView):
         return super().form_valid(form)
 
 
+@method_decorator(login_required, name="dispatch")
 class EmployeeBonusPointListView(views.HorillaListView):
     """
     BnusPoint list view
@@ -261,6 +285,10 @@ class EmployeeBonusPointListView(views.HorillaListView):
         ("Bonus Point", "bonus_point"),
         ("Based On", "based_on"),
     ]
+
+    header_attrs = {
+        "action": 'style="width: 110px;"',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -359,7 +387,7 @@ class BulkFeedbackFormView(views.HorillaFormView):
                     reporting_manager if cleaned_data["include_manager"] else None
                 )
                 title_template = cleaned_data["title"]
-                temp = template.Template(title_template)
+                temp = template.Template(sanitize_mail_template_body(title_template))
                 title_context = template.Context({"employee": employee})
                 render_title = temp.render(title_context)
                 data = {

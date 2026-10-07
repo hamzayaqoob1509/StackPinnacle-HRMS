@@ -63,7 +63,7 @@
                     <img
                       src="{{time_sheet.employee_id.get_avatar}}"
                       class="oh-kanban-card__profile-image"
-                      alt="Username"
+                      alt="{{ time_sheet.employee_id }}"
                     />
                 </div>
                 <span class="oh-profile__name oh-text--dark"
@@ -94,19 +94,19 @@
                   role="img"
                   class="md hydrated"
                   style="color: blue"
-                  aria-label="create outline"
+                  aria-label="{% trans 'create outline' %}"
                 ></ion-icon>
               </a>
               <a
-                class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                class="oh-btn oh-btn--danger w-100"
                 href="{% url 'delete-time-sheet' time_sheet.id %}"
-                onclick="event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to delete this time sheet?' %}`)"
+                onclick="event.preventDefault();event.stopPropagation(); confirm(`{% trans 'Do you want to delete this timesheet?'|escapejs %}`)"
               >
                 <ion-icon
                   name="trash-outline"
                   role="img"
                   class="md hydrated"
-                  aria-label="trash outline"
+                  aria-label="{% trans 'trash outline' %}"
                 ></ion-icon>
               </a>
             </div>
@@ -179,7 +179,7 @@
 {% else %}
   <div style="height: 380px; display:flex;align-items: center;justify-content: center;" class="">
     <div style="" class="">
-      <img style="display: block;width: 200px;margin: 10px auto ;" src="{% static 'images/ui/project/timesheet.png' %}" class="" alt="Page not found. 404."/>
+      <img style="display: block;width: 200px;margin: 10px auto ;" src="{% static 'images/ui/project/timesheet.png' %}" class="" alt="{% trans 'Page not found. 404.' %}"/>
       <h3 style="font-size:20px" class="oh-404__subtitle">{% trans "There are currently no available timesheets; please create a new one." %}</h3>
     </div>
   </div>

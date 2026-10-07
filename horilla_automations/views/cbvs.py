@@ -4,19 +4,20 @@ horilla_automations/views/cbvs.py
 
 import json
 import os
+from typing import Any
 
 from django.conf import settings
 from django.contrib import messages
 from django.core import serializers
 from django.http import HttpResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
-from django.utils.translation import gettext_lazy as _trans
+from django.utils.translation import gettext_lazy as _
 from django.views import View
 
 from base.models import HorillaMailTemplate
-from horilla.decorators import login_required, permission_required
+from horilla.decorators import hx_request_required, login_required, permission_required
 from horilla_automations import models
 from horilla_automations.filters import AutomationFilter
 from horilla_automations.forms import AutomationForm
@@ -29,7 +30,8 @@ from horilla_views.generic.cbv import views
 )
 class AutomationSectionView(views.HorillaSectionView):
     """
-    AutomationSectionView
+    Legacy standalone Mail Automations page. Migrated into Settings > Mail;
+    redirect direct visits to the settings page.
     """
 
     nav_url = reverse_lazy("mail-automations-nav")
@@ -41,6 +43,9 @@ class AutomationSectionView(views.HorillaSectionView):
     ]
 
     template_name = "horilla_automations/section_view.html"
+
+    def get(self, request, *args, **kwargs):
+        return redirect("mail-automations-view")
 
 
 @method_decorator(login_required, name="dispatch")
@@ -65,7 +70,7 @@ class AutomationNavView(views.HorillaNavView):
 
             self.actions.append(
                 {
-                    "action": "Load Automations",
+                    "action": _("Load Automations"),
                     "attrs": f"""
                         data-toggle="oh-modal-toggle"
                         data-target="#genericModal"
@@ -79,7 +84,7 @@ class AutomationNavView(views.HorillaNavView):
         if self.request.user.has_perm("horilla_automations.add_mailautomation"):
             self.actions.append(
                 {
-                    "action": "Refresh Automations",
+                    "action": _("Refresh Automations"),
                     "attrs": f"""
                         hx-get="{reverse_lazy('refresh-automations')}"
                         hx-target="#reloadMessages"
@@ -88,9 +93,10 @@ class AutomationNavView(views.HorillaNavView):
                 }
             )
 
-    nav_title = _trans("Automations")
+    nav_title = _("Mail Automations")
     search_url = reverse_lazy("mail-automations-list-view")
     search_swap_target = "#listContainer"
+    template_name = "generic/inline_nav.html"
 
 
 @method_decorator(login_required, name="dispatch")
@@ -104,14 +110,17 @@ class AutomationFormView(views.HorillaFormView):
 
     form_class = AutomationForm
     model = models.MailAutomation
-    new_display_title = _trans("New Automation")
+    new_display_title = _("New Automation")
     template_name = "horilla_automations/automation_form.html"
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.view_id = "automation"
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         instance = models.MailAutomation.objects.filter(pk=self.kwargs["pk"]).first()
         kwargs["instance"] = instance
-
         return kwargs
 
     def form_valid(self, form: AutomationForm) -> views.HttpResponse:
@@ -120,8 +129,7 @@ class AutomationFormView(views.HorillaFormView):
             if form.instance.pk:
                 message = "Automation updated"
             form.save()
-
-            messages.success(self.request, _trans(message))
+            messages.success(self.request, _(message))
             return self.HttpResponse()
         return super().form_valid(form)
 
@@ -151,7 +159,7 @@ class AutomationListView(views.HorillaListView):
             "action": "Edit",
             "icon": "create-outline",
             "attrs": """
-                class="oh-btn oh-btn--light-bkg w-100"
+                class="oh-btn oh-btn--light-bkg oh-btn--sq-sm"
                 hx-get="{edit_url}?instance_ids={ordered_ids}"
                 hx-target="#genericModalBody"
                 data-target="#genericModal"
@@ -162,7 +170,7 @@ class AutomationListView(views.HorillaListView):
             "action": "Delete",
             "icon": "trash-outline",
             "attrs": """
-            class="oh-btn oh-btn--light-bkg w-100 tex-danger"
+            class="oh-btn oh-btn--danger oh-btn--sq-sm"
             onclick="
                 event.stopPropagation();
                 confirm('Do you want to delete the automation?','{delete_url}')
@@ -190,45 +198,24 @@ class AutomationDetailedView(views.HorillaDetailedView):
     """
 
     model = models.MailAutomation
-    title = "Detailed View"
+    title = _("Detailed View")
     header = {
         "title": "title",
         "subtitle": "title",
         "avatar": "get_avatar",
     }
     body = [
-        ("Model", "model"),
-        ("Mail Templates", "mail_template"),
-        ("Mail To", "get_mail_to_display"),
-        ("Mail Cc", "get_mail_cc_display"),
-        ("Trigger", "trigger_display"),
+        (_("Model"), "model"),
+        (_("Mail Templates"), "mail_template"),
+        (_("Mail To"), "get_mail_to_display"),
+        (_("Mail Cc"), "get_mail_cc_display"),
+        (_("Trigger"), "trigger_display"),
     ]
-    actions = [
-        {
-            "action": "Edit",
-            "icon": "create-outline",
-            "attrs": """
-            hx-get="{edit_url}?instance_ids={ordered_ids}"
-            hx-target="#genericModalBody"
-            data-toggle="oh-modal-toggle"
-            data-target="#genericModal"
-            class="oh-btn oh-btn--info w-50"
-            """,
-        },
-        {
-            "action": "Delete",
-            "icon": "trash-outline",
-            "attrs": """
-            class="oh-btn oh-btn--danger w-50"
-            onclick="
-                confirm('Do you want to delete the automation?','{delete_url}')
-            "
-            """,
-        },
-    ]
+    action_method = "detail_view_actions"
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 @method_decorator(
     permission_required("horilla_automations.add_mailautomation"), name="dispatch"
 )
@@ -240,14 +227,25 @@ class LoadAutomationsView(View):
     )
 
     def load_json_files(self):
-        with open(self.template_file, "r") as tf:
-            templates_raw = json.load(tf)
-        with open(self.automation_file, "r") as af:
-            automations_raw = json.load(af)
+        try:
+            with open(self.template_file, "r") as tf:
+                templates_raw = json.load(tf)
+            with open(self.automation_file, "r") as af:
+                automations_raw = json.load(af)
+        except (OSError, json.JSONDecodeError):
+            return None, None
         return templates_raw, automations_raw
 
     def get(self, request):
         templates_raw, automations_raw = self.load_json_files()
+        if templates_raw is None:
+            messages.error(
+                request,
+                _(
+                    "Default mail automations could not be loaded. Please contact support."
+                ),
+            )
+            return render(request, self.template_name, {"automations": []})
 
         template_lookup = {item["pk"]: item["fields"]["body"] for item in templates_raw}
 
@@ -266,6 +264,14 @@ class LoadAutomationsView(View):
 
     def post(self, request):
         templates_raw, automations_raw = self.load_json_files()
+        if templates_raw is None:
+            messages.error(
+                request,
+                _(
+                    "Default mail automations could not be loaded. Please contact support."
+                ),
+            )
+            return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
         template_lookup = {item["pk"]: item["fields"]["body"] for item in templates_raw}
 
@@ -310,11 +316,15 @@ class LoadAutomationsView(View):
                 automation_obj.save()
 
                 messages.success(
-                    request, f"Automation '{automation_obj.title}' added successfully."
+                    request,
+                    _("Automation '%(automation_obj_title)s' added successfully.")
+                    % {"automation_obj_title": automation_obj.title},
                 )
             else:
                 messages.warning(
-                    request, f"Automation '{automation_obj.title}' already exists."
+                    request,
+                    _("Automation '%(automation_obj_title)s' already exists.")
+                    % {"automation_obj_title": automation_obj.title},
                 )
 
         script = """

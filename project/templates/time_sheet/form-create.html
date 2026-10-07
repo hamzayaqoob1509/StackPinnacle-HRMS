@@ -1,14 +1,14 @@
 {% block content %} {% load static %} {% load i18n %}
 <div class="oh-modal__dialog-header">
   <span class="oh-modal__dialog-title" id="addEmployeeObjectiveModalLabel">
-    <h5>{% trans "Time Sheet" %}</h5>
+    <h5>{% trans "Timesheet" %}</h5>
     <br />
   </span>
   <button
     type="button"
     class="oh-modal__close"
     data-dismiss="oh-modal"
-    aria-label="Close"
+    aria-label={% trans 'Close' %}
     data-toggle="oh-modal-toggle"
     hx-target="#TimeSheetFormTarget"
     onclick="location.reload()"
@@ -98,8 +98,11 @@
               const element = response.data[i];
               $("#id_task_id").append("<option value="+ element.id + ">"+element.title+"</option>");
             }
-            $("#id_task_id").append( "<option value='create_new_task'>Create a new task</option>");
+            $("#id_task_id").append( "<option value='create_new_task'>{% trans 'Create a new task'|escapejs %}</option>");
           },
+          error: (error) => {
+            reloadMessage()
+          }
         });
       } else {
         $("#id_task_id").html("<option>---------</option>");

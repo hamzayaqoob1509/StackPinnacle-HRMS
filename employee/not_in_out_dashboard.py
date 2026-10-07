@@ -14,15 +14,23 @@ from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.utils.translation import gettext_lazy as _
 
 from base.backends import ConfiguredEmailBackend
 from base.forms import MailTemplateForm
-from base.methods import export_data, generate_pdf
+from base.methods import (
+    build_safe_template_request,
+    export_data,
+    generate_pdf,
+    sanitize_mail_template_body,
+    sanitize_mail_template_placeholders,
+)
 from base.models import HorillaMailTemplate
 from employee.filters import EmployeeFilter
 from employee.models import Employee
 from horilla import settings
-from horilla.decorators import login_required, manager_can_enter
+from horilla.decorators import hx_request_required, login_required, manager_can_enter
+from horilla.http.response import HorillaRedirect
 
 
 def paginator_qry(qryset, page_number):
@@ -75,6 +83,7 @@ def not_out_yet(request):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter("employee.change_employee")
 def send_mail(request, emp_id=None):
     """
@@ -82,7 +91,12 @@ def send_mail(request, emp_id=None):
     """
     employee = None
     if emp_id:
-        employee = Employee.objects.get(id=emp_id)
+        try:
+            employee = Employee.objects.get(id=emp_id)
+        except Employee.DoesNotExist:
+            return HorillaRedirect(
+                request, message=_("No Employee found matching the query.")
+            )
     employees = Employee.objects.all()
     templates = HorillaMailTemplate.objects.all()
     return render(
@@ -112,7 +126,12 @@ def employee_data_export(request, emp_id=None):
     ):
         employee = None
         if emp_id:
-            employee = Employee.objects.get(id=emp_id)
+            try:
+                employee = Employee.objects.get(id=emp_id)
+            except Employee.DoesNotExist:
+                return HorillaRedirect(
+                    request, message=_("No Employee found matching the query.")
+                )
 
         context = {"employee": employee}
 
@@ -172,7 +191,11 @@ def get_template(request, emp_id):
     """
     This method is used to return the mail template
     """
-    body = HorillaMailTemplate.objects.get(id=emp_id).body
+    body = (
+        HorillaMailTemplate.find(emp_id).body
+        if HorillaMailTemplate.find(emp_id)
+        else ""
+    )
     return JsonResponse({"body": body})
 
 
@@ -183,7 +206,15 @@ def get_mail_preview(request):
     """
     body = request.POST.get("body")
     if not body:
-        return HttpResponse("No body provided", status=400)
+        messages.error(request, _("No body provided for mail preview."))
+        return HorillaRedirect(request)
+
+    # Strip dangerous template constructs first.
+    body = sanitize_mail_template_body(body)
+    allowed_template_words = set(
+        MailTemplateForm().get_employee_template_language().values()
+    )
+    body = sanitize_mail_template_placeholders(body, allowed_template_words)
 
     emp_id = request.GET.get("emp_id")
     employee_ids = request.POST.getlist("employees")
@@ -196,12 +227,12 @@ def get_mail_preview(request):
         if not employee_obj:
             return HttpResponse("Employee not found", status=404)
 
-    # Build context
+    # Keep `request` in context, but only as a sanitized proxy.
     context = {
         "instance": employee_obj,
         "model_instance": employee_obj,
         "self": getattr(request.user, "employee_get", None),
-        "request": request,
+        "request": build_safe_template_request(request),
     }
 
     # Render template
@@ -231,7 +262,7 @@ def send_mail_to_employee(request):
     """
     This method is used to send acknowledgement mail to the employee
     """
-    employee_id = request.POST["id"]
+    employee_id = request.POST.get("id")
     subject = request.POST.get("subject")
     bdy = request.POST.get("body")
 
@@ -258,7 +289,7 @@ def send_mail_to_employee(request):
         ]
         for html in bodys:
             # due to not having solid template we first need to pass the context
-            template_bdy = template.Template(html)
+            template_bdy = template.Template(sanitize_mail_template_body(html))
             context = template.Context(
                 {"instance": employee, "self": request.user.employee_get}
             )
@@ -271,7 +302,7 @@ def send_mail_to_employee(request):
                 )
             )
 
-        template_bdy = template.Template(bdy)
+        template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(
             {"instance": employee, "self": request.user.employee_get}
         )
@@ -293,9 +324,17 @@ def send_mail_to_employee(request):
         try:
             email.send()
             if employee.employee_work_info.email or employee.email:
-                messages.success(request, f"Mail sent to {employee.get_full_name()}")
+                messages.success(
+                    request,
+                    _("Mail sent to %(employee)s")
+                    % {"employee": employee.get_full_name()},
+                )
             else:
-                messages.info(request, f"Email not set for {employee.get_full_name()}")
+                messages.info(
+                    request,
+                    _("Email not set for %(employee)s")
+                    % {"employee": employee.get_full_name()},
+                )
         except Exception as e:
-            messages.error(request, "Something went wrong")
-    return HttpResponse("<script>window.location.reload()</script>")
+            messages.error(request, _("Something went wrong"))
+    return HorillaRedirect(request)

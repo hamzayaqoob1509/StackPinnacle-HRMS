@@ -1,10 +1,10 @@
 import json
 
-from django.contrib.auth.models import User
 from django.db import models
 
 from horilla.horilla_middlewares import _thread_locals
 from horilla.models import HorillaModel
+from horilla_auth.models import HorillaUser
 
 # Create your models here.
 
@@ -15,7 +15,7 @@ class ToggleColumn(HorillaModel):
     """
 
     user_id = models.ForeignKey(
-        User,
+        HorillaUser,
         on_delete=models.CASCADE,
         related_name="user_excluded_column",
         editable=False,
@@ -89,3 +89,20 @@ class ActiveView(HorillaModel):
 
     def save(self, *args, **kwargs):
         return super().save(*args, **kwargs)
+
+
+class ColumnOrder(HorillaModel):
+    employee = models.ForeignKey(
+        "employee.Employee", on_delete=models.CASCADE, related_name="column_order"
+    )
+    path = models.CharField(max_length=256)
+    column_order = models.JSONField(default=list)
+
+    def save(self, *args, **kwargs):
+        request = getattr(_thread_locals, "request", {})
+        employee = request.user.employee_get
+        self.employee = employee
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return str(self.employee)

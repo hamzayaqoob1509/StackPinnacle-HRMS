@@ -78,13 +78,19 @@
 
 ul.errorlist {
     color: #d9534f;
-    background-color: #f0d8d8;
-    border-color: #d6e9c6;
-    padding: 15px;
-    margin-bottom: 20px;
-    border: 1px solid transparent;
-    border-radius: 4px;
+    background-color: transparent;
+    border: none;
+    font-size: 0.75rem;
+    font-weight: 500;
+    list-style-type: none;
+    padding: 0;
+    margin: 4px 0 0;
+    line-height: 1.3;
+}
 
+ul.errorlist li {
+    margin: 0;
+    padding: 0;
 }
 
 ul:not(.ul) {
@@ -105,7 +111,7 @@ ion-icon {
     border-radius: 5px;
 }
 
-.row-status--yellow {
+.row-status--yellowgreen {
     border-left: 4px solid yellowgreen;
     border-radius: 5px;
 }
@@ -136,7 +142,7 @@ ion-icon {
 }
 
 .row-status--yellow {
-    border-left: 4px solid yellowgreen;
+    border-left: 4px solid yellow;
     border-radius: 5px;
 }
 
@@ -457,29 +463,6 @@ form label {
 }
 
 
-.animated-background {
-    animation-duration: 2s;
-    animation-fill-mode: forwards;
-    animation-iteration-count: infinite;
-    animation-name: placeHolderShimmer;
-    animation-timing-function: linear;
-    background-color: #f6f7f8;
-    background: linear-gradient(to right, #eeeeee9c -58%, #e4e4e496 18%, #eeeeee61 33%);
-    background-size: 800px 64px;
-    height: 300px;
-    position: relative;
-}
-
-
-@keyframes placeHolderShimmer {
-    0% {
-        background-position: -800px 0
-    }
-
-    100% {
-        background-position: 800px 0
-    }
-}
 
 .d-inline {
     display: inline !important;
@@ -531,6 +514,14 @@ form label {
     }
 }
 
+.oh-tabs__tab--active {
+    border-right: solid 1px #dddddd !important;
+}
+
+.row-dropdown:hover {
+    border: solid 1px #dddddddd !important;
+}
+
 .custom-radio-container input[type="radio"] {
     position: absolute;
     opacity: 0;
@@ -574,11 +565,36 @@ form label {
     transform: translate(-50%, -50%);
 }
 
+.oh-modal_close--custom {
+    border: none;
+    background: none;
+    font-size: 1.5rem;
+    opacity: 0.7;
+    position: absolute;
+    top: 25px;
+    right: 15px;
+}
+
+.oh-inner-sidebar__link {
+    cursor: pointer;
+}
+
+.oh-inner-sidebar__link--active {
+    border: solid 1px;
+    border-radius: 5px;
+}
+
 #c {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
+    /* Make sure the canvas fills the modal */
+    height: 100%;
+    z-index: 1000;
+    /* Ensure it's above the blurred background */
+    pointer-events: none;
+    /* Ensure clicks pass through to underlying content */
     height: 100%;
     z-index: 1000;
     pointer-events: none;
@@ -689,8 +705,107 @@ form label {
 
 .display-justify-center {
     display: flex !important;
-    justify-content: center !important;
+    justify-content: space-between !important;
     align-items: center !important;
+
+}
+
+#ObjectiveDetailedViewContainer .avatars {
+    display: flex;
+    padding: 8px 10px 8px 10px;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item {
+    background-color: #596376;
+    border: 2px solid white;
+    border-radius: 100%;
+    color: #ffffff;
+    display: block;
+    font-family: sans-serif;
+    font-size: 12px;
+    font-weight: 100;
+    height: 26px;
+    width: 26px;
+    line-height: 17px;
+    text-align: center;
+    transition: margin 0.1s ease-in-out;
+    overflow: hidden;
+    margin-left: -10px;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item:first-child {
+    z-index: 5;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item:nth-child(2) {
+    z-index: 4;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item:nth-child(3) {
+    z-index: 3;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item:nth-child(4) {
+    z-index: 2;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item:nth-child(5) {
+    z-index: 1;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item:last-child {
+    z-index: 0;
+}
+
+#ObjectiveDetailedViewContainer .avatars__item img {
+    width: 100%;
+}
+
+#ObjectiveDetailedViewContainer .avatars:hover .avatars__item {
+    margin-right: 10px;
+}
+
+#ObjectiveDetailedViewContainer .select2-container .select2-selection.select2-selection--multiple {
+    padding: 5px !important;
+    max-height: 70px !important;
+    overflow: hidden;
+    overflow-y: scroll;
+}
+
+#ObjectiveDetailedViewContainer .search-highlight {
+    background-color: rgba(255, 68, 0, 0.076);
+}
+
+#ObjectiveDetailedViewContainer #enlargeImageContainer {
+    position: absolute;
+    left: -300px;
+    top: 100px;
+    height: 200px;
+    width: 200px;
+}
+
+.oh-custom-select {
+    width: 90%;
+    color: hsl(0, 0%, 11%);
+    background-color: transparent;
+    height: 100%;
+    border: 1px solid transparent;
+}
+
+.oh-dot--color-completed {
+    background-color: #21c06b
+}
+
+.oh-dot--color-stuck {
+    background-color: #ff0400
+}
+
+.oh-dot--color-in_progress {
+    background-color: #3398db
+}
+
+.oh-dot--color-todo {
+    background-color: #e3b75f80
 }
 
 .d-flex-justify-between {
@@ -769,4 +884,129 @@ form label {
 }
 .swal2-styled.swal2-cancel{
     background-color : rgb(221, 51, 51);
+}
+
+/* ---------------------------------------------------------------- */
+/* Profile view "gear" settings dropdown (employee / candidate profile) */
+/* ---------------------------------------------------------------- */
+.oh-profile-settings__trigger {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.15s ease;
+}
+
+.oh-profile-settings__trigger:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+}
+
+.oh-profile-settings__trigger--active {
+    background-color: rgba(228, 76, 51, 0.12);
+}
+
+.oh-profile-settings__trigger ion-icon {
+    transition: transform 0.2s ease, color 0.15s ease;
+}
+
+.oh-profile-settings__trigger--active ion-icon {
+    color: hsl(8, 77%, 56%);
+    transform: rotate(60deg);
+}
+
+.oh-profile-settings__menu {
+    top: calc(100% + 6px);
+    min-width: 250px;
+    padding: 0.5rem;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.oh-profile-settings__title {
+    display: block;
+    padding: 0.45rem 0.6rem 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    opacity: 0.5;
+}
+
+.oh-profile-settings__items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.oh-profile-settings__item {
+    margin: 1px 0;
+}
+
+.oh-profile-settings__link {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 8px;
+    color: inherit !important;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-decoration: none !important;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.oh-profile-settings__link:hover,
+.oh-profile-settings__link:focus-visible {
+    background-color: rgba(228, 76, 51, 0.09);
+    color: hsl(8, 61%, 45%) !important;
+    outline: none;
+}
+
+.oh-profile-settings__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    background-color: rgba(0, 0, 0, 0.045);
+    transition: background-color 0.12s ease;
+}
+
+.oh-profile-settings__link:hover .oh-profile-settings__icon {
+    background-color: rgba(228, 76, 51, 0.14);
+}
+
+.oh-profile-settings__icon img {
+    width: 15px;
+    height: 15px;
+    object-fit: contain;
+}
+
+.oh-profile-settings__label {
+    line-height: 1.25;
+}
+
+.oh-profile-settings__fade-enter {
+    transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+}
+.oh-profile-settings__fade-enter-start {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+}
+.oh-profile-settings__fade-enter-end {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+.oh-profile-settings__fade-leave {
+    transition: opacity 0.1s ease-in;
+}
+.oh-profile-settings__fade-leave-start {
+    opacity: 1;
+}
+.oh-profile-settings__fade-leave-end {
+    opacity: 0;
 }

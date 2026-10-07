@@ -1,15 +1,19 @@
 import json
+import logging
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from django.apps import apps
 from django.contrib import messages
-from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
+from django.db import transaction
+from django.db.utils import IntegrityError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.context_processors import intial_notice_period
 from base.methods import closest_numbers, eval_validate, paginator_qry, sortby
@@ -21,10 +25,14 @@ from horilla.decorators import (
     hx_request_required,
     login_required,
     manager_can_enter,
+    owner_can_enter,
     permission_required,
 )
 from horilla.group_by import group_by_queryset as group_by
+from horilla.http.response import HorillaRedirect
 from horilla.methods import get_horilla_model_class
+from horilla_auth.models import HorillaUser
+from horilla_views.generic.cbv.views import HorillaFormView
 from notifications.signals import notify
 from offboarding.decorators import (
     any_manager_can_enter,
@@ -59,6 +67,8 @@ from offboarding.models import (
     OffboardingTask,
     ResignationLetter,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def any_manager(employee: Employee):
@@ -239,16 +249,12 @@ def create_offboarding(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as an offboarding manager",
-                verb_ar="لقد تم اختيارك كمدير عملية المغادرة",
-                verb_de="Sie wurden als Offboarding-Manager ausgewählt",
-                verb_es="Has sido elegido como gerente de offboarding",
-                verb_fr="Vous avez été choisi comme responsable du processus de départ",
+                verb=gettext_noop("You are chosen as an offboarding manager"),
                 icon="people-circle",
                 redirect=reverse("offboarding-pipeline"),
             )
 
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
 
     return render(
         request,
@@ -300,16 +306,48 @@ def create_stage(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as offboarding stage manager",
-                verb_ar="لقد تم اختيارك كمدير لمرحلة عملية المغادرة",
-                verb_de="Sie wurden als Manager der Offboarding-Phase ausgewählt",
-                verb_es="Has sido elegido como gerente de la etapa de offboarding",
-                verb_fr="Vous avez été choisi comme responsable de l'étape de départ",
+                verb=gettext_noop("You are chosen as offboarding stage manager"),
                 icon="people-circle",
                 redirect=reverse("offboarding-pipeline"),
             )
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
+
     return render(request, "offboarding/stage/form.html", {"form": form})
+
+
+@login_required
+@offboarding_manager_can_enter("offboarding.change_offboardingstage")
+def update_stage_order(request, pk):
+    """
+    This method is used to update the stage sequence of the offboarding
+    """
+    offboarding = Offboarding.find(pk)
+    if not offboarding:
+        return HorillaRedirect(request, message=_("Offboarding not found"))
+
+    if request.method == "POST":
+        try:
+            order = json.loads(request.POST.get("order", "[]"))
+            for index, stage_id in enumerate(order):
+                stage = offboarding.offboardingstage_set.get(id=stage_id)
+                stage.sequence = index + 1
+                stage.save()
+            messages.success(request, _("Sequence Updated Successfully"))
+            return JsonResponse({"status": "success"})
+        except Exception as e:
+            messages.error(request, _("Error Updating Sequence.."))
+            return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+    stages = offboarding.offboardingstage_set.order_by("sequence")
+
+    return render(
+        request,
+        "cbv/exit_process/stage_order.html",
+        {
+            "stages": stages,
+            "offboarding": offboarding,
+        },
+    )
 
 
 @login_required
@@ -345,15 +383,18 @@ def add_employee(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=instance.employee_id.employee_user_id,
-                    verb=f"You have been added to the {stage} of {stage.offboarding_id}",
-                    verb_ar=f"لقد تمت إضافتك إلى {stage} من {stage.offboarding_id}",
-                    verb_de=f"Du wurdest zu {stage} von {stage.offboarding_id} hinzugefügt",
-                    verb_es=f"Has sido añadido a {stage} de {stage.offboarding_id}",
-                    verb_fr=f"Vous avez été ajouté à {stage} de {stage.offboarding_id}",
+                    verb=gettext_noop(
+                        "You have been added to the %(stage)s of %(offboarding_id)s"
+                    ),
+                    verb_params={
+                        "stage": str(stage),
+                        "offboarding_id": str(stage.offboarding_id),
+                    },
                     redirect=reverse("offboarding-pipeline"),
                     icon="information",
                 )
-            return HttpResponse("<script>window.location.reload()</script>")
+            return HorillaRedirect(request)
+
     return render(request, "offboarding/employee/form.html", {"form": form})
 
 
@@ -370,14 +411,10 @@ def delete_employee(request):
         messages.success(request, _("Offboarding employee deleted"))
         notify.send(
             request.user.employee_get,
-            recipient=User.objects.filter(
+            recipient=HorillaUser.objects.filter(
                 id__in=instances.values_list("employee_id__employee_user_id", flat=True)
             ),
-            verb=f"You have been removed from the offboarding",
-            verb_ar=f"لقد تمت إزالتك من إنهاء الخدمة",
-            verb_de=f"Du wurdest aus dem Offboarding entfernt",
-            verb_es=f"Has sido eliminado del offboarding",
-            verb_fr=f"Vous avez été retiré de l'offboarding",
+            verb=gettext_noop("You have been removed from the offboarding"),
             redirect=reverse("offboarding-pipeline"),
             icon="information",
         )
@@ -402,7 +439,47 @@ def delete_stage(request):
             messages.error(request, _("Stage not found"))
     except OverflowError:
         messages.error(request, _("Stage not found"))
-    return HttpResponse("<script>window.location.reload()</script>")
+    return HorillaRedirect(request)
+
+
+def _blocked_required_tasks_message(employees, stage):
+    """
+    Returns an error message if moving any of ``employees`` forward to
+    ``stage`` is blocked by required tasks that are not yet completed in
+    their current stage. Returns None if the move is allowed.
+    """
+    if stage.sequence is None:
+        return None
+    blocked_lines = []
+    for employee in employees:
+        current_stage = employee.stage_id
+        if not current_stage or current_stage.sequence is None:
+            continue
+        pending_tasks = employee.pending_required_tasks(current_stage)
+        if pending_tasks.exists():
+            task_titles = ", ".join(pending_tasks.values_list("title", flat=True))
+            blocked_lines.append(f"{employee}: {task_titles}")
+    if not blocked_lines:
+        return None
+    return str(
+        _(
+            "Complete the following required task(s) before moving to "
+            "the next stage: %(details)s"
+        )
+        % {"details": "; ".join(blocked_lines)}
+    )
+
+
+def _swal_error_script(message):
+    """
+    A SweetAlert2 error script snippet for the given message.
+    """
+    return (
+        "<script>Swal.fire({"
+        f"icon: 'error', title: {json.dumps(str(_('Cannot Change Stage')))}, "
+        f"text: {json.dumps(message)}"
+        "});</script>"
+    )
 
 
 @login_required
@@ -413,9 +490,35 @@ def change_stage(request):
     This method is used to update the stages of the employee
     """
     employee_ids = request.GET.getlist("employee_ids")
-    stage_id = request.GET["stage_id"]
+    stage_id = request.GET.get("stage_id")
+    if not stage_id:
+        return HttpResponse()
     employees = OffboardingEmployee.objects.filter(id__in=employee_ids)
-    stage = OffboardingStage.objects.get(id=stage_id)
+    stage = OffboardingStage.objects.filter(id=stage_id).first()
+    if not stage:
+        return HttpResponse()
+
+    blocked_message = _blocked_required_tasks_message(employees, stage)
+    if blocked_message:
+        stage_forms = {}
+        stage_forms[str(stage.offboarding_id.id)] = StageSelectForm(
+            offboarding=stage.offboarding_id
+        )
+        groups = pipeline_grouper({}, [stage.offboarding_id])
+        for item in groups:
+            setattr(item["offboarding"], "stages", item["stages"])
+        response = render(
+            request,
+            "offboarding/stage/offboarding_body.html",
+            {
+                "offboarding": groups[0],
+                "stage_forms": stage_forms,
+                "today": datetime.today().date(),
+            },
+        )
+        response.content += _swal_error_script(blocked_message).encode()
+        return response
+
     # This wont trigger the save method inside the offboarding employee
     # employees.update(stage_id=stage)
     for employee in employees:
@@ -424,10 +527,25 @@ def change_stage(request):
 
     target_state = False if stage.type == "archived" else True
     employee_ids = employees.values_list("employee_id__id", flat=True)
-    Employee.objects.filter(
-        id__in=employee_ids,
-        is_active=not target_state,  # Only update if is_active differs
-    ).update(is_active=target_state)
+    # Saved one at a time rather than through a queryset update(), because
+    # update() skips save() and therefore sync_login_access(). Authentication
+    # reads HorillaUser.is_active, not Employee.is_active, so updating in bulk
+    # archived the employee record while leaving the person's login working --
+    # and the API issues 30-day refresh tokens, so a leaver kept API access for
+    # up to a month. Syncing both directions also means moving someone back out
+    # of the archived stage restores their access.
+    # Atomic because this is now several statements where it used to be one:
+    # Employee.save() runs full_clean(), so one legacy row that no longer
+    # validates would otherwise abort the batch half-applied, leaving some
+    # people archived and others not.
+    with transaction.atomic():
+        for employee_record in Employee.objects.filter(
+            id__in=employee_ids,
+            is_active=not target_state,  # Only touch rows whose state differs
+        ):
+            employee_record.is_active = target_state
+            employee_record.save()
+            employee_record.sync_login_access()
 
     stage_forms = {}
     stage_forms[str(stage.offboarding_id.id)] = StageSelectForm(
@@ -435,14 +553,10 @@ def change_stage(request):
     )
     notify.send(
         request.user.employee_get,
-        recipient=User.objects.filter(
+        recipient=HorillaUser.objects.filter(
             id__in=employees.values_list("employee_id__employee_user_id", flat=True)
         ),
-        verb=f"Offboarding stage has been changed",
-        verb_ar=f"تم تغيير مرحلة إنهاء الخدمة",
-        verb_de=f"Die Offboarding-Stufe wurde geändert",
-        verb_es=f"Se ha cambiado la etapa de offboarding",
-        verb_fr=f"L'étape d'offboarding a été changée",
+        verb=gettext_noop("Offboarding stage has been changed"),
         redirect=reverse("offboarding-pipeline"),
         icon="information",
     )
@@ -463,6 +577,70 @@ def change_stage(request):
 
 @login_required
 @hx_request_required
+@any_manager_can_enter("offboarding.change_offboarding")
+def change_offboarding_stage(request):
+    """
+    This method is used to update the stages of the employee
+    """
+    employee_ids = request.GET.getlist("employee_ids")
+    stage_id = request.GET.get("stage_id")
+    if not stage_id:
+        return HttpResponse()
+    employees = OffboardingEmployee.objects.filter(id__in=employee_ids)
+    stage = OffboardingStage.objects.filter(id=stage_id).first()
+    if not stage:
+        return HttpResponse()
+
+    blocked_message = _blocked_required_tasks_message(employees, stage)
+    if blocked_message:
+        return HorillaFormView.HttpResponse(
+            script=(
+                "Swal.fire({"
+                f"icon: 'error', title: {json.dumps(str(_('Cannot Change Stage')))}, "
+                f"text: {json.dumps(blocked_message)}"
+                "});"
+            )
+        )
+
+    # This wont trigger the save method inside the offboarding employee
+    # employees.update(stage_id=stage)
+    for employee in employees:
+        employee.stage_id = stage
+        employee.save()
+    if stage.type == "archived":
+        # Same reason as in change_stage: update() would skip save(), and with
+        # it sync_login_access(), leaving the leaver's login enabled.
+        with transaction.atomic():
+            for leaver in Employee.objects.filter(
+                id__in=employees.values_list("employee_id__id", flat=True),
+                is_active=True,
+            ):
+                leaver.is_active = False
+                leaver.save()
+                leaver.sync_login_access()
+    stage_forms = {}
+    stage_forms[str(stage.offboarding_id.id)] = StageSelectForm(
+        offboarding=stage.offboarding_id
+    )
+    notify.send(
+        request.user.employee_get,
+        recipient=HorillaUser.objects.filter(
+            id__in=employees.values_list("employee_id__employee_user_id", flat=True)
+        ),
+        verb=gettext_noop("Offboarding stage has been changed"),
+        redirect=reverse("offboarding-pipeline"),
+        icon="information",
+    )
+    groups = pipeline_grouper({}, [stage.offboarding_id])
+    for item in groups:
+        setattr(item["offboarding"], "stages", item["stages"])
+
+    return HorillaFormView.HttpResponse()
+
+
+@login_required
+@hx_request_required
+@owner_can_enter("view_offboardingnote", OffboardingNote)
 @any_manager_can_enter(
     "offboarding.view_offboardingnote", offboarding_employee_can_enter=True
 )
@@ -482,7 +660,9 @@ def view_notes(request, employee_id=None):
             attachments.append(attachment)
         note.attachments.add(*attachments)
     offboarding_employee_id = employee_id
-    employee = OffboardingEmployee.objects.get(id=offboarding_employee_id)
+    employee = OffboardingEmployee.objects.filter(id=offboarding_employee_id).first()
+    if not employee:
+        return HttpResponse()
 
     return render(
         request,
@@ -494,13 +674,18 @@ def view_notes(request, employee_id=None):
 
 
 @login_required
+@owner_can_enter("add_offboardingnote", OffboardingNote)
 # @any_manager_can_enter("offboarding.add_offboardingnote")
 def add_note(request):
     """
     This method is used to create note for the offboarding employee
     """
-    employee_id = request.GET["employee_id"]
-    employee = OffboardingEmployee.objects.get(id=employee_id)
+    employee_id = request.GET.get("employee_id")
+    if not employee_id:
+        return HorillaRedirect(request, message=_("Missing required parameter."))
+    employee = OffboardingEmployee.find(employee_id)
+    if not employee:
+        return HorillaRedirect(request, message=_("Employee not found."))
     form = NoteForm()
     if request.method == "POST":
         form = NoteForm(request.POST, request.FILES)
@@ -520,7 +705,7 @@ def add_note(request):
 
 
 @login_required
-@manager_can_enter(perm="offboarding.delete_offboardingNote")
+@manager_can_enter(perm="offboarding.delete_offboardingnote")
 def offboarding_note_delete(request, note_id):
     """
     This method is used to delete the offboarding note
@@ -531,13 +716,12 @@ def offboarding_note_delete(request, note_id):
         note.delete()
         messages.success(request, _("The note has been successfully deleted."))
     except OffboardingNote.DoesNotExist:
-        messages.error(request, _("Note not found."))
-        script = "<script>window.location.reload()</script>"
-
+        return HorillaRedirect(request, message=_("Note not found."))
     return HttpResponse(script)
 
 
 @login_required
+@hx_request_required
 @permission_required("offboarding.delete_offboardingnote")
 def delete_attachment(request):
     """
@@ -597,30 +781,31 @@ def update_task_status(request, *args, **kwargs):
     """
     This method is used to update the assigned tasks status
     """
-    stage_id = request.GET["stage_id"]
+    stage_id = request.GET.get("stage_id")
     employee_ids = request.GET.getlist("employee_ids")
-    task_id = request.GET["task_id"]
-    status = request.GET["task_status"]
+    task_id = request.GET.get("task_id")
+    status = request.GET.get("task_status")
+    if not task_id or not status or not stage_id or not employee_ids:
+        return HorillaRedirect(request, message=_("Missing required parameters."))
     employee_task = EmployeeTask.objects.filter(
         employee_id__id__in=employee_ids, task_id__id=task_id
     )
     employee_task.update(status=status)
+    messages.success(request, _("Task status updated successfully..."))
     notify.send(
         request.user.employee_get,
-        recipient=User.objects.filter(
+        recipient=HorillaUser.objects.filter(
             id__in=employee_task.values_list(
                 "task_id__managers__employee_user_id", flat=True
             )
         ),
-        verb=f"Offboarding Task status has been updated",
-        verb_ar=f"تم تحديث حالة مهمة إنهاء الخدمة",
-        verb_de=f"Der Status der Offboarding-Aufgabe wurde aktualisiert",
-        verb_es=f"Se ha actualizado el estado de la tarea de offboarding",
-        verb_fr=f"Le statut de la tâche d'offboarding a été mis à jour",
+        verb=gettext_noop("Offboarding Task status has been updated"),
         redirect=reverse("offboarding-pipeline"),
         icon="information",
     )
-    stage = OffboardingStage.objects.get(id=stage_id)
+    stage = OffboardingStage.find(stage_id)
+    if not stage:
+        return HorillaRedirect(request, message=_("Stage not found"))
     stage_forms = {}
     stage_forms[str(stage.offboarding_id.id)] = StageSelectForm(
         offboarding=stage.offboarding_id
@@ -646,17 +831,33 @@ def task_assign(request):
     This method is used to assign task to employees
     """
     employee_ids = request.GET.getlist("employee_ids")
-    task_id = request.GET["task_id"]
+    task_id = request.GET.get("task_id")
     employees = OffboardingEmployee.objects.filter(id__in=employee_ids)
-    task = OffboardingTask.objects.get(id=task_id)
+    task = OffboardingTask.find(task_id)
+    if not task:
+        return HorillaRedirect(request, message=_("Task not found"))
+    failed = []
     for employee in employees:
         try:
             assigned_task = EmployeeTask()
             assigned_task.employee_id = employee
             assigned_task.task_id = task
             assigned_task.save()
-        except:
-            pass
+        except (IntegrityError, ValidationError) as error:
+            # The employee already has this task, or the row fails model
+            # validation. Skipping that employee is right, but this was a
+            # bare except inside the loop, so every other failure was also
+            # silent and the caller still saw a success page.
+            failed.append(employee)
+            logger.warning(
+                "task %s not assigned to %s: %s", task.pk, employee.pk, error
+            )
+    if failed:
+        messages.warning(
+            request,
+            _("Task could not be assigned to %(count)s employee(s).")
+            % {"count": len(failed)},
+        )
     offboarding = employees.first().stage_id.offboarding_id
     stage_forms = {}
     stage_forms[str(offboarding.id)] = StageSelectForm(offboarding=offboarding)
@@ -693,6 +894,7 @@ def delete_task(request):
 
 @login_required
 @hx_request_required
+@owner_can_enter("view_employeetask", EmployeeTask)
 def offboarding_individual_view(request, emp_id):
     """
     This method is used to get the individual view of the offboarding employees
@@ -733,8 +935,8 @@ def request_view(request):
     """
     This method is used to view the resignation request
     """
-    defatul_filter = {"status": "requested"}
-    filter_instance = LetterFilter()
+    default_filter = {"status": "requested"}
+    filter_instance = LetterFilter(default_filter)
     letters = ResignationLetter.objects.all()
     offboardings = Offboarding.objects.all()
 
@@ -752,9 +954,12 @@ def request_view(request):
 
 
 @login_required
+@owner_can_enter("view_resignationletter", ResignationLetter)
 @permission_required("offboarding.view_resignationletter")
 def request_single_view(request, id):
-    letter = ResignationLetter.objects.get(id=id)
+    letter = ResignationLetter.find(id)
+    if not letter:
+        return HorillaRedirect(request, message=_("Resignation letter not found"))
     context = {
         "letter": letter,
     }
@@ -773,12 +978,20 @@ def request_single_view(request, id):
 
 
 @login_required
-@hx_request_required
 @check_feature_enabled("resignation_request")
 def search_resignation_request(request):
     """
     This method is used to search/filter the letter
     """
+    # This endpoint returns only the list/filter fragment; a genuine
+    # top-level browser navigation/reload should land on the real
+    # Resignation Requests page instead of showing the raw fragment.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        redirect_url = reverse("resignation-request-view")
+        query_string = request.GET.urlencode()
+        if query_string:
+            redirect_url = f"{redirect_url}?{query_string}"
+        return redirect(redirect_url)
     if request.user.has_perm("offboarding.view_resignationletter"):
         letters = LetterFilter(request.GET).qs
     else:
@@ -833,40 +1046,132 @@ def search_resignation_request(request):
 
 
 @login_required
+@hx_request_required
+@check_feature_enabled("resignation_request")
+def resignation_tab(request, pk):
+
+    letters = ResignationLetter.objects.filter(employee_id=pk)
+    employee = Employee.objects.get(id=pk)
+    return render(
+        request,
+        "cbv/resignation/resignation_tab.html",
+        {"letters": letters, "employee": employee},
+    )
+
+
+def resignation_list_swap_response(original_request):
+    """
+    Render the resignation list CBV fragment for hx-target=\"#listContainer\" swaps.
+    Subrequest keeps session (Horilla CACHE filters) without relying on client-side JS reload.
+    """
+    from django.test import RequestFactory
+
+    from offboarding.cbv.resignation import ResignationListView
+
+    list_path = reverse("list-resignation-request")
+    qs = ""
+    hx_cur = original_request.headers.get("HX-Current-URL", "")
+    if hx_cur:
+        p = urlparse(hx_cur)
+        if "list-resignation-requests" in (p.path or ""):
+            qs = p.query or ""
+
+    try:
+        rf = RequestFactory()
+        path = f"{list_path}?{qs}" if qs else list_path
+        sub = rf.get(
+            path,
+            HTTP_HX_REQUEST="true",
+            HTTP_COOKIE=original_request.META.get("HTTP_COOKIE", ""),
+            HTTP_HOST=original_request.META.get("HTTP_HOST", ""),
+        )
+        sub.user = getattr(original_request, "user", None)
+        sub.session = original_request.session
+        resp = ResignationListView.as_view()(sub)
+        if hasattr(resp, "render") and callable(resp.render):
+            resp = resp.render()
+        return resp
+    except Exception:
+        return HttpResponse(" ", content_type="text/html")
+
+
+@login_required
 @check_feature_enabled("resignation_request")
 def delete_resignation_request(request):
     """
     This method is used to delete resignation letter instance
     """
     ids = request.GET.getlist("letter_ids")
-    ResignationLetter.objects.filter(id__in=ids).delete()
+    if request.user.has_perm("offboarding.delete_resignationletter"):
+        ResignationLetter.objects.filter(id__in=ids).delete()
+    else:
+        ResignationLetter.objects.filter(
+            id__in=ids, employee_id__employee_user_id=request.user
+        ).delete()
     messages.success(request, _("Resignation letter deleted"))
     if request.META.get("HTTP_REFERER") and request.META.get("HTTP_REFERER").endswith(
         "employee-profile/"
     ):
         return redirect("/employee/employee-profile/")
-    else:
-        return redirect(request_view)
+    if request.headers.get("HX-Request"):
+        return resignation_list_swap_response(request)
+    return redirect("resignation-request-view")
 
 
 @login_required
 @hx_request_required
-@check_feature_enabled("resignation_request")
 def create_resignation_request(request):
     """
     This method is used to render form to create resignation requests
     """
+    Selected_company = request.session.get("selected_company")
+    company_id = None
+    if Selected_company and Selected_company != "all":
+        company_id = Selected_company
+        general_setting = OffboardingGeneralSetting.objects.filter(
+            company_id=company_id
+        ).first()
+    else:
+        general_setting = OffboardingGeneralSetting.objects.filter(
+            company_id__isnull=True
+        ).first()
+    feature_enabled = getattr(general_setting, "resignation_request", False)
+    if not feature_enabled and not request.user.is_superuser:
+        can_create = False
+    else:
+        can_create = (
+            feature_enabled
+            or request.user.is_superuser
+            or request.user.has_perm("offboarding.add_resignationletter")
+        )
+    if not can_create:
+        messages.info(request, _("Feature is not enabled on the settings"))
+        return render(request, "decorator_404.html")
     instance_id = eval_validate(str(request.GET.get("instance_id")))
     instance = None
     if instance_id:
         instance = ResignationLetter.objects.get(id=instance_id)
+        if instance.status == "rejected":
+            messages.error(
+                request,
+                _(
+                    "A rejected resignation letter cannot be modified. Only deletion is allowed."
+                ),
+            )
+            return HorillaRedirect(request)
+        if not (
+            request.user.has_perm("offboarding.change_resignationletter")
+            or instance.employee_id == request.user.employee_get
+        ):
+            return render(request, "no_perm.html")
     form = ResignationLetterForm(instance=instance)
     if request.method == "POST":
         form = ResignationLetterForm(request.POST, instance=instance)
         if form.is_valid():
-            form.save()
-            messages.success(request, _("Resignation letter saved"))
-            return HttpResponse("<script>window.location.reload()</script>")
+            if form.save() is not None:
+                messages.success(request, _("Resignation letter saved"))
+            return HorillaRedirect(request)
+
     return render(request, "offboarding/resignation/form.html", {"form": form})
 
 
@@ -917,6 +1222,15 @@ def update_status(request):
     # if use update method instead of save then save method will not trigger
     if status in ["approved", "rejected"]:
         for letter in letters:
+            if letter.status == "rejected":
+                messages.error(
+                    request,
+                    _(
+                        "%(name)s's resignation letter is already rejected and cannot be modified."
+                    )
+                    % {"name": letter.employee_id.get_full_name()},
+                )
+                continue
             letter.status = status
             letter.save()
             if status == "approved":
@@ -924,20 +1238,23 @@ def update_status(request):
                     offboarding, notice_period_starts, notice_period_ends
                 )
             messages.success(
-                request, f"Resignation request has been {letter.get_status_display()}"
+                request,
+                _("Resignation request has been %(status)s")
+                % {"status": letter.get_status_display()},
             )
             notify.send(
                 request.user.employee_get,
                 recipient=letter.employee_id.employee_user_id,
-                verb=f"Resignation request has been {letter.get_status_display()}",
-                verb_ar=f"تم {letter.get_status_display()} طلب الاستقالة",
-                verb_de=f"Der Rücktrittsantrag wurde {letter.get_status_display()}",
-                verb_es=f"La solicitud de renuncia ha sido {letter.get_status_display()}",
-                verb_fr=f"La demande de démission a été {letter.get_status_display()}",
+                verb=gettext_noop(
+                    "Resignation request has been %(get_status_display)s"
+                ),
+                verb_params={"get_status_display": str(letter.get_status_display())},
                 redirect="#",
                 icon="information",
             )
-    return redirect(request_view)
+    if request.headers.get("HX-Request"):
+        return resignation_list_swap_response(request)
+    return redirect(reverse("resignation-request-view"))
 
 
 @login_required
@@ -947,12 +1264,21 @@ def enable_resignation_request(request):
     """
     Enable disable resignation letter feature
     """
-    resignation_request_feature = OffboardingGeneralSetting.objects.first()
-    resignation_request_feature = (
-        resignation_request_feature
-        if resignation_request_feature
-        else OffboardingGeneralSetting()
-    )
+    selected_company = request.session.get("selected_company")
+
+    if selected_company and selected_company != "all":
+        resignation_request_feature = OffboardingGeneralSetting.objects.filter(
+            company_id=selected_company
+        ).first()
+        if not resignation_request_feature:
+            resignation_request_feature = OffboardingGeneralSetting(
+                company_id_id=selected_company
+            )
+    else:
+        resignation_request_feature = OffboardingGeneralSetting.objects.first()
+        if not resignation_request_feature:
+            resignation_request_feature = OffboardingGeneralSetting()
+
     resignation_request_feature.resignation_request = (
         "resignation_request" in request.GET.keys()
     )
@@ -979,12 +1305,25 @@ def enable_resignation_request(request):
 
 
 @login_required
+def offboarding_rules_settings_view(request):
+    """
+    Merged "Offboarding Rules" settings page that groups the Resignation
+    Request toggle and the Notice Period setting under a single header. Each
+    section reuses its existing toggle/save endpoint; the current state is
+    provided by the global context processors (enabled_resignation_request and
+    get_initial_notice_period).
+    """
+    return render(request, "offboarding/settings/offboarding_rules.html")
+
+
+@login_required
+@hx_request_required
 @permission_required("offboarding.add_offboardingemployee")
 def get_notice_period(request):
     """
     This method is used to get initial details for notice period
     """
-    employee_id = request.GET["employee_id"]
+    employee_id = request.GET.get("employee_id")
     if apps.is_installed("payroll"):
         Contract = get_horilla_model_class(app_label="payroll", model="contract")
         employee_contract = (
@@ -1013,12 +1352,17 @@ def get_notice_period(request):
     return JsonResponse(response)
 
 
+@login_required
+@hx_request_required
 def get_notice_period_end_date(request):
     """
     Calculates and returns the end date of the notice period based on the provided start date.
     """
     start_date = request.GET.get("start_date")
-    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    try:
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        start_date = datetime.today().date()
     notice_period = intial_notice_period(request)["get_initial_notice_period"]
     end_date = start_date + timedelta(days=notice_period)
     response = {
@@ -1069,6 +1413,7 @@ def offboarding_dashboard(request):
 
 
 @login_required
+@hx_request_required
 @any_manager_can_enter(
     ["offboarding.view_offboarding", "offboarding.view_offboardingtask"]
 )
@@ -1090,6 +1435,7 @@ def dashboard_task_table(request):
 if apps.is_installed("asset"):
 
     @login_required
+    @hx_request_required
     @any_manager_can_enter(["offboarding.view_offboarding"])
     def dashboard_asset_table(request):
         """
@@ -1116,6 +1462,7 @@ if apps.is_installed("asset"):
 if apps.is_installed("pms"):
 
     @login_required
+    @hx_request_required
     @any_manager_can_enter("offboarding.view_offboarding")
     def dashboard_feedback_table(request):
         """

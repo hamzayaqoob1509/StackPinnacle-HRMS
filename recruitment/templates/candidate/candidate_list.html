@@ -60,9 +60,11 @@
   <div class="oh-checkpoint-badge text-secondary mb-2" id="unselectAllInstances" style="cursor: pointer;display: none;">
     {% trans "Unselect All Candidates" %}
   </div>
+  {% if export_access_enabled or perms.recruitment.export_candidate %}
   <div class="oh-checkpoint-badge text-info mb-2" id="exportCandidates" style="cursor: pointer;display: none;">
       {% trans "Export Candidates" %}
   </div>
+  {% endif %}
   <div class="oh-checkpoint-badge text-danger mb-2" id="selectedCandidate" style="display: none">
   </div>
   <!-- start of select all -->
@@ -71,7 +73,7 @@
     <div class="oh-sticky-dropdown--header">
       <div class="oh-dropdown" x-data="{open: false}">
         <button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-          role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+          role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
         <div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
         <ul class="oh-dropdown__items" id="CandidateCells">
         </ul>
@@ -90,7 +92,7 @@
               <div class="centered-div" align="center">
                 <input type="checkbox" class="oh-input oh-input__checkbox group-select"
                 onchange="$(this).closest('.oh-sticky-table').find('.candidate-checkbox').prop('checked',$(this).is(':checked')).change();"
-                 title="Select All"  />
+                 title="{% trans 'Select All' %}"  />
               </div>
             </div>
             <div class="oh-sticky-table__th {% if request.sort_option.order == '-name' %}arrow-up {% elif request.sort_option.order == 'name' %}arrow-down {% else %} arrow-up-down {% endif %}"  hx-target='#section' hx-get="{% url 'search-candidate' %}?{{pd}}&orderby=name&view=list">{% trans "Candidates" %}</div>
@@ -132,7 +134,7 @@
                   <div class="oh-profile__avatar mr-1">
                     <img src="{{cand.get_avatar}}"
                     class="oh-profile__image"
-                    alt="Username" />
+                    alt="{{ cand }}" />
                   </div>
                   <span class="oh-profile__name oh-text--dark">{{cand}}</span>
                 </a>
@@ -189,9 +191,9 @@
                   {% if perms.recruitment.change_candidate %}
                     {% if not cand.email in emp_list and not cand.start_onboard %}
                       <a href="{% url 'candidate-conversion' cand.id %}"
-                        onclick="return confirm('{% trans "Are you sure you want to convert this candidate into an employee?" %}')"
+                        onclick="return confirm('{% trans "Are you sure you want to convert this candidate into an employee?"|escapejs %}')"
                         class="oh-btn oh-btn--light-bkg w-100"
-                        title='{% trans "To employee " %}'
+                        title="{% trans 'To employee ' %}"
                         style="padding:0.8rem 1rem"
                       >
                         <ion-icon name="person-circle-outline"></ion-icon></a>
@@ -199,7 +201,7 @@
                       <button class="oh-btn oh-btn--light-bkg w-100"  title='{% trans "Converted " %}' style="opacity: 30%; padding:0.8rem 1rem" disabled>
                         <ion-icon name="person-circle-outline"></ion-icon></button>
                     {% else %}
-                      <button class="oh-btn oh-btn--light-bkg w-100"  title='{% trans "Candidate in Onboarding " %}' style="opacity: 30%; padding:0.8rem 1rem" disabled>
+                      <button class="oh-btn oh-btn--light-bkg w-100"  title="{% trans 'Candidate in Onboarding ' %}" style="opacity: 30%; padding:0.8rem 1rem" disabled>
                         <ion-icon name="person-circle-outline"></ion-icon></button>
                     {% endif %}
                   {% endif %}
@@ -208,7 +210,7 @@
                       <button class="oh-btn oh-btn--light-bkg w-100"  title='{% trans "Candidate is Converted " %}' style="opacity: 30%; padding:0.8rem 1rem">
                         <ion-icon name="heart-circle-outline"></ion-icon></button>
                     {% else %}
-                      <button class="oh-btn oh-btn--light-bkg w-100" title="{% trans 'To Skill zone' %}"
+                      <button class="oh-btn oh-btn--light-bkg w-100" title="{% trans 'To Talent Pool' %}"
                           data-toggle="oh-modal-toggle"
                           data-target="#createModal"
                           hx-get="{% url 'to-skill-zone' cand.id %}"
@@ -265,32 +267,32 @@
                 <div class="oh-btn-group">
                   {% if perms.recruitment.change_candidate %}
                   <a href="{% url 'rec-candidate-update' cand.id %}" hx-target='#updateFormContainer' hx-swap='innerHTML'
-                    class="oh-btn oh-btn--light-bkg w-100" title="Edit"><ion-icon name="create-outline"></ion-icon></a>
+                    class="oh-btn oh-btn--light-bkg w-100" title="{% trans 'Edit' %}"><ion-icon name="create-outline"></ion-icon></a>
                   {% endif %}
                   {% if perms.recruitment.delete_candidate %}
                   {% if cand.is_active %}
-                  <form action="{% url 'rec-candidate-archive' cand.id  %}" title="Archive" onsubmit="return confirm('{% trans "Do you want to archive this candidate?" %}')" method='post'
+                  <form action="{% url 'rec-candidate-archive' cand.id  %}" title="{% trans 'Archive' %}" onsubmit="return confirm('{% trans "Do you want to archive this candidate?"|escapejs %}')" method='post'
                     class="w-50">
                   {% csrf_token %}
-                  <button type='submit' class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
-                    ><ion-icon name="archive" title="Archive"></ion-icon></button>
+                  <button type='submit' class="oh-btn oh-btn--danger w-100"
+                    ><ion-icon name="archive" title="{% trans 'Archive' %}"></ion-icon></button>
                   </form>
                   {% else %}
 
-                  <form action="{% url 'rec-candidate-archive' cand.id  %}"  title="Un Archive" onsubmit="return confirm('{% trans "Do you want to un-archive this candidate?" %}')" method='post'
+                  <form action="{% url 'rec-candidate-archive' cand.id  %}"  title="{% trans 'Un Archive' %}" onsubmit="return confirm('{% trans "Do you want to un-archive this candidate?"|escapejs %}')" method='post'
                     class="w-100">
                     {% csrf_token %}
-                    <button type='submit' class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                    <button type='submit' class="oh-btn oh-btn--danger w-100"
                       ><ion-icon name="archive"></ion-icon></button>
                   </form>
                   {% endif %}
                   {% endif %}
                   {% if perms.recruitment.delete_candidate %}
-                  <form action="{% url 'rec-candidate-delete' cand.id  %}" onsubmit="return confirm('{% trans "Do you want to delete this candidate?" %}')" method='post'
+                  <form action="{% url 'rec-candidate-delete' cand.id  %}" onsubmit="return confirm('{% trans "Do you want to delete this candidate?"|escapejs %}')" method='post'
                     onsubmit="Are you sure want to delete this candidate?" class="w-100">
                     {% csrf_token %}
-                    <button type='submit' class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
-                      title="Remove"><ion-icon name="trash-outline"></ion-icon></button>
+                    <button type='submit' class="oh-btn oh-btn--danger w-100"
+                      title="{% trans 'Remove' %}"><ion-icon name="trash-outline"></ion-icon></button>
                   </form>
                   {% endif %}
                 </div>
@@ -372,7 +374,7 @@
       <span class="oh-modal__dialog-title" id="sendMailModalLabel">
         <h5>{% trans "Send Mail" %}</h5>
       </span>
-      <button class="oh-modal__close" aria-label="Close">
+      <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
         <ion-icon name="close-outline"></ion-icon>
       </button>
     </div>
@@ -385,45 +387,6 @@
 
 
 <script>
-  var archive_CanMessages = {
-    ar: "هل ترغب حقًا في أرشفة جميع المرشحين المحددين؟",
-    de: "Möchten Sie wirklich alle ausgewählten Kandidaten archivieren?",
-    es: "¿Realmente deseas archivar a todos los candidatos seleccionados?",
-    en: "Do you really want to archive all the selected candidates?",
-    fr: "Voulez-vous vraiment archiver tous les candidats sélectionnés?",
-  };
-
-  var unarchive_CanMessages = {
-    ar: "هل ترغب حقًا في إلغاء أرشفة جميع المرشحين المحددين؟",
-    de: "Möchten Sie wirklich alle ausgewählten Kandidaten aus der Archivierung nehmen?",
-    es: "¿Realmente deseas desarchivar a todos los candidatos seleccionados?",
-    en: "Do you really want to unarchive all the selected candidates?",
-    fr: "Voulez-vous vraiment désarchiver tous les candidats sélectionnés?",
-  };
-
-  var delete_CanMessages = {
-    ar: "هل ترغب حقًا في حذف جميع المرشحين المحددين؟",
-    de: "Möchten Sie wirklich alle ausgewählten Kandidaten löschen?",
-    es: "¿Realmente deseas eliminar a todos los candidatos seleccionados?",
-    en: "Do you really want to delete all the selected candidates?",
-    fr: "Voulez-vous vraiment supprimer tous les candidats sélectionnés?",
-  };
-
-  var noRowMessages = {
-    ar: "لم يتم تحديد أي صفوف.",
-    de: "Es wurden keine Zeilen ausgewählt.",
-    es: "No se han seleccionado filas.",
-    en: "No rows have been selected.",
-    fr: "Aucune ligne n'a été sélectionnée.",
-  };
-
-  var rowMessages = {
-    ar: " تم الاختيار",
-    de: " Ausgewählt",
-    es: " Seleccionado",
-    en: " Selected",
-    fr: " Sélectionné",
-  };
   function makeListUnique1(list) {
     return Array.from(new Set(list));
   }
@@ -474,7 +437,7 @@
     $("#unselectAllInstances, #selectedCandidate, #exportCandidates").hide();
     if (ids.length) {
       $("#unselectAllInstances, #selectedCandidate, #exportCandidates").show();
-      $("#selectedCandidate").text("{% trans "Selected" %}" + " -" + ids.length);
+      $("#selectedCandidate").text("{% trans 'Selected'|escapejs %}" + " -" + ids.length);
     }
   }
 
@@ -491,43 +454,11 @@
   });
 
 
-  function getCurrentLanguageCode(callback) {
-    var languageCode = $("#main-section-data").attr("data-lang");
-    var allowedLanguageCodes = ["ar", "de", "es", "en", "fr"];
-    if (allowedLanguageCodes.includes(languageCode)) {
-      callback(languageCode);
-    } else {
-      $.ajax({
-        type: "GET",
-        url: "/employee/get-language-code/",
-        success: function (response) {
-          var ajaxLanguageCode = response.language_code;
-          $("#main-section-data").attr("data-lang", ajaxLanguageCode);
-          callback(
-            allowedLanguageCodes.includes(ajaxLanguageCode)
-              ? ajaxLanguageCode
-              : "en"
-          );
-        },
-        error: function () {
-          callback("en");
-        },
-      });
-    }
-  }
-
   $(document).ready(function () {
-    var excelMessages = {
-      ar: "هل ترغب في تنزيل ملف Excel؟",
-      de: "Möchten Sie die Excel-Datei herunterladen?",
-      es: "¿Desea descargar el archivo de Excel?",
-      en: "Do you want to download the excel file?",
-      fr: "Voulez-vous télécharger le fichier Excel?",
-    };
     var ids = JSON.parse($("#selectedInstances").attr("data-ids") || "[]");
     var uniqueIds = makeListUnique1(ids);
     var selectedCount = uniqueIds.length;
-    var message1 = rowMessages[languageCode];
+
     $("#selectAllInstances").click(function () {
       $("#selectedInstances").attr("data-clicked", 1);
       var savedFilters = JSON.parse(localStorage.getItem("savedFilters"));
@@ -588,49 +519,44 @@
     });
     $("#exportCandidates").click(function (e) {
       var currentDate = new Date().toISOString().slice(0, 10);
-      var languageCode = null;
       ids = [];
       ids.push($("#selectedInstances").attr("data-ids"));
       ids = JSON.parse($("#selectedInstances").attr("data-ids"));
-      getCurrentLanguageCode(function (code) {
-        languageCode = code;
-        var confirmMessage = excelMessages[languageCode];
-        Swal.fire({
-          text: confirmMessage,
-          icon: "question",
-          showCancelButton: true,
-          confirmButtonColor: "#008000",
-          cancelButtonColor: "#d33",
-          confirmButtonText: "Confirm",
-        }).then(function (result) {
-          if (result.isConfirmed) {
-            $.ajax({
-              type: "GET",
-              url: "/recruitment/candidate-info-export",
-              data: {
-                ids: JSON.stringify(ids),
-              },
-              dataType: "binary",
-              xhrFields: {
-                responseType: "blob",
-              },
-              success: function (response) {
-                const file = new Blob([response], {
-                  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                });
-                const url = URL.createObjectURL(file);
-                const link = document.createElement("a");
-                link.href = url;
-                link.download = "Candidate_file_" + currentDate + ".xlsx";
-                document.body.appendChild(link);
-                link.click();
-              },
-              error: function (xhr, textStatus, errorThrown) {
-                console.error("Error downloading file:", errorThrown);
-              },
-            });
-          }
-        });
+      Swal.fire({
+        text: i18nMessages.downloadExcel,
+        icon: "question",
+        showCancelButton: true,
+        confirmButtonColor: "#008000",
+        cancelButtonColor: "#6c757d",
+        confirmButtonText: i18nMessages.confirm,
+      }).then(function (result) {
+        if (result.isConfirmed) {
+          $.ajax({
+            type: "GET",
+            url: "/recruitment/candidate-info-export",
+            data: {
+              ids: JSON.stringify(ids),
+            },
+            dataType: "binary",
+            xhrFields: {
+              responseType: "blob",
+            },
+            success: function (response) {
+              const file = new Blob([response], {
+                type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              });
+              const url = URL.createObjectURL(file);
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = "Candidate_file_" + currentDate + ".xlsx";
+              document.body.appendChild(link);
+              link.click();
+            },
+            error: function (xhr, textStatus, errorThrown) {
+              console.error("Error downloading file:", errorThrown);
+            },
+          });
+        }
       });
     });
   });

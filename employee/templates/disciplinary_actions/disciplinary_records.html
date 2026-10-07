@@ -1,8 +1,5 @@
-{% load basefilters %}
-{% load horillafilters %}
-{% load employee_filter %}
-{% load static %}
-{% load i18n %}
+{% load basefilters horillafilters employee_filter static i18n %}
+
 {% include 'filter_tags.html' %}
 {% if messages %}
 <div class="oh-wrapper">
@@ -21,7 +18,7 @@
     <div class="oh-sticky-dropdown--header m-0">
         <div class="oh-dropdown" x-data="{open: false}">
             <button class="oh-sticky-dropdown_btn " @click="open = !open"><ion-icon name="ellipsis-vertical-sharp"
-                    role="img" class="md hydrated" aria-label="ellipsis vertical sharp"></ion-icon></button>
+                    role="img" class="md hydrated" aria-label="{% trans 'ellipsis vertical sharp' %}"></ion-icon></button>
             <div class="oh-dropdown__menu oh-sticky-table_dropdown" x-show="open" @click.outside="open = false">
                 <ul class="oh-dropdown__items" id="displinaryActionCells">
                 </ul>
@@ -39,11 +36,11 @@
                     <div class="oh-sticky-table__th">
                         {% trans "Employee" %}
                     </div>
-                    <div data-cell-index="1" data-cell-title='{% trans "Action Taken" %}' class="oh-sticky-table__th">{% trans "Action Taken" %}</div>
-                    <div data-cell-index="5" data-cell-title='{% trans "Login Block" %}' class="oh-sticky-table__th">{% trans "Login Block" %}</div>
-                    <div data-cell-index="2" data-cell-title='{% trans "Action Date" %}' class="oh-sticky-table__th">{% trans "Action Date" %}</div>
-                    <div data-cell-index="3" data-cell-title='{% trans "Attachments" %}' class="oh-sticky-table__th">{% trans "Attachments" %}</div>
-                    <div data-cell-index="4" data-cell-title='{% trans "Description" %}' class="oh-sticky-table__th">{% trans "Description" %}</div>
+                    <div data-cell-index="1" data-cell-title="{% trans "Action Taken" %}" class="oh-sticky-table__th">{% trans "Action Taken" %}</div>
+                    <div data-cell-index="5" data-cell-title="{% trans "Login Block" %}" class="oh-sticky-table__th">{% trans "Login Block" %}</div>
+                    <div data-cell-index="2" data-cell-title="{% trans "Action Date" %}" class="oh-sticky-table__th">{% trans "Action Date" %}</div>
+                    <div data-cell-index="3" data-cell-title="{% trans "Attachments" %}" class="oh-sticky-table__th">{% trans "Attachments" %}</div>
+                    <div data-cell-index="4" data-cell-title="{% trans "Description" %}" class="oh-sticky-table__th">{% trans "Description" %}</div>
                     {% if perms.employee.change_disciplinaryaction or perms.employee.delete_disciplinaryaction or perms.employee.add_disciplinaryaction %}
                         <div class="oh-sticky-table__th">{% trans "Actions" %}</div>
                     {% endif %}
@@ -64,7 +61,7 @@
                                         name="chevron-up-outline"></ion-icon></span>
                             </button>
                             <span class="count-span"
-                                style="font-style:italic;color:hsl(0deg,0%,37%);">{{i.employee_id.all|length}}
+                                style="font-style:italic;">{{i.employee_id.all|length}}
                                 {% if i.employee_id.all|length > 1 %}
                                 {% trans "Employees" %}
                                 {% else %}
@@ -76,7 +73,7 @@
                             <span class="oh-user-panel oh-collapse-panel" data-type="user">
                                 <div class="oh-profile oh-profile--md">
                                     <div class="oh-profile__avatar mr-1">
-                                        <img src="https://ui-avatars.com/api/?name={{emp.get_full_name}}&background=random" class="oh-profile__image" alt="Baby C." />
+                                        <img src="https://ui-avatars.com/api/?name={{emp.get_full_name}}&background=random" class="oh-profile__image" alt="{% trans 'Employee' %}" />
                                     </div>
                                     <span class="oh-profile__name oh-text--dark" title="{{emp}}">{{emp.get_full_name}}</span>
                                 </div>
@@ -154,7 +151,7 @@
                             <form hx-confirm="{% trans 'Are you sure you want to delete this disciplinary action?' %}"
                                 hx-post="{% url 'delete-actions' i.id %}" hx-target="#actionContainer" class="w-100">
                                 {% csrf_token %}
-                                <button type='submit' class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+                                <button type='submit' class="oh-btn oh-btn--danger w-100"
                                     title="{% trans 'Remove' %}"><ion-icon name="trash-outline"></ion-icon></button>
                             </form>
                             {% endif %}

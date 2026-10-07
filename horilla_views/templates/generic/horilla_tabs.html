@@ -18,7 +18,7 @@
         onclick="
         switchTab(event);
         if (!$(this).attr('data-loaded')) {
-            htmx.ajax('GET', '{{tab.url}}?{{request.GET.urlencode}}', {target: '#{{view_id}}{{forloop.counter}}'});
+            htmx.ajax('GET', '{{tab.url}}', {target: '#{{view_id}}{{forloop.counter}}'});
             this.setAttribute('data-loaded', 'true');
         }
         "
@@ -31,13 +31,13 @@
               id="badge-{{view_id}}{{forloop.counter}}"
               {% if tab.badge_label %}
               data-badge-label="{{tab.badge_label}}"
-              title="0 {{tab.badge_label}}"
+              title="{{tab.badge|default:0}} {{tab.badge_label}}"
               {% else %}
-              title="0 {% trans "Records" %}"
+              title="{{tab.badge|default:0}} {% trans "Records" %}"
               {% endif %}
               onclick="event.stopPropagation()"
             >
-              0
+              {{ tab.badge|default:0 }}
             </span>
           </div>
           {% if tab.actions %}
@@ -46,13 +46,13 @@
               class="oh-btn oh-stop-prop oh-btn--transparent oh-accordion-meta__btn"
               @click="open = !open"
               @click.outside="open = false"
-              title="Actions"
+              title="{% trans 'Actions' %}"
             >
               <ion-icon
                 name="ellipsis-vertical"
                 role="img"
                 class="md hydrated"
-                aria-label="ellipsis vertical"
+                aria-label="{% trans 'ellipsis vertical' %}"
               ></ion-icon>
             </button>
             <div
@@ -88,7 +88,6 @@
         class="oh-tabs__content {% if forloop.counter == 1 and not active_target %} oh-tabs__content--active {% endif %}"
         id="{{view_id}}{{forloop.counter}}"
       >
-    <div class="animated-background"></div>
     </div>
       {% endfor %}
     </div>

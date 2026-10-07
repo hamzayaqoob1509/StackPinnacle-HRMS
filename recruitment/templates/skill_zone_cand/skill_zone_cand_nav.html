@@ -11,7 +11,7 @@
       <h2 class="oh-modal__dialog-title" id="candidateExportLavel">
         {% trans "Export Candidates" %}
       </h2>
-      <button class="oh-modal__close" aria-label="Close">
+      <button class="oh-modal__close" aria-label="{% trans 'Close' %}">
         <ion-icon name="close-outline"></ion-icon>
       </button>
       <div
@@ -24,7 +24,7 @@
           onsubmit="event.stopPropagation();$(this).parents().find('.oh-modal--show').last().toggleClass('oh-modal--show');"
           id="candidateExportForm"
         >
-          {% csrf_token %} {% include 'candidate/export_filter.html'%}
+          {% csrf_token %} {% include 'candidate/export_filter.html' with embedded=True %}
           <div class="oh-dropdown__filter-footer">
             <button class="oh-btn oh-btn--secondary oh-btn--small w-100">
               {% trans "Export" %}
@@ -45,7 +45,7 @@ x-data="{searchShow: false}"
   <a
     class="oh-main__titlebar-search-toggle "
     role="button"
-    aria-label="Toggle Search"
+    aria-label="{% trans 'Toggle Search' %}"
     @click="searchShow = !searchShow"
   >
     <ion-icon
@@ -75,7 +75,7 @@ x-data="{searchShow: false}"
       hx-target="#section"
       class="oh-input oh-input__icon"
       hx-vals = '{"view":"{{request.GET.view}}"}'
-      aria-label="Search Input"
+      aria-label="{% trans 'Search Input' %}"
     />
   </div>
   <ul class="oh-view-types ml-2" style="margin-bottom: 0;" id="view-type">
@@ -136,7 +136,7 @@ x-data="{searchShow: false}"
       >
           <ul class="oh-dropdown__items">
             <li class="oh-dropdown__item">
-              {% if perms.delete_candidates %}
+              {% if perms.recruitment.delete_candidate %}
               <a
                 href="#"
                 class="oh-dropdown__link"
@@ -147,7 +147,7 @@ x-data="{searchShow: false}"
               >
               {% endif %}
             </li>
-            {% if perms.delete_candidates %}
+            {% if perms.recruitment.delete_candidate %}
             <li class="oh-dropdown__item">
               <a href="#" class="oh-dropdown__link " id="archiveCandidates"
 
@@ -156,7 +156,7 @@ x-data="{searchShow: false}"
             </li>
             {% endif %}
 
-            {% if perms.delete_candidates %}
+            {% if perms.recruitment.delete_candidate %}
             <li class="oh-dropdown__item">
               <a href="#" class="oh-dropdown__link "
 
@@ -166,7 +166,7 @@ x-data="{searchShow: false}"
             </li>
             {% endif %}
 
-            {% if perms.delete_candidates %}
+            {% if perms.recruitment.delete_candidate %}
             <li class="oh-dropdown__item">
               <a
                 href="#"

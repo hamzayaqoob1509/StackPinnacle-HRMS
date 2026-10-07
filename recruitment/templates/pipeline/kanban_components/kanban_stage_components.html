@@ -46,9 +46,9 @@
                             <li class="oh-dropdown__item">
                                 <a class="oh-dropdown__link"
                                 hx-get="{% url 'add-candidate-to-stage' %}?stage_id={{stage.id}}"
-                                hx-target="#createTarget"
+                                hx-target="#objectCreateModalTarget"
                                 data-toggle="oh-modal-toggle"
-                                data-target="#createModal"  data-key=".oh-kanban__section">{% trans "Add Candidate" %}</a>
+                                data-target="#objectCreateModal"  data-key=".oh-kanban__section">{% trans "Add Candidate" %}</a>
                             </li>
                             {% endif %}
                             {% if perms.recruitment.change_stage or request.user.employee_get in rec.recruitment_managers.all or request.user.employee_get in stage.stage_managers.all %}
@@ -58,7 +58,7 @@
                             {% endif %}
                             {% if perms.recruitment.delete_stage %}
                             <li class="oh-dropdown__item">
-                                <form action="{% url 'rec-stage-delete' stage.id %}" onsubmit="return confirm('{% trans "Are you sure you want to delete this stage?" %}');" method="post">
+                                <form action="{% url 'rec-stage-delete' stage.id %}" onsubmit="return confirm('{% trans "Are you sure you want to delete this stage?"|escapejs %}');" method="post">
                                     {% csrf_token %}
                                     <button class="oh-dropdown__link oh-dropdown__link--danger ">{% trans "Delete" %}</button>
                                 </form>
@@ -80,7 +80,6 @@
         hx-trigger="load"
         id="kanbanCandidates{{stage.id}}"
         >
-        <div class="animated-background" ondrop="event.stopPropagation()" ondrag="event.stopPropagation()"></div>
 
     </div>
 
@@ -91,7 +90,7 @@
 {% if perms.recruitment.add_stage or request.user.employee_get in rec.recruitment_managers.all %}
 <div class="oh-kanban__add-container">
     <button class="oh-btn oh-btn--x-small oh-kanban__add-section"data-target="#objectCreateModal" data-toggle="oh-modal-toggle" hx-get="{% url "rec-stage-create" %}?recruitment_id={{rec.id}}" hx-target="#objectCreateModalTarget">
-        <ion-icon class="me-1 md hydrated" name="add-outline" role="img" aria-label="add outline"></ion-icon>
+        <ion-icon class="me-1 md hydrated" name="add-outline" role="img" aria-label="{% trans 'add outline' %}"></ion-icon>
         {% trans "Stage" %}
     </button>
 </div>

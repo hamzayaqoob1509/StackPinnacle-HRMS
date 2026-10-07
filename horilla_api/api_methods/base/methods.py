@@ -46,10 +46,26 @@ def groupby_queryset(request, url, field_name, queryset):
 
 
 def permission_based_queryset(user, perm, queryset, user_obj=None):
+    # Handle AnonymousUser during schema generation
+    if not user.is_authenticated:
+        return queryset.none()
+
     if user.has_perm(perm):
         return queryset
 
     employee = user.employee_get
+
+    # Every narrowing branch below filters on employee_id, but 30 of the
+    # models routed through this helper have no such field -- LinkedInAccount,
+    # Recruitment, Objective, Project and the onboarding/offboarding stage
+    # and task models among them. Those filters raise FieldError, so a user
+    # *without* the permission got a 500 instead of a restricted list. There
+    # is no per-employee predicate to apply on such a model, and returning
+    # the unfiltered queryset would hand a permissionless caller everything,
+    # so the correct answer is an empty queryset.
+    if not any(f.name == "employee_id" for f in queryset.model._meta.fields):
+        return queryset.none()
+
     is_manager = EmployeeWorkInformation.objects.filter(
         reporting_manager_id=employee
     ).exists()
@@ -68,3 +84,18 @@ def permission_based_queryset(user, perm, queryset, user_obj=None):
         return merged_queryset
 
     return queryset.filter(employee_id=employee)
+
+
+def reject_reason_from(request):
+    """
+    The optional ``reason`` a reject call carries, trimmed, or None.
+
+    Reject endpoints took no reason at all, so an employee learned only that
+    a request was rejected, never why. Optional, so existing clients that
+    send no body keep working unchanged.
+    """
+    reason = request.data.get("reason") if hasattr(request, "data") else None
+    if not isinstance(reason, str):
+        return None
+    reason = reason.strip()
+    return reason[:1000] or None

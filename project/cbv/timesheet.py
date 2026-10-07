@@ -1,5 +1,5 @@
 """
-CBV of time sheet page
+CBV of timesheet page
 """
 
 from typing import Any
@@ -8,10 +8,12 @@ from django import forms
 from django.contrib import messages
 from django.db.models import Q
 from django.http import HttpResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.urls import resolve, reverse
 from django.utils.decorators import method_decorator
+from django.utils.formats import localize
 from django.utils.functional import cached_property
+from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _
 
 from employee.models import Employee
@@ -29,19 +31,46 @@ from project.cbv.projects import DynamicProjectCreationFormView
 from project.cbv.tasks import DynamicTaskCreateFormView
 from project.filters import TimeSheetFilter
 from project.forms import TimeSheetForm
+from project.methods import any_project_manager, any_task_manager, any_task_member
 from project.models import Project, Task, TimeSheet
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(
-    is_projectmanager_or_member_or_perms("project.view_timesheet"), name="dispatch"
-)
 class TimeSheetView(TemplateView):
     """
-    for time sheet page
+    for timesheet page
     """
 
     template_name = "cbv/timesheet/timesheet.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        context["can_view_all_timesheets"] = (
+            user.has_perm("project.view_timesheet")
+            or any_project_manager(user)
+            or any_task_manager(user)
+            or any_task_member(user)
+        )
+        return context
+
+
+@method_decorator(login_required, name="dispatch")
+class TimeSheetTabShell(TemplateView):
+    """
+    All Timesheets tab pane
+    """
+
+    template_name = "cbv/timesheet/all_timesheet_tab.html"
+
+
+@method_decorator(login_required, name="dispatch")
+class MyTimeSheetTabShell(TemplateView):
+    """
+    My Timesheets tab pane
+    """
+
+    template_name = "cbv/timesheet/my_timesheet_tab.html"
 
 
 @method_decorator(login_required, name="dispatch")
@@ -58,6 +87,11 @@ class TimeSheetNavView(HorillaNavView):
     search_swap_target = "#listContainer"
     template_name = "cbv/timesheet/timesheet_nav.html"
     filter_body_template = "cbv/timesheet/filter.html"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. TimeSheetFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
     group_by_fields = [
         "employee_id",
         "project_id",
@@ -70,10 +104,25 @@ class TimeSheetNavView(HorillaNavView):
         "employee_id__employee_work_info__company_id",
     ]
 
+    # Mirrors TimeSheetList.nested_group_by_fields below -- List and Nav
+    # are separate classes/templates (see employee/cbv/employees.py's
+    # EmployeesList/EmployeeNav for the same split).
+    nested_group_by_fields = [
+        "employee_id",
+        "project_id",
+        "task_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("time-sheet-list")
-        url = f"{reverse('personal-time-sheet-view',kwargs={'emp_id': self.request.user.employee_get.id})}"
         self.actions = [
             {
                 "action": _("Delete"),
@@ -85,34 +134,97 @@ class TimeSheetNavView(HorillaNavView):
                     """,
             },
         ]
+        self.create_attrs = f"""
+                                onclick = "event.stopPropagation();"
+                                data-toggle="oh-modal-toggle"
+                                data-target="#genericModal"
+                                hx-target="#genericModalBody"
+                                hx-get="{reverse('create-time-sheet')}"
+                                """
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        url = f"{reverse('personal-time-sheet-view',kwargs={'emp_id': self.request.user.employee_get.id})}"
         self.view_types = [
             {
                 "type": "list",
                 "icon": "list-outline",
                 "url": reverse("time-sheet-list"),
-                "attrs": """
-                        title ='List'
+                "attrs": f"""
+                        title ='{_("List")}'
                         """,
             },
             {
                 "type": "card",
                 "icon": "grid-outline",
                 "url": reverse("time-sheet-card"),
-                "attrs": """
-                          title ='Card'
+                "attrs": f"""
+                          title ='{_("Card")}'
                           """,
             },
             {
                 "type": "graph",
                 "icon": "bar-chart",
+                "url": url,
                 "attrs": f"""
-                          onclick="event.stopPropagation();
-                          window.location.href='{url}'"
                           title ='Graph'
                           """,
             },
         ]
+        context["view_types"] = self.view_types
+        return context
 
+
+@method_decorator(login_required, name="dispatch")
+class MyTimeSheetNavView(HorillaNavView):
+    """Nav bar for the My Timesheets tab."""
+
+    filter_form_context_name = "form"
+    filter_instance = TimeSheetFilter()
+    search_swap_target = "#myListContainer"
+    template_name = "cbv/timesheet/timesheet_nav.html"
+    filter_body_template = "cbv/timesheet/filter.html"
+    modern_filter = True
+    group_by_fields = [
+        "employee_id",
+        "project_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
+    # Mirrors MyTimeSheetList.nested_group_by_fields below.
+    nested_group_by_fields = [
+        "employee_id",
+        "project_id",
+        "task_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("my-time-sheet-list")
+        self.actions = [
+            {
+                "action": _("Delete"),
+                "attrs": """
+                    class="oh-dropdown__link--danger"
+                    data-action ="delete"
+                    onclick="deleteTimeSheet();"
+                    style="cursor: pointer; color:red !important"
+                    """,
+            },
+        ]
         self.create_attrs = f"""
                                 onclick = "event.stopPropagation();"
                                 data-toggle="oh-modal-toggle"
@@ -133,6 +245,7 @@ class TimeSheetList(HorillaListView):
 
     model = TimeSheet
     filter_class = TimeSheetFilter
+    view_id = "timeSheetListContainer"
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -151,22 +264,19 @@ class TimeSheetList(HorillaListView):
         self.search_url = reverse("time-sheet-list")
         self.action_method = "actions"
 
-    @cached_property
-    def columns(self):
-        get_field = self.model()._meta.get_field
-        return [
-            (
-                get_field("employee_id").verbose_name,
-                "employee_id",
-                "employee_id__get_avatar",
-            ),
-            (get_field("project_id").verbose_name, "project_id"),
-            (get_field("task_id").verbose_name, "task_id"),
-            (get_field("date").verbose_name, "date"),
-            (get_field("time_spent").verbose_name, "time_spent"),
-            (get_field("status").verbose_name, "get_status_display"),
-            (get_field("description").verbose_name, "description"),
-        ]
+    header_attrs = {
+        "action": """style="width:110px !important;" """,
+    }
+
+    columns = [
+        (_("Employee"), "employee_id", "employee_id__get_avatar"),
+        "project_id",
+        "task_id",
+        "date",
+        "time_spent",
+        (_("Status"), "get_status_display"),
+        (_("Description"), "get_description_col"),
+    ]
 
     @cached_property
     def sortby_mapping(self):
@@ -216,6 +326,115 @@ class TimeSheetList(HorillaListView):
 
     row_status_class = "status-{status}"
 
+    # Mirrors TimeSheetNavView.nested_group_by_fields
+    nested_group_by_fields = [
+        "employee_id",
+        "project_id",
+        "task_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
+
+@method_decorator(login_required, name="dispatch")
+class MyTimeSheetList(HorillaListView):
+    """List view for the My Timesheets tab -- own logged entries only."""
+
+    model = TimeSheet
+    filter_class = TimeSheetFilter
+    view_id = "myTimeSheetListContainer"
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        employee = self.request.user.employee_get
+        queryset = queryset.filter(employee_id=employee)
+        return queryset
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("my-time-sheet-list")
+        self.action_method = "actions"
+
+    header_attrs = {
+        "action": """style="width:110px !important;" """,
+    }
+
+    columns = [
+        (_("Employee"), "employee_id", "employee_id__get_avatar"),
+        "project_id",
+        "task_id",
+        "date",
+        "time_spent",
+        (_("Status"), "get_status_display"),
+        (_("Description"), "get_description_col"),
+    ]
+
+    @cached_property
+    def sortby_mapping(self):
+        get_field = self.model()._meta.get_field
+        return [
+            (
+                get_field("employee_id").verbose_name,
+                "employee_id__employee_first_name",
+                "employee_id__get_avatar",
+            ),
+            (get_field("project_id").verbose_name, "project_id__title"),
+            (get_field("task_id").verbose_name, "task_id__title"),
+            (get_field("time_spent").verbose_name, "time_spent"),
+            (get_field("date").verbose_name, "date"),
+        ]
+
+    row_status_indications = [
+        (
+            "in-progress--dot",
+            _("In progress"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('in_Progress');
+                $('#applyFilter').click();
+
+            "
+            """,
+        ),
+        (
+            "completed--dot",
+            _("Completed"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('completed');
+                $('#applyFilter').click();
+
+            "
+            """,
+        ),
+    ]
+    row_attrs = """
+                hx-get='{detail_view}?instance_ids={ordered_ids}'
+                hx-target="#genericModalBody"
+                data-target="#genericModal"
+                data-toggle="oh-modal-toggle"
+                """
+
+    row_status_class = "status-{status}"
+
+    nested_group_by_fields = [
+        "employee_id",
+        "project_id",
+        "task_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(
@@ -239,24 +458,26 @@ class TaskTimeSheet(TimeSheetList):
     def get_context_data(self, **kwargs: Any):
         context = super().get_context_data(**kwargs)
         task_id = self.kwargs.get("task_id")
-        task = Task.objects.get(id=task_id)
+        task = Task.find(task_id)
+        if not task:
+            return context
         project = task.project
         context["task_id"] = task_id
         context["project"] = project
         context["task"] = task
+        self.template_name = "cbv/timesheet/task_timesheet.html"
         return context
-
-    template_name = "cbv/timesheet/task_timesheet.html"
 
     def get_queryset(self):
         queryset = HorillaListView.get_queryset(self)
         task_id = self.kwargs.get("task_id")
         task = Task.objects.filter(id=task_id).first()
         queryset = TimeSheet.objects.filter(task_id=task_id)
-        queryset = queryset.filter(task_id=task_id)
         employee_id = self.request.GET.get("employee_id")
-        if employee_id:
+        if employee_id and employee_id.isdigit():
             employee = Employee.objects.filter(id=employee_id).first()
+            if not task:
+                return queryset.none()
             if (
                 employee
                 and not employee in task.task_managers.all()
@@ -264,6 +485,8 @@ class TaskTimeSheet(TimeSheetList):
                 and not employee.employee_user_id.is_superuser
             ):
                 queryset = queryset.filter(employee_id=employee_id)
+        else:
+            return queryset.none()
 
         return queryset
 
@@ -280,6 +503,14 @@ class TimeSheetFormView(HorillaFormView):
     form_class = TimeSheetForm
     model = TimeSheet
     new_display_title = _("Create") + " " + model._meta.verbose_name
+
+    def dispatch(self, request, *args, **kwargs):
+        # This endpoint returns only the modal form fragment; a genuine
+        # top-level browser navigation/reload should land on the real
+        # Timesheet page instead of showing the raw, unstyled fragment.
+        if request.headers.get("Sec-Fetch-Mode") == "navigate":
+            return redirect(reverse("view-time-sheet"))
+        return super().dispatch(request, *args, **kwargs)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -300,7 +531,9 @@ class TimeSheetFormView(HorillaFormView):
         initial = super().get_initial()
         task_id = self.kwargs.get("task_id")
         if task_id:
-            task = Task.objects.get(id=task_id)
+            task = Task.find(task_id)
+            if not task:
+                return initial
             project_id = task.project
             initial["project_id"] = project_id.id
             initial["task_id"] = task.id
@@ -312,9 +545,10 @@ class TimeSheetFormView(HorillaFormView):
         user_employee_id = self.request.user.employee_get.id
         project = None
         if task_id:
-            task = Task.objects.get(id=task_id)
-            project = task.project
-            employee = Employee.objects.filter(id=user_employee_id)
+            task = Task.objects.filter(id=task_id).first()
+            if task:
+                project = task.project
+                employee = Employee.objects.filter(id=user_employee_id)
 
         if self.form.instance.pk:
             task_id = self.form.instance.task_id.id
@@ -330,7 +564,7 @@ class TimeSheetFormView(HorillaFormView):
                 ("dynamic_create", "Dynamic create")
             )
             task_id = self.request.GET.get("task_id")
-            self.form_class.verbose_name = _("Update Time Sheet")
+            self.form_class.verbose_name = _("Update Timesheet")
         # If the timesheet create from task or project
         if project:
             if self.request.user.is_superuser or self.request.user.has_perm(
@@ -338,16 +572,12 @@ class TimeSheetFormView(HorillaFormView):
             ):
                 members = (
                     project.managers.all()
-                    | project.members.all()
                     | task.task_members.all()
                     | task.task_managers.all()
                 ).distinct()
             elif employee.first() in project.managers.all():
                 members = (
-                    employee
-                    | project.members.all()
-                    | task.task_members.all()
-                    | task.task_managers.all()
+                    employee | task.task_members.all() | task.task_managers.all()
                 ).distinct()
             elif employee.first() in task.task_managers.all():
                 members = (employee | task.task_members.all()).distinct()
@@ -366,7 +596,6 @@ class TimeSheetFormView(HorillaFormView):
             else:
                 projects = (
                     Project.objects.filter(managers=employee)
-                    | Project.objects.filter(members=employee)
                     | Project.objects.filter(
                         id__in=Task.objects.filter(task_managers=employee).values_list(
                             "project", flat=True
@@ -386,7 +615,7 @@ class TimeSheetFormView(HorillaFormView):
             if form.instance.pk:
                 message = _(f"{self.form.instance} Updated")
             else:
-                message = _("New time sheet created")
+                message = _("New timesheet created")
             form.save()
             messages.success(self.request, _(message))
             return self.HttpResponse()
@@ -404,9 +633,20 @@ class TimeSheetCardView(HorillaCardView):
 
     model = TimeSheet
     filter_class = TimeSheetFilter
+    records_per_page = 20
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related(
+                "employee_id",
+                "employee_id__employee_work_info",
+                "employee_id__employee_work_info__company_id",
+                "project_id",
+                "task_id",
+            )
+        )
         if not self.request.user.has_perm("project.view_timesheet"):
             employee = self.request.user.employee_get
             queryset = queryset.filter(
@@ -421,7 +661,7 @@ class TimeSheetCardView(HorillaCardView):
         self.search_url = reverse("time-sheet-card")
         self.actions = [
             {
-                "action": "Edit",
+                "action": _("Edit"),
                 "attrs": """
                          hx-get='{get_update_url}'
                          hx-target='#genericModalBody'
@@ -431,7 +671,7 @@ class TimeSheetCardView(HorillaCardView):
                          """,
             },
             {
-                "action": "Delete",
+                "action": _("Delete"),
                 "attrs": """
                 onclick="
                             event.stopPropagation()
@@ -445,7 +685,17 @@ class TimeSheetCardView(HorillaCardView):
     details = {
         "image_src": "employee_id__get_avatar",
         "title": "{employee_id}",
-        "subtitle": " <b>{date}</b> <br>Project : <b>{project_id}</b> <br><b>{task_id}</b> |  Time Spent : <b>{time_spent}</b>",
+        "subtitle": format_lazy(
+            "<b>{date_str}</b> <br>"
+            "{project_str} : <b>{project}</b> <br>"
+            "<b>{task}</b> |  {time_str} : <b>{time}</b>",
+            date_str=localize("{date}"),
+            project_str=_("Project"),
+            project="{project_id}",
+            time_str=_("Time Spent"),
+            task="{task_id}",
+            time="{time_spent}",
+        ),
     }
 
     card_status_class = "status-{status}"
@@ -511,3 +761,7 @@ class TimeSheetDetailView(HorillaDetailedView):
             (get_field("status").verbose_name, "get_status_display"),
             (get_field("description").verbose_name, "description"),
         ]
+
+    cols = {
+        "description": 12,
+    }

@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 from base.models import Company
 from facedetection.forms import FaceDetectionSetupForm
 from horilla.decorators import hx_request_required
+from horilla.http.response import HorillaRedirect
 
 from .serializers import *
 
@@ -101,11 +102,6 @@ class EmployeeFaceDetectionGetPostAPIView(APIView):
         except Exception as e:
             raise serializers.ValidationError(e)
 
-    def get(self, request):
-        facedetection = self.get_facedetection(request)
-        serializer = EmployeeFaceDetectionSerializer(facedetection)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
     def post(self, request):
         if self.get_facedetection(request).start:
             employee_id = request.user.employee_get.id
@@ -113,12 +109,15 @@ class EmployeeFaceDetectionGetPostAPIView(APIView):
             if isinstance(data, QueryDict):
                 data = data.dict()
             data["employee_id"] = employee_id
-            serializer = EmployeeFaceDetectionSerializer(data=data)
+            instance = EmployeeFaceDetection.objects.filter(
+                employee_id=employee_id
+            ).first()
+            serializer = EmployeeFaceDetectionSerializer(data=data, instance=instance)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        raise serializers.ValidationError("Facedetection not yet started..")
+        raise serializers.ValidationError(_("Facedetection not yet started.."))
 
 
 def get_company(request):
@@ -165,5 +164,25 @@ def face_detection_config(request):
             facedetection.save()
             messages.success(request, _("facedetection config created successfully."))
         else:
-            messages.info(request, "Not valid")
+            messages.info(request, _("Not valid"))
     return render(request, "face_config.html", {"form": form})
+
+
+@login_required
+@permission_required("facedetection.add_facedetection")
+def enable_disable_face_detection(request):
+    """
+    Enables or disables the face detection feature for the active company,
+    mirroring the Track Late Come & Early Out enable/disable workflow.
+    """
+    if request.method == "POST":
+        selected_company = request.session.get("selected_company")
+        company = None
+        if selected_company and selected_company != "all":
+            company = Company.objects.filter(id=selected_company).first()
+        instance, _created = FaceDetection.objects.get_or_create(company_id=company)
+        instance.start = bool(request.POST.get("start"))
+        instance.save()
+        message = _("enabled") if instance.start else _("disabled")
+        messages.success(request, _("Face detection {} successfully").format(message))
+    return HorillaRedirect(request)

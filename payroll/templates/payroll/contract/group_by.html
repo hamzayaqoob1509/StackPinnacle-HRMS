@@ -117,14 +117,14 @@
 													role="img"
 													class="md hydrated"
 													style="color: blue"
-													aria-label="create outline"
+													aria-label="{% trans 'create outline' %}"
 													></ion-icon>
 												</a>
 											{% endif %}
 											{% if perms.payroll.delete_contract %}
 												<a
 													onclick = "event.preventDefault();event.stopPropagation();"
-													class="oh-btn oh-btn--danger-outline oh-btn--light-bkg w-100"
+													class="oh-btn oh-btn--danger w-100"
 													hx-confirm="{% trans 'Do you want to delete this Contract?' %}"
 													hx-post="{% url 'delete-contract' contract.id %}?{{pd}}"
 													hx-target="#payroll-contract-container"
@@ -135,7 +135,7 @@
 														name="trash-outline"
 														role="img"
 														class="md hydrated"
-														aria-label="trash outline"
+														aria-label="{% trans 'trash outline' %}"
 													></ion-icon>
 												</a>
 											{% endif %}

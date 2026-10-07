@@ -1,4 +1,5 @@
 {% load i18n static recruitmentfilters horillafilters %}
+{% include "generic/components.html" %}
 {% for cand in candidates %}
     <div
         class="oh-kanban__card candidate change-cand"
@@ -10,7 +11,12 @@
         data-job-position ="{{cand.job_position_id}}"
         data-pre_stage_id ="{{cand.stage_id.id}}"
         data-stage_order = '{{cand.recruitment_id.ordered_stages|to_json|safe}}'
-        onclick="window.location.href = `{% url 'candidate-view-individual' cand.id %}`"
+        onclick="
+            try {
+                sessionStorage.setItem('candidateProfileBackUrl', window.location.pathname + window.location.search);
+            } catch (e) {}
+            window.location.href = `{% url 'candidate-view-individual' cand.id %}?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        "
     >
         <div class="oh-kanban__card-head align-items-baseline pb-0" {% if cand.is_offer_rejected %}
         style="border-left: solid orangered;"
@@ -104,11 +110,11 @@
                             <a
                             class="oh-dropdown__link oh-dropdown__link--secondary"
                             hx-get='{% url "interview-schedule" cand.id %}'
-                            hx-target="#createTarget"
+                            hx-target="#genericModalBody"
                             hx-swap='innerHTML'
                             style="cursor: pointer;"
                             data-toggle='oh-modal-toggle'
-                            data-target="#createModal"
+                            data-target="#genericModal"
                             >{% trans "Schedule Interview" %}</a>
                         </li>
                     {% endif %}
@@ -124,17 +130,16 @@
                             data-target='#objectCreateModal'
                             >{% trans "Send Mail" %}</a
                             >
-                        </li>
                     {% endif %}
                     {% if perms.recruitment.add_skillzonecandidate or request.user.employee_get in stage.stage_managers.all %}
                         <li class="oh-dropdown__item">
                             <a
                             class="oh-dropdown__link oh-dropdown__link--secondary"
                             data-toggle="oh-modal-toggle"
-                            data-target="#createModal"
+                            data-target="#genericModal"
                             hx-get="{% url 'to-skill-zone' cand.id %}"
-                            hx-target="#createTarget"
-                            >{% trans "Add to Skill Zone" %}</a
+                            hx-target="#genericModalBody"
+                            >{% trans "Add to Talent Pool" %}</a
                             >
                         </li>
                     {% endif %}
@@ -204,12 +209,12 @@
                     {% endif %}
                     {% if perms.recruitment.delete_candidate %}
                         <li class="oh-dropdown__item">
-                            <a onclick="return confirm('{% trans "Do you want to archive this candidate?" %}')" href="{% url 'rec-candidate-archive' cand.id %}?is_active=False" class="oh-dropdown__link ">{% trans "Archive" %}</a>
+                            <a onclick="return confirm('{% trans "Do you want to archive this candidate?"|escapejs %}')" href="{% url 'rec-candidate-archive' cand.id %}?is_active=False" class="oh-dropdown__link ">{% trans "Archive" %}</a>
                         </li>
                     {% endif %}
                     {% if perms.recruitment.delete_candidate %}
                         <li class="oh-dropdown__item">
-                        <form action="{% url 'rec-candidate-delete' cand.id %}" onsubmit="return confirm('{% trans "Are you sure you want to delete this candidate?" %}');" method="post">
+                        <form action="{% url 'rec-candidate-delete' cand.id %}" onsubmit="return confirm('{% trans "Are you sure you want to delete this candidate?"|escapejs %}');" method="post">
                             {% csrf_token %}
                             <button class="oh-dropdown__link oh-dropdown__link--danger ">{% trans "Delete" %}</button>
                         </form>
@@ -236,7 +241,7 @@
 
     <script>
         $("#stageCount{{stage.id}}").text({{candidates.paginator.count}})
-        $("#stageCount{{stage.id}}").attr("title",'{{candidates.paginator.count}} {% trans "Candidates" %}')
+        $("#stageCount{{stage.id}}").attr("title",'{{candidates.paginator.count}} {% trans "Candidates"|escapejs %}')
     </script>
     {% endfor %}
     {% if candidates.has_previous or candidates.has_next %}

@@ -5,14 +5,15 @@ This module is used to write custom template filters.
 
 """
 
+import datetime
 import json
+import re
 import uuid
 
 from django import template
 from django.apps import apps
-from django.contrib.auth.models import User
-from django.template.defaultfilters import register
 
+from horilla_auth.models import HorillaUser
 from recruitment.models import CandidateRating
 
 # from django.forms.boundfield
@@ -26,13 +27,38 @@ def is_stagemanager(user):
     This method is used to check the employee is stage or recruitment manager
     """
     try:
+        cached = getattr(user, "_horilla_is_stagemanager", None)
+        if cached is not None:
+            return cached
         employee_obj = user.employee_get
-        return (
-            employee_obj.stage_set.all().exists()
+        result = (
+            employee_obj.stage_set.filter(is_active=True).exists()
             or employee_obj.recruitment_set.exists()
         )
+        setattr(user, "_horilla_is_stagemanager", result)
+        return result
     except Exception:
         return False
+
+
+@register.filter(name="is_any_manager")
+def is_any_manager(request):
+    """
+    This method is used to check the employee is stage or recruitment manager
+    """
+    user = request.user
+    cached = getattr(user, "_horilla_is_any_manager", None)
+    if cached is not None:
+        return cached
+    employee = user.employee_get
+    result = (
+        employee.stage_set.filter(is_active=True).exists()
+        or employee.recruitment_set.exists()
+        or employee.onboardingstage_set.exists()
+        or employee.onboarding_task.exists()
+    )
+    setattr(user, "_horilla_is_any_manager", result)
+    return result
 
 
 @register.filter(name="is_recruitmentmanager")
@@ -41,8 +67,13 @@ def is_recruitmentmangers(user):
     This method is used to check the employee is recruitment manager
     """
     try:
+        cached = getattr(user, "_horilla_is_recruitmentmanager", None)
+        if cached is not None:
+            return cached
         employee_obj = user.employee_get
-        return employee_obj.recruitment_set.exists()
+        result = employee_obj.recruitment_set.exists()
+        setattr(user, "_horilla_is_recruitmentmanager", result)
+        return result
     except Exception:
         return False
 
@@ -84,7 +115,7 @@ def employee(uid):
     Returns:
         user object
     """
-    return User.objects.get(id=uid).employee_get if uid is not None else None
+    return HorillaUser.objects.get(id=uid).employee_get if uid is not None else None
 
 
 @register.filter(name="media_path")
@@ -164,3 +195,29 @@ def to_json(value):
         {"id": val.id, "stage": val.stage, "type": val.stage_type} for val in value
     ]
     return json.dumps(ordered_list)
+
+
+@register.filter(name="title_initials")
+def title_initials(value):
+    """
+    Returns the initials (first letter of the first two words) of a title,
+    used for the open-recruitment card avatar. Leading bracketed tags
+    (e.g. "[Demo] DevOps Engineer Round") are ignored.
+    """
+    if not value:
+        return ""
+    text = re.sub(r"^\[.*?\]\s*", "", str(value))
+    words = text.split() or str(value).split()
+    return "".join(word[0].upper() for word in words[:2] if word[0].isalnum())
+
+
+@register.filter(name="is_closing_soon")
+def is_closing_soon(recruitment):
+    """
+    A recruitment is "closing soon" if it has an end date within the next
+    14 days (and hasn't already passed).
+    """
+    if not recruitment.end_date:
+        return False
+    days_left = (recruitment.end_date - datetime.date.today()).days
+    return 0 <= days_left <= 14

@@ -10,16 +10,20 @@ from typing import Any
 
 from django import forms
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 import payroll.models.models
 from base.forms import Form, ModelForm
 from base.methods import reload_queryset
+from base.models import Company
 from employee.filters import EmployeeFilter
 from employee.models import BonusPoint, Employee
 from horilla import horilla_middlewares
+from horilla.horilla_middlewares import _thread_locals
 from horilla.methods import get_horilla_model_class
 from horilla_widgets.forms import HorillaForm, default_select_option_template
 from horilla_widgets.widgets.horilla_multi_select_field import HorillaMultiSelectField
@@ -36,6 +40,7 @@ from payroll.models.models import (
     PayslipAutoGenerate,
     Reimbursement,
     ReimbursementMultipleAttachment,
+    SalaryStructure,
 )
 from payroll.widgets import component_widgets as widget
 
@@ -47,8 +52,6 @@ class AllowanceForm(ModelForm):
     Form for Allowance model
     """
 
-    load = forms.CharField(widget=widget.AllowanceConditionalVisibility, required=False)
-    style = forms.CharField(required=False)
     verbose_name = _("Allowance")
 
     class Meta:
@@ -59,9 +62,6 @@ class AllowanceForm(ModelForm):
         model = payroll.models.models.Allowance
         fields = "__all__"
         exclude = ["is_active"]
-        widgets = {
-            "one_time_date": forms.DateTimeInput(attrs={"type": "date"}),
-        }
 
     def __init__(self, *args, **kwargs):
         if instance := kwargs.get("instance"):
@@ -75,55 +75,19 @@ class AllowanceForm(ModelForm):
             kwargs["initial"] = initial
         super().__init__(*args, **kwargs)
 
-        self.fields["specific_employees"] = HorillaMultiSelectField(
-            queryset=Employee.objects.all(),
-            widget=HorillaMultiSelectWidget(
-                filter_route_name="employee-widget-filter",
-                filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
-                filter_template_path="employee_filters.html",
-                instance=self.instance,
-            ),
-            label="Specific Employees",
-        )
-        self.fields["if_condition"].widget.attrs.update(
-            {
-                "onchange": "rangeToggle($(this))",
-            }
-        )
-        reload_queryset(self.fields)
-        self.fields["style"].widget = widget.StyleWidget(form=self)
+        if not self.instance.pk:
+            self.fields["one_time_date"].initial = None
 
     def as_p(self):
         """
         Render the form fields as HTML table rows with Bootstrap styling.
         """
         context = {"form": self}
-        table_html = render_to_string("common_form.html", context)
+        table_html = render_to_string("generic/form.html", context)
         return table_html
 
     def clean(self, *args, **kwargs):
         cleaned_data = super().clean(*args, **kwargs)
-
-        specific_employees = self.data.getlist("specific_employees")
-        include_all = self.data.get("include_active_employees")
-        condition_based = self.data.get("is_condition_based")
-
-        for field_name, field_instance in self.fields.items():
-            if isinstance(field_instance, HorillaMultiSelectField):
-                self.errors.pop(field_name, None)
-                if (
-                    not specific_employees
-                    and include_all is None
-                    and not condition_based
-                ):
-                    raise forms.ValidationError({field_name: "This field is required"})
-                cleaned_data = super().clean()
-                data = self.fields[field_name].queryset.filter(
-                    id__in=self.data.getlist(field_name)
-                )
-                cleaned_data[field_name] = data
-        cleaned_data = super().clean()
 
         if cleaned_data.get("if_condition") == "range":
             cleaned_data["if_amount"] = 0
@@ -153,11 +117,6 @@ class AllowanceForm(ModelForm):
             cleaned_data["end_range"] = None
 
     def save(self, commit: bool = ...) -> Any:
-        specific_employees = self.data.getlist("specific_employees")
-        include_all = self.data.get("include_active_employees")
-        condition_based = self.data.get("is_condition_based")
-        if not specific_employees and not include_all and not condition_based:
-            self.instance.include_active_employees = True
         super().save(commit)
         other_conditions = self.data.getlist("other_conditions")
         other_fields = self.data.getlist("other_fields")
@@ -187,8 +146,6 @@ class DeductionForm(ModelForm):
     Form for Deduction model
     """
 
-    load = forms.CharField(widget=widget.DeductionConditionalVisibility, required=False)
-    style = forms.CharField(required=False)
     verbose_name = _("Deduction")
 
     class Meta:
@@ -198,7 +155,12 @@ class DeductionForm(ModelForm):
 
         model = payroll.models.models.Deduction
         fields = "__all__"
-        exclude = ["is_active"]
+        exclude = [
+            "is_active",
+            "specific_employees",
+            "exclude_employees",
+            "include_active_employees",
+        ]
         widgets = {
             "one_time_date": forms.DateTimeInput(attrs={"type": "date"}),
         }
@@ -215,50 +177,8 @@ class DeductionForm(ModelForm):
             kwargs["initial"] = initial
         super().__init__(*args, **kwargs)
 
-        self.fields["specific_employees"] = HorillaMultiSelectField(
-            queryset=Employee.objects.all(),
-            widget=HorillaMultiSelectWidget(
-                filter_route_name="employee-widget-filter",
-                filter_class=EmployeeFilter,
-                filter_instance_contex_name="f",
-                filter_template_path="employee_filters.html",
-                instance=self.instance,
-            ),
-            label="Specific Employees",
-        )
-        self.fields["if_condition"].widget.attrs.update(
-            {
-                "onchange": "rangeToggle($(this))",
-            }
-        )
-        reload_queryset(self.fields)
-        self.fields["style"].widget = widget.StyleWidget(form=self)
-        for field_name, field in self.fields.items():
-            if isinstance(field.widget, forms.Select):
-                field.widget.option_template_name = default_select_option_template
-
     def clean(self, *args, **kwargs):
         cleaned_data = super().clean(*args, **kwargs)
-
-        specific_employees = self.data.getlist("specific_employees")
-        include_all = self.data.get("include_active_employees")
-        condition_based = self.data.get("is_condition_based")
-
-        for field_name, field_instance in self.fields.items():
-            if isinstance(field_instance, HorillaMultiSelectField):
-                self.errors.pop(field_name, None)
-                if (
-                    not specific_employees
-                    and include_all is None
-                    and not condition_based
-                ):
-                    raise forms.ValidationError({field_name: "This field is required"})
-                cleaned_data = super().clean()
-                data = self.fields[field_name].queryset.filter(
-                    id__in=self.data.getlist(field_name)
-                )
-                cleaned_data[field_name] = data
-        cleaned_data = super().clean()
 
         if cleaned_data.get("if_condition") == "range":
             cleaned_data["if_amount"] = 0
@@ -292,14 +212,6 @@ class DeductionForm(ModelForm):
             self.data.get("update_compensation") is not None
             and self.data.get("update_compensation") != ""
         ):
-            if (
-                self.data.getlist("specific_employees") is None
-                and len(self.data.getlist("specific_employees")) == 0
-            ):
-                raise forms.ValidationError(
-                    {"specific_employees": _("You need to choose the employee.")}
-                )
-
             if (
                 self.data.get("one_time_date") is None
                 and self.data.get("one_time_date") == ""
@@ -349,10 +261,173 @@ class DeductionForm(ModelForm):
         return multiple_conditions
 
 
+class SalaryStructureForm(ModelForm):
+    """
+    Form for SalaryStructure model
+    """
+
+    employees = HorillaMultiSelectField(
+        queryset=Employee.objects.all(),
+        required=False,
+        widget=HorillaMultiSelectWidget(
+            filter_route_name="employee-widget-filter",
+            filter_class=EmployeeFilter,
+            filter_instance_context_name="f",
+            filter_template_path="employee_filters.html",
+        ),
+        label=_("Employees"),
+    )
+
+    class Meta:
+        """
+        Meta class for additional options
+        """
+
+        model = SalaryStructure
+        fields = ["title", "allowances", "deductions"]
+
+    def _employees_on_structure(self):
+        if not self.instance.pk:
+            return Employee.objects.none()
+        return Employee.objects.filter(
+            contract_set__salary_structure_id=self.instance,
+            contract_set__contract_status="active",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["allowances"].queryset = self.fields["allowances"].queryset.exclude(
+            only_show_under_employee=True
+        )
+        self.fields["deductions"].queryset = self.fields["deductions"].queryset.exclude(
+            only_show_under_employee=True
+        )
+        if self.instance.pk:
+            self.initial["employees"] = self._employees_on_structure()
+
+    def clean(self):
+
+        cleaned_data = super().clean()
+        self.errors.pop("employees", None)
+        employees = Employee.objects.filter(pk__in=self.data.getlist("employees"))
+        cleaned_data["employees"] = employees
+        no_active_contract = [
+            employee
+            for employee in employees
+            if not employee.contract_set.filter(contract_status="active").exists()
+        ]
+        if no_active_contract:
+            names = ", ".join(str(employee) for employee in no_active_contract)
+            raise forms.ValidationError(
+                {
+                    "employees": _(
+                        "These employees have no active contract, so a salary "
+                        "structure can't be assigned to them: %(names)s"
+                    )
+                    % {"names": names}
+                }
+            )
+        return cleaned_data
+
+    def save(self, commit=True):
+
+        previous_allowances = (
+            set(self.instance.allowances.all()) if self.instance.pk else set()
+        )
+        previous_deductions = (
+            set(self.instance.deductions.all()) if self.instance.pk else set()
+        )
+        previous_employees = set(self._employees_on_structure())
+
+        instance = super().save(commit=False)
+        instance.save()
+
+        submitted_allowances = set(self.cleaned_data.get("allowances") or [])
+        submitted_deductions = set(self.cleaned_data.get("deductions") or [])
+        submitted_employees = set(self.cleaned_data.get("employees") or [])
+
+        for allowance in submitted_allowances - previous_allowances:
+            instance.add_allowance(allowance)
+        for allowance in previous_allowances - submitted_allowances:
+            instance.remove_allowance(allowance)
+
+        for deduction in submitted_deductions - previous_deductions:
+            instance.add_deduction(deduction)
+        for deduction in previous_deductions - submitted_deductions:
+            instance.remove_deduction(deduction)
+
+        for employee in submitted_employees - previous_employees:
+            contract = employee.contract_set.filter(contract_status="active").first()
+            if contract:
+                contract.set_salary_structure(instance)
+        for employee in previous_employees - submitted_employees:
+            contract = employee.contract_set.filter(
+                contract_status="active", salary_structure_id=instance
+            ).first()
+            if contract:
+                contract.set_salary_structure(None)
+
+        return instance
+
+
+class QuickAllowanceForm(ModelForm):
+    """
+    Minimal Allowance create form, used for the dynamic "create new allowance"
+    option inside the Salary Structure form.
+    """
+
+    class Meta:
+        """
+        Meta class for additional options
+        """
+
+        model = Allowance
+        fields = ["title", "is_taxable", "is_fixed", "amount", "based_on", "rate"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["amount"].required = True
+        self.instance.include_active_employees = False
+
+
+class QuickDeductionForm(ModelForm):
+    """
+    Minimal Deduction create form, used for the dynamic "create new deduction"
+    option inside the Salary Structure form.
+    """
+
+    class Meta:
+        """
+        Meta class for additional options
+        """
+
+        model = Deduction
+        fields = [
+            "title",
+            "is_pretax",
+            "is_fixed",
+            "amount",
+            "based_on",
+            "rate",
+            "employer_rate",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["amount"].required = True
+        self.instance.include_active_employees = False
+
+
 class PayslipForm(ModelForm):
     """
     Form for Payslip
     """
+
+    cols = {
+        "employee_id": 12,
+        "start_date": 12,
+        "end_date": 12,
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -368,6 +443,7 @@ class PayslipForm(ModelForm):
                 "hx-target": "#contractStartDateDiv",
                 "hx-include": "#payslipCreateForm",
                 "hx-trigger": "change delay:300ms",
+                "hx-swap": "innerHTML",
             }
         )
         if self.instance.pk is None:
@@ -394,6 +470,7 @@ class PayslipForm(ModelForm):
                     "hx-target": "#contractStartDateDiv",
                     "hx-include": "#payslipCreateForm",
                     "hx-trigger": "change delay:300ms",
+                    "hx-swap": "innerHTML",
                 }
             ),
             "end_date": forms.DateInput(
@@ -411,7 +488,7 @@ class GeneratePayslipForm(HorillaForm):
 
     group_name = forms.CharField(
         label="Batch name",
-        required=True,
+        required=False,
         # help_text="Enter +-something if you want to generate payslips by batches",
     )
     employee_id = HorillaMultiSelectField(
@@ -419,7 +496,7 @@ class GeneratePayslipForm(HorillaForm):
         widget=HorillaMultiSelectWidget(
             filter_route_name="employee-widget-filter",
             filter_class=EmployeeFilter,
-            filter_instance_contex_name="f",
+            filter_instance_context_name="f",
             filter_template_path="employee_filters.html",
         ),
         label="Employee",
@@ -479,7 +556,10 @@ class PayrollSettingsForm(ModelForm):
         """
 
         model = models.PayrollSettings
-        fields = "__all__"
+        fields = ["currency_symbol", "position"]
+        widgets = {
+            "position": forms.Select(attrs={"class": "oh-select oh-select-2 w-100"}),
+        }
 
 
 excel_columns = [
@@ -545,9 +625,6 @@ class ContractExportFieldForm(forms.Form):
             "contract_status",
         ],
     )
-
-
-from django.core.exceptions import ValidationError
 
 
 def rate_validator(value):
@@ -665,7 +742,10 @@ class LoanAccountForm(ModelForm):
     LoanAccountForm
     """
 
-    verbose_name = "Loan / Advanced Sarlary"
+    verbose_name = _("Loans & Salary Advances")
+    cols = {
+        "description": 12,
+    }
 
     class Meta:
         model = LoanAccount
@@ -686,39 +766,79 @@ class LoanAccountForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.initial["provided_date"] = str(datetime.date.today())
-        self.initial["installment_start_date"] = str(datetime.date.today())
+        if not self.instance.pk:
+            self.initial["provided_date"] = str(datetime.date.today())
+            self.initial["installment_start_date"] = str(datetime.date.today())
         if self.instance.pk:
             self.verbose_name = self.instance.title
-            fields_to_exclude = ["employee_id", "installment_start_date"]
+            # <input type="date"> needs YYYY-MM-DD; the DateTimeInput widget
+            # doesn't render date objects that way, so pass strings.
+            if self.instance.provided_date:
+                self.initial["provided_date"] = str(self.instance.provided_date)
+            if self.instance.installment_start_date:
+                self.initial["installment_start_date"] = str(
+                    self.instance.installment_start_date
+                )
+            # Edit shows the same fields as create; the ones that must not
+            # change any more are locked (disabled) instead of removed, so
+            # both forms keep an identical layout across the Loan / Salary
+            # Advance / Fine tabs.
+            locked_fields = []
             if Payslip.objects.filter(
                 installment_ids__in=list(
                     self.instance.deduction_ids.values_list("id", flat=True)
                 )
             ).exists():
-                fields_to_exclude = fields_to_exclude + [
+                # Once an installment is on a paid payslip the schedule can
+                # no longer be regenerated (see payroll.signals
+                # create_installments), so these become read-only.
+                locked_fields += [
+                    "employee_id",
                     "loan_amount",
                     "installments",
                     "installment_amount",
+                    "installment_start_date",
                 ]
-            self.initial["provided_date"] = str(self.instance.provided_date)
-            for field in fields_to_exclude:
-                if field in self.fields:
-                    del self.fields[field]
+            for field_name in locked_fields:
+                if field_name not in self.fields:
+                    continue
+                field = self.fields[field_name]
+                field.disabled = True
+                if field_name == "employee_id":
+                    # Disabled selects normally render as bare text (see
+                    # .oh-select:disabled in the theme) - opt this one back
+                    # into a boxed look via oh-select--boxed-locked so it
+                    # doesn't stand out next to the other fields here.
+                    attrs = field.widget.attrs
+                    attrs["class"] = (
+                        attrs.get("class", "") + " oh-select--boxed-locked"
+                    ).strip()
 
     def clean(self, *args, **kwargs):
         cleaned_data = super().clean(*args, **kwargs)
 
-        if not self.instance.pk and cleaned_data.get(
-            "installment_start_date"
-        ) < cleaned_data.get("provided_date"):
+        start_date = cleaned_data.get("installment_start_date")
+        provided_date = cleaned_data.get("provided_date")
+        dates_touched = (
+            not self.instance.pk
+            or "installment_start_date" in self.changed_data
+            or "provided_date" in self.changed_data
+        )
+        if (
+            start_date
+            and provided_date
+            and dates_touched
+            and start_date < provided_date
+        ):
             raise forms.ValidationError(
-                "Installment start date should be greater than or equal to provided date"
+                _(
+                    "Installment start date should be greater than or equal to provided date"
+                )
             )
         if cleaned_data.get("installments") != None:
             if cleaned_data.get("installments") <= 0:
                 raise forms.ValidationError(
-                    "Installments needs to be a positive integer"
+                    _("Installments needs to be a positive integer")
                 )
 
         return cleaned_data
@@ -778,6 +898,8 @@ class ReimbursementForm(ModelForm):
     Optimized Reimbursement / Encashment Form
     """
 
+    cols = {"description": 12}
+
     verbose_name = "Reimbursement / Encashment"
 
     class Meta:
@@ -795,6 +917,18 @@ class ReimbursementForm(ModelForm):
             self.initial["allowance_on"] = str(datetime.date.today())
 
         self.initial["employee_id"] = self.employee.id if self.employee else None
+
+        # When opened from a specific tab (Reimbursements / Leave Encashments /
+        # Bonus Encashments), the tab's own Create button passes ?type=... so
+        # the record being created always matches the tab it was opened from -
+        # the Type field is then locked instead of shown as a free choice.
+        self.fixed_type = (
+            self.request.GET.get("type")
+            if self.request and not self.instance.pk
+            else None
+        )
+        if self.fixed_type:
+            self.initial["type"] = self.fixed_type
 
         self.configure_fields()
 
@@ -838,10 +972,19 @@ class ReimbursementForm(ModelForm):
             "onchange"
         ] = "getAssignedLeave($(this))"
 
+        self.fields["allowance_on"].widget = forms.DateInput(
+            attrs={"type": "date", "class": "oh-input w-100"}
+        )
+
         self.fields["attachment"] = MultipleFileField(label="Attachments")
         self.fields["attachment"].widget.attrs["accept"] = ".jpg, .jpeg, .png, .pdf"
 
-        # self.exclude_fields_by_type(exclude_fields)
+        # Also hidden when editing - which type a record is doesn't change
+        # after creation, so there's nothing to pick here either.
+        if self.fixed_type or self.instance.pk:
+            self.fields["type"].widget = forms.HiddenInput()
+
+        self.exclude_fields_by_type(exclude_fields)
 
         for field in exclude_fields:
             self.fields.pop(field, None)
@@ -868,20 +1011,20 @@ class ReimbursementForm(ModelForm):
         type = (
             self.data.get("type")
             if self.data
-            else self.instance.type if self.instance else None
+            else (self.fixed_type or (self.instance.type if self.instance else None))
         )
         is_edit = self.instance and self.instance.pk
 
-        if type == "reimbursement" and is_edit:
+        if type == "reimbursement" and (is_edit or self.data or self.fixed_type):
             exclude_fields += [
                 "leave_type_id",
                 "cfd_to_encash",
                 "ad_to_encash",
                 "bonus_to_encash",
             ]
-        elif type == "leave_encashment" and (is_edit or self.data):
+        elif type == "leave_encashment" and (is_edit or self.data or self.fixed_type):
             exclude_fields += ["attachment", "amount", "bonus_to_encash"]
-        elif type == "bonus_encashment" and (is_edit or self.data):
+        elif type == "bonus_encashment" and (is_edit or self.data or self.fixed_type):
             exclude_fields += [
                 "attachment",
                 "amount",
@@ -1003,11 +1146,10 @@ class ReimbursementForm(ModelForm):
                     notify.send(
                         instance.employee_id,  # 816
                         recipient=manager.employee_user_id,
-                        verb=f"You have a new reimbursement request to approve for {instance.employee_id}.",
-                        verb_ar=f"لديك طلب استرداد نفقات جديد يتعين عليك الموافقة عليه لـ {instance.employee_id}.",
-                        verb_de=f"Sie haben einen neuen Rückerstattungsantrag zur Genehmigung für {instance.employee_id}.",
-                        verb_es=f"Tienes una nueva solicitud de reembolso para aprobar para {instance.employee_id}.",
-                        verb_fr=f"Vous avez une nouvelle demande de remboursement à approuver pour {instance.employee_id}.",
+                        verb=gettext_noop(
+                            "You have a new reimbursement request to approve for %(employee)s."
+                        ),
+                        verb_params={"employee": str(instance.employee_id)},
                         icon="information",
                         redirect=f"/payroll/view-reimbursement?id={instance.id}",
                     )
@@ -1036,6 +1178,14 @@ class PayslipAutoGenerateForm(ModelForm):
     class Meta:
         model = PayslipAutoGenerate
         fields = ["generate_day", "company_id", "auto_generate"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        active_company_id = horilla_middlewares.get_selected_company()
+        if active_company_id and active_company_id != "all":
+            self.fields["company_id"].queryset = Company.objects.filter(
+                id=active_company_id
+            )
 
     def as_p(self):
         """

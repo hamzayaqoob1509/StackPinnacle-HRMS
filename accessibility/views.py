@@ -12,7 +12,8 @@ from django.utils.translation import gettext_lazy as _
 from accessibility.accessibility import ACCESSBILITY_FEATURE
 from accessibility.filters import AccessibilityFilter
 from accessibility.models import DefaultAccessibility
-from horilla.decorators import login_required, permission_required
+from employee.models import Employee
+from horilla.decorators import hx_request_required, login_required, permission_required
 
 
 @login_required
@@ -51,12 +52,47 @@ def user_accessibility(request):
 
 
 @login_required
+@hx_request_required
+@permission_required("auth.change_permission")
+def load_accessibility_form(request):
+    feature = request.GET.get("feature")
+
+    accessibility = DefaultAccessibility.objects.filter(feature=feature).first()
+
+    filter_data = {}
+    exclude_all = False
+
+    if accessibility:
+        filter_data = accessibility.filter or {}
+        exclude_all = accessibility.exclude_all
+
+    filterset = AccessibilityFilter(
+        data=filter_data if filter_data else None,
+        queryset=Employee.objects.all(),
+    )
+
+    return render(
+        request,
+        "accessibility/accessibility_form.html",
+        {
+            "filter": filterset,
+            "display": dict(ACCESSBILITY_FEATURE).get(feature),
+            "feature": feature,
+            "exclude_all": exclude_all,
+        },
+    )
+
+
+@login_required
+@hx_request_required
 @permission_required("auth.change_permission")
 def get_accessibility_data(request):
     """
     Save accessibility filter method
     """
-    feature = request.GET["feature"]
+    feature = request.GET.get("feature")
+    if not feature:
+        return JsonResponse("", safe=False)
     accessibility = DefaultAccessibility.objects.filter(feature=feature).first()
     if not accessibility:
         return JsonResponse("", safe=False)

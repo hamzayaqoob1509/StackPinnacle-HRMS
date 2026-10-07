@@ -9,7 +9,7 @@
       {{ field }}
       <a
         hx-get="{% url 'add-remove-work-type-fields' %}"
-        class="oh-btn oh-btn--danger-outline oh-btn--light-bkg"
+        class="oh-btn oh-btn--danger"
         hx-target="#moreWorkTypeContainer_{{ forloop.counter }}"
         hx-swap="outerHTML"
         id="delete-link"
@@ -22,7 +22,7 @@
       <label
         class="oh-label {% if field.field.required %}required-star{% endif %}"
         for="id_{{ field.name }}"
-        title="{{ field.help_text|safe }}"
+        title="{{ field.help_text }}"
       >
         {% trans field.label %}
       </label>
@@ -35,7 +35,7 @@
     hx-swap="outerHTML"
     hx-post="{% url 'add-remove-work-type-fields' %}"
     role="button"
-    style="color: green"
+    class="text-primary-600"
   >
     {% trans "Add more work types.." %}
   </a>

@@ -16,14 +16,14 @@
     <a
       class="oh-main__titlebar-search-toggle"
       role="button"
-      aria-label="Toggle Search"
+      aria-label="{% trans 'Toggle Search' %}"
       @click="searchShow = !searchShow"
       >
       <ion-icon
         name="search-outline"
         class="oh-main__titlebar-serach-icon md hydrated"
         role="img"
-        aria-label="search outline"
+        aria-label="{% trans 'search outline' %}"
       ></ion-icon>
     </a>
   </div>
@@ -48,7 +48,7 @@
           <input
             type="text"
             class="oh-input oh-input__icon"
-            aria-label="Search Input"
+            aria-label="{% trans 'Search Input' %}"
             id="payslip-search"
             name="search"
             placeholder="{% trans 'Search' %}"
@@ -100,7 +100,7 @@
               <div class="row">
                 <div class="col-sm-12 col-md-12 col-lg-6">
                   <div class="oh-input-group">
-                    <label class="oh-label">{% trans "Field" %}</label>
+                    <label class="oh-label">{% trans "Fields" %}</label>
                   </div>
                 </div>
                 <div class="col-sm-12 col-md-12 col-lg-6">
@@ -231,7 +231,7 @@
               class="md hydrated"
               name="add-outline"
               role="img"
-              aria-label="add outline"
+              aria-label="{% trans 'add outline' %}"
             ></ion-icon
             >{% trans "Create" %}</a
           >
@@ -265,7 +265,7 @@
     </div>
     {% else %}
       <div class="oh-empty">
-        <img src="{% static 'images/ui/search.svg' %}" class="oh-404__image" alt="Page not found. 404." />
+        <img src="{% static 'images/ui/search.svg' %}" class="oh-404__image" alt="{% trans 'Page not found. 404.' %}" />
         <h1 class="oh-empty__title">{% trans "No Records found." %}</h1>
         <p class="oh-empty__subtitle">{% trans "No payslips have been generated." %}</p>
       </div>
@@ -274,44 +274,6 @@
     <div id="messageContainer"></div>
 
     <script>
-      var no_rows_payslip_send = {
-        ar: "لم يتم اختيار أي صفوف لإرسال قسائم الرواتب.",
-        de: "Es wurden keine Zeilen zum Senden von Gehaltsabrechnungen ausgewählt.",
-        es: "No se han seleccionado filas para enviar las nóminas.",
-        en: "No rows are selected for sending payslips.",
-        fr: "Aucune ligne n'est sélectionnée pour l'envoi des bulletins de salaire.",
-      };
-      var mail_processing = {
-        ar: "معالجة البريد.",
-        de: "Mailverarbeitung.",
-        es: "Procesamiento de correo.",
-        en: "Mail processing.",
-        fr: "Traitement du courrier.",
-      };
-      function getCurrentLanguageCode(callback) {
-        var languageCode = $("#main-section-data").attr("data-lang");
-        var allowedLanguageCodes = ["ar", "de", "es", "en", "fr"];
-        if (allowedLanguageCodes.includes(languageCode)) {
-          callback(languageCode);
-        } else {
-          $.ajax({
-            type: "GET",
-            url: "/employee/get-language-code/",
-            success: function (response) {
-              var ajaxLanguageCode = response.language_code;
-              $("#main-section-data").attr("data-lang", ajaxLanguageCode);
-              callback(
-                allowedLanguageCodes.includes(ajaxLanguageCode)
-                  ? ajaxLanguageCode
-                  : "en"
-              );
-            },
-            error: function () {
-              callback("en");
-            },
-          });
-        }
-      }
       function updateBulkStatus(element) {
         var status = element.val();
         var ids = [];
@@ -425,13 +387,17 @@
           var form = $(this); // Get the form element
           var formData = form.serialize(); // Serialize the form data as a URL-encoded string
 
-          $(".errorlist").remove();
           $.ajax({
             type: "get",
             url: "{% url 'validate-start-date' %}",
             data: formData,
             success: function (response) {
-              form.prepend(response.message);
+              let ul = $(".errorlist")
+              response.errors.forEach(msg => {
+                const li = document.createElement("li");
+                li.textContent = msg;
+                ul.appendChild(li);
+              });
               if (response.valid) {
                 form[0].submit();
               }
@@ -487,44 +453,39 @@
       }
       $("#payslipBulkSend").click(function (e) {
         e.preventDefault();
-        var languageCode = null;
-        getCurrentLanguageCode(function (code) {
-          languageCode = code;
-          var idsJson = $("#selectedPayslip").attr("data-ids");
-          var ids = JSON.parse(idsJson);
-          if (ids.length > 0) {
-            $.ajax({
-              type: "get",
-              url: `/payroll/send-slip`,
-              data: { id: ids },
-              traditional: true,
-              success: function (response) {
-                  var mailProcessingMessage = mail_processing[languageCode];
+        var idsJson = $("#selectedPayslip").attr("data-ids");
+        var ids = JSON.parse(idsJson);
+        if (ids.length > 0) {
+          $.ajax({
+            type: "get",
+            url: `/payroll/send-slip`,
+            data: { id: ids },
+            traditional: true,
+            success: function (response) {
+                var mailProcessingMessage = "Mail processing.";
 
-                $("#messages").html(
-                  $(`
-                <div class="oh-alert-container">
-                  <div class="oh-alert oh-alert--animated oh-alert--info">`
-                   + mailProcessingMessage +`
-                  </div>
+              $("#messages").html(
+                $(`
+              <div class="oh-alert-container">
+                <div class="oh-alert oh-alert--animated oh-alert--info">`
+                  + mailProcessingMessage +`
                 </div>
-                `)
-                );
-                $("#unselectAllPayslip").click();
-                $(".payslip-checkbox:checked").prop("checked", false).change();
-              },
-            });
-          }else{
-            var textMessage = no_rows_payslip_send[languageCode];
-            Swal.fire({
-              text: textMessage,
-              icon: "warning",
-              confirmButtonText: "Close",
-            });
-                $("#unselectAllPayslip").click();
-                $(".payslip-checkbox:checked").prop("checked", false).change();
-          }
-        });
+              </div>
+              `)
+              );
+              $("#unselectAllPayslip").click();
+              $(".payslip-checkbox:checked").prop("checked", false).change();
+            },
+          });
+        }else{
+          Swal.fire({
+            text: i18nMessages.noRowsSelected,
+            icon: "warning",
+            confirmButtonText: i18nMessages.close,
+          });
+              $("#unselectAllPayslip").click();
+              $(".payslip-checkbox:checked").prop("checked", false).change();
+        }
       });
     </script>
   </div>

@@ -90,13 +90,13 @@
                 <img
                   src="{{user_leave.leave_type_id.icon.url }}"
                   class="oh-kanban-card__profile-image"
-                  alt="Leave Icon"
+                  alt="{% trans 'Leave Icon' %}"
                 />
                 {% else %}
                 <img
                   src="https://ui-avatars.com/api/?name={{user_leave.leave_type_id}}&background=random"
                   class="oh-kanban-card__profile-image"
-                  alt="Leave Icon"
+                  alt="{% trans 'Leave Icon' %}"
                 />
                 {% endif %}
               </div>
@@ -133,7 +133,7 @@
       <!-- Container for Kanban cards -->
       {% for employee_leave in employee_leaves %}
         {% if perms.leave.view_leavetype or perms.leave.view_leaverequest or request.user|check_manager:employee_leave or request.user == employee_leave.employee_id.employee_user_id %}
-          <div
+         <div
             class="oh-kanban-card"
             data-toggle="oh-modal-toggle"
             data-target="#objectCreateModal"
@@ -146,13 +146,13 @@
                 <img
                   src="{{employee_leave.leave_type_id.icon.url }}"
                   class="oh-kanban-card__profile-image"
-                  alt="Leave Icon"
+                  alt="{% trans 'Leave Icon' %}"
                 />
                 {% else %}
                 <img
                   src="https://ui-avatars.com/api/?name={{employee_leave.leave_type_id}}&background=random"
                   class="oh-kanban-card__profile-image"
-                  alt="Leave Icon"
+                  alt="{% trans 'Leave Icon' %}"
                 />
                 {% endif %}
               </div>
@@ -229,13 +229,13 @@
               <img
                 src="{{leave_request.leave_type_id.icon.url}}"
                 class="oh-profile__image"
-                alt="Leave Type Icon"
+                alt="{% trans 'Leave Type Icon' %}"
               />
               {% else%}
               <img
                 src="https://ui-avatars.com/api/?name={{leave_request.leave_type_id}}&background=random"
                 class="oh-profile__image"
-                alt="Leave type icon"
+                alt="{% trans 'Leave type icon' %}"
               />
               {% endif %}
             </div>
@@ -274,7 +274,7 @@
             {% else %}
               {% if leave_request.is_approved and leave_request.status == 'requested' and leave_request.end_date >= current_date %}
               <a href="{% url 'request-approve' leave_request.id %}" title="{% trans 'Approve' %}"
-                  class="oh-btn oh-btn--success w-100" {% if leave_request.end_date.month > current_date.month %} onclick = "leaveRequestConfirm('This leave request is for the month of {{leave_request.start_date|date:'F'}}. Approval depends on the {{leave_request.employee_id.get_full_name}} having available leave days for this month.',event);" {% else %}  onclick = "return confirm('Do You really want to Approve this request?')"; {% endif %}>
+                  class="oh-btn oh-btn--success w-100" {% if leave_request.end_date.month > current_date.month %} onclick = "leaveRequestConfirm('This leave request is for the month of {{leave_request.start_date|date:'F'}}. Approval depends on the {{leave_request.employee_id.get_full_name}} having available leave days for this month.',event);" {% else %}  onclick = "return confirm('{% trans "Do You really want to Approve this request?"|escapejs %}')"; {% endif %}>
                   <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
               </a>
               {% else %}
@@ -346,7 +346,7 @@
 			<h2 class="oh-modal__dialog-title" id="rejectTitle">
 				{% trans "Request Rejection" %}
 			</h2>
-			<button class="oh-modal_close--custom" aria-label="Close" onclick="$('#rejectModal').removeClass('oh-modal--show');">
+			<button class="oh-modal_close--custom" aria-label="{% trans 'Close' %}" onclick="$('#rejectModal').removeClass('oh-modal--show');">
 				<ion-icon name="close-outline"></ion-icon>
 			</button>
 		</div>

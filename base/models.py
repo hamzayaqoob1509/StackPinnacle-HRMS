@@ -1,26 +1,29 @@
 """
-models.py
-
 This module is used to register django models
 """
 
 import ipaddress
-from datetime import date, datetime, timedelta
-from typing import Iterable
+from datetime import date, datetime
 
-import django
 from django.apps import apps
 from django.contrib import messages
-from django.contrib.auth.models import AbstractUser, User
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import Case, Q, When
+from django.urls import reverse, reverse_lazy
+from django.utils import timezone
+from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
 from base.horilla_company_manager import HorillaCompanyManager
 from horilla import horilla_middlewares
 from horilla.horilla_middlewares import _thread_locals
-from horilla.models import HorillaModel, upload_path
+from horilla.methods import get_horilla_model_class
+from horilla.models import HorillaModel, NoPermissionModel, upload_path
 from horilla_audit.models import HorillaAuditInfo, HorillaAuditLog
+from horilla_auth.models import HorillaUser
+from horilla_views.cbv_methods import render_template
 
 # Create your models here.
 WEEKS = [
@@ -31,7 +34,6 @@ WEEKS = [
     ("4", _("Fifth Week")),
 ]
 
-
 WEEK_DAYS = [
     ("0", _("Monday")),
     ("1", _("Tuesday")),
@@ -40,6 +42,25 @@ WEEK_DAYS = [
     ("4", _("Friday")),
     ("5", _("Saturday")),
     ("6", _("Sunday")),
+]
+
+DAY_DATE = [(str(i), str(i)) for i in range(1, 32)]
+DAY_DATE.append(("last", _("Last Day")))
+
+DAY = [
+    ("monday", _("Monday")),
+    ("tuesday", _("Tuesday")),
+    ("wednesday", _("Wednesday")),
+    ("thursday", _("Thursday")),
+    ("friday", _("Friday")),
+    ("saturday", _("Saturday")),
+    ("sunday", _("Sunday")),
+]
+
+BASED_ON = [
+    ("after", _("After")),
+    ("weekly", _("Weekend")),
+    ("monthly", _("Monthly")),
 ]
 
 
@@ -60,6 +81,9 @@ def validate_time_format(value):
 
 
 def clear_messages(request):
+    """
+    clear messages
+    """
     storage = messages.get_messages(request)
     for message in storage:
         pass
@@ -98,6 +122,90 @@ class Company(HorillaModel):
     def __str__(self) -> str:
         return str(self.company)
 
+    def company_icon_with_name(self):
+
+        return format_html(
+            '<img src="{}" style="width: 30px; border-radius: 100%; display:inline;" class="oh-profile__image" alt="" /> {}',
+            self.icon.url,
+            self.company,
+        )
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("company-update-form", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_delete_instance(self):
+        """
+        to get instance for delete
+        """
+
+        return self.pk
+
+
+class CompanyGroupAssignment(HorillaModel):
+    """
+    Company-scoped membership of a user in an auth Group.
+
+    When settings.COMPANY_SCOPED_PERMISSIONS is enabled, a user's group
+    permissions only apply in companies where such an assignment exists
+    (resolved by base.auth_backends.CompanyScopedBackend). The plain
+    ``user.groups`` M2M is kept in sync as the union of these rows so that
+    disabling the flag instantly restores legacy global behavior.
+    """
+
+    user = models.ForeignKey(
+        HorillaUser,
+        on_delete=models.CASCADE,
+        related_name="company_group_assignments",
+        verbose_name=_("User"),
+    )
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="group_assignments",
+        verbose_name=_("Company"),
+    )
+    group = models.ForeignKey(
+        "auth.Group",
+        on_delete=models.CASCADE,
+        related_name="company_assignments",
+        verbose_name=_("Group"),
+    )
+
+    class Meta:
+        """
+        Meta class to add additional options
+        """
+
+        verbose_name = _("Company group assignment")
+        verbose_name_plural = _("Company group assignments")
+        unique_together = ["user", "company", "group"]
+        app_label = "base"
+
+    def __str__(self) -> str:
+        return f"{self.user} - {self.group} @ {self.company}"
+
+    @classmethod
+    def sync_user_group_membership(cls, user, group):
+        """
+        Keep the plain ``user.groups`` M2M as the union of company
+        assignments: member of the group in >=1 company -> in the M2M.
+        """
+        if cls.objects.filter(user=user, group=group).exists():
+            user.groups.add(group)
+        else:
+            user.groups.remove(group)
+
 
 class Department(HorillaModel):
     """
@@ -112,6 +220,10 @@ class Department(HorillaModel):
     objects = HorillaCompanyManager()
 
     class Meta:
+        """
+        meta
+        """
+
         verbose_name = _("Department")
         verbose_name_plural = _("Departments")
 
@@ -128,8 +240,54 @@ class Department(HorillaModel):
                 .exclude(id=self.id)
                 .exists()
             ):
-                raise ValidationError("This department already exists in this company")
+                raise ValidationError(
+                    _("This department already exists in this company")
+                )
         return
+
+    def toggle_count(self):
+        return self.job_position.all().count()
+
+    def get_department_col(self):
+        """
+        this method is to get custom department col in job position
+        """
+
+        return render_template(
+            path="cbv/settings/job_position_dpt.html",
+            context={"instance": self},
+        )
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("settings-department-update", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_delete_instance(self):
+        """
+        to get instance for delete
+        """
+
+        return self.pk
+
+    def get_job_position_col(self):
+        """
+        this method is to get custom job position col in job position
+        """
+
+        return render_template(
+            path="cbv/settings/position_in_job_position.html",
+            context={"instance": self},
+        )
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -168,6 +326,29 @@ class JobPosition(HorillaModel):
 
     def __str__(self):
         return str(self.job_position + " - (" + self.department_id.department) + ")"
+
+    def job_position_col(self):
+        """
+        This method for get custom column.
+        """
+
+        return render_template(
+            path="cbv/settings/job_position_col_in_job_role.html",
+            context={"instance": self},
+        )
+
+    def get_data_count(self):
+        return self.jobrole_set.all().count()
+
+    def job_role_col(self):
+        """
+        This method for get custom column.
+        """
+
+        return render_template(
+            path="cbv/settings/job_role.html",
+            context={"instance": self},
+        )
 
 
 class JobRole(HorillaModel):
@@ -228,8 +409,41 @@ class WorkType(HorillaModel):
                 .exclude(id=self.id)
                 .exists()
             ):
-                raise ValidationError("This work type already exists in this company")
+                raise ValidationError(
+                    _("This work type already exists in this company")
+                )
         return
+
+    def get_company_name(self):
+        """
+        Returns comma-separated company names for display in list views.
+        Returns 'All Company' when no company is assigned.
+        """
+        companies = self.company_id.all()
+        if companies.exists():
+            return ", ".join(c.company for c in companies)
+        return _("All Company")
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("work-type-update-form", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_delete_instance(self):
+        """
+        to get instance for delete
+        """
+
+        return self.pk
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -242,7 +456,7 @@ class RotatingWorkType(HorillaModel):
     RotatingWorkType model
     """
 
-    name = models.CharField(max_length=50)
+    name = models.CharField(max_length=50, unique=True, verbose_name=_("Name"))
     work_type1 = models.ForeignKey(
         WorkType,
         on_delete=models.PROTECT,
@@ -278,8 +492,44 @@ class RotatingWorkType(HorillaModel):
     def __str__(self) -> str:
         return str(self.name)
 
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("rotating-work-type-update-form", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_delete_instance(self):
+        """
+        to get instance for delete
+        """
+
+        return self.pk
+
+    def get_additional_worktytpes(self):
+        """
+        this method is to get additional work types if exists
+        """
+
+        additional_work = self.additional_work_types()
+        if additional_work:
+            additional = "<br>".join([str(work) for work in additional_work])
+            return additional
+        return "None"
+
     def clean(self):
-        if self.work_type1 == self.work_type2:
+        if (
+            self.work_type1_id
+            and self.work_type2_id
+            and self.work_type1_id == self.work_type2_id
+        ):
             raise ValidationError(_("Select different work type continuously"))
 
         additional_work_types = (
@@ -290,13 +540,15 @@ class RotatingWorkType(HorillaModel):
 
         if (
             additional_work_types
-            and str(self.work_type2.id) == additional_work_types[0]
+            and self.work_type2_id is not None
+            and str(self.work_type2_id) == additional_work_types[0]
         ):
             raise ValidationError(_("Select different work type continuously"))
 
         if (
             additional_work_types
-            and str(self.work_type1.id) == additional_work_types[-1]
+            and self.work_type1_id is not None
+            and str(self.work_type1_id) == additional_work_types[-1]
         ):
             raise ValidationError(_("Select different work type continuously"))
 
@@ -321,24 +573,6 @@ class RotatingWorkType(HorillaModel):
         return additional_work_types
 
 
-DAY_DATE = [(str(i), str(i)) for i in range(1, 32)]
-DAY_DATE.append(("last", _("Last Day")))
-DAY = [
-    ("monday", _("Monday")),
-    ("tuesday", _("Tuesday")),
-    ("wednesday", _("Wednesday")),
-    ("thursday", _("Thursday")),
-    ("friday", _("Friday")),
-    ("saturday", _("Saturday")),
-    ("sunday", _("Sunday")),
-]
-BASED_ON = [
-    ("after", _("After")),
-    ("weekly", _("Weekend")),
-    ("monthly", _("Monthly")),
-]
-
-
 class RotatingWorkTypeAssign(HorillaModel):
     """
     RotatingWorkTypeAssign model
@@ -353,9 +587,7 @@ class RotatingWorkTypeAssign(HorillaModel):
     rotating_work_type_id = models.ForeignKey(
         RotatingWorkType, on_delete=models.PROTECT, verbose_name=_("Rotating Work Type")
     )
-    start_date = models.DateField(
-        default=django.utils.timezone.now, verbose_name=_("Start Date")
-    )
+    start_date = models.DateField(default=timezone.now, verbose_name=_("Start Date"))
     next_change_date = models.DateField(null=True, verbose_name=_("Next Switch"))
     current_work_type = models.ForeignKey(
         WorkType,
@@ -418,6 +650,9 @@ class RotatingWorkTypeAssign(HorillaModel):
         ordering = ["-next_change_date", "-employee_id__employee_first_name"]
 
     def clean(self):
+        if self.start_date < timezone.now().date():
+            raise ValidationError(_("Date must be greater than or equal to today"))
+
         if self.is_active and self.employee_id is not None:
             # Check if any other active record with the same parent already exists
             siblings = RotatingWorkTypeAssign.objects.filter(
@@ -425,8 +660,73 @@ class RotatingWorkTypeAssign(HorillaModel):
             )
             if siblings.exists() and siblings.first().id != self.id:
                 raise ValidationError(_("Only one active record allowed per employee"))
-        if self.start_date < django.utils.timezone.now().date():
-            raise ValidationError(_("Date must be greater than or equal to today"))
+
+    def rotate_data(self):
+        """
+        method for rotate col
+        """
+
+        return render_template(
+            path="cbv/rotating_work_type/rotation_col.html",
+            context={"instance": self},
+        )
+
+    def get_based_on_display(self):
+        """
+        Display work type
+        """
+        return dict(BASED_ON).get(self.based_on)
+
+    def get_actions(self):
+        """
+        get different actions
+        """
+
+        return render_template(
+            path="cbv/rotating_work_type/work_rotate_actions.html",
+            context={"instance": self},
+        )
+
+    def work_rotate_detail_subtitle(self):
+        """
+        Return subtitle containing both department and job position information.
+        """
+
+        return f"{self.employee_id.get_department()} / {self.employee_id.get_job_position()}"
+
+    def work_rotate_detail_view(self):
+        """
+        for detail view of page
+        """
+        url = reverse("work-rotating-detail-view", kwargs={"pk": self.pk})
+        return url
+
+    def individual_tab_work_rotate_detail_view(self):
+        """
+        for detail view of page in employee profile
+        """
+        url = reverse("individual-work-rotating-detail-view", kwargs={"pk": self.pk})
+        return url
+
+    def detail_is_active(self):
+        """
+        return active or not
+        """
+
+        if self.is_active:
+            return "Is Active"
+        else:
+            return "Archived"
+
+    def get_detail_view_actions(self):
+        """
+        get detail view actions
+        """
+
+        return render_template(
+            path="cbv/rotating_work_type/rotate_detail_view_actions.html",
+            context={"instance": self},
+        )
 
 
 class EmployeeType(HorillaModel):
@@ -434,10 +734,10 @@ class EmployeeType(HorillaModel):
     EmployeeType model
     """
 
-    employee_type = models.CharField(max_length=50)
+    employee_type = models.CharField(max_length=50, verbose_name=_("Employee Type"))
     company_id = models.ManyToManyField(Company, blank=True, verbose_name=_("Company"))
 
-    objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")
+    objects = HorillaCompanyManager()
 
     class Meta:
         """
@@ -449,6 +749,23 @@ class EmployeeType(HorillaModel):
 
     def __str__(self) -> str:
         return str(self.employee_type)
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("employee-type-update-view", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_instance_id(self):
+        return self.id
 
     def clean(self, *args, **kwargs):
         super().clean(*args, **kwargs)
@@ -464,7 +781,7 @@ class EmployeeType(HorillaModel):
                 .exists()
             ):
                 raise ValidationError(
-                    "This employee type already exists in this company"
+                    _("This employee type already exists in this company")
                 )
         return
 
@@ -505,6 +822,7 @@ class EmployeeShift(HorillaModel):
         max_length=50,
         null=False,
         blank=False,
+        verbose_name=_("Employee Shift"),
     )
     days = models.ManyToManyField(EmployeeShiftDay, through="EmployeeShiftSchedule")
     weekly_full_time = models.CharField(
@@ -528,7 +846,7 @@ class EmployeeShift(HorillaModel):
             verbose_name=_("Grace Time"),
         )
 
-    objects = HorillaCompanyManager("employee_shift__company_id")
+    objects = HorillaCompanyManager()
 
     class Meta:
         """
@@ -540,6 +858,29 @@ class EmployeeShift(HorillaModel):
 
     def __str__(self) -> str:
         return str(self.employee_shift)
+
+    def get_grace_time(self):
+        if self.grace_time_id:
+            return self.grace_time_id
+        else:
+            return _("Nil")
+
+    def get_instance_id(self):
+        return self.id
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("employee-shift-update-view", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete  url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
 
     def clean(self, *args, **kwargs):
         super().clean(*args, **kwargs)
@@ -555,7 +896,7 @@ class EmployeeShift(HorillaModel):
                 .exists()
             ):
                 raise ValidationError(
-                    "This employee shift already exists in this company"
+                    _("This employee shift already exists in this company")
                 )
         return
 
@@ -565,19 +906,13 @@ class EmployeeShift(HorillaModel):
         return self
 
 
-from django.db.models import Case, When
-
-
 class EmployeeShiftSchedule(HorillaModel):
     """
     EmployeeShiftSchedule model
     """
 
     day = models.ForeignKey(
-        EmployeeShiftDay,
-        on_delete=models.PROTECT,
-        related_name="day_schedule",
-        verbose_name=_("Shift Day"),
+        EmployeeShiftDay, on_delete=models.PROTECT, related_name="day_schedule"
     )
     shift_id = models.ForeignKey(
         EmployeeShift, on_delete=models.PROTECT, verbose_name=_("Shift")
@@ -604,9 +939,10 @@ class EmployeeShiftSchedule(HorillaModel):
             "Time at which the horilla will automatically check out the employee attendance if they forget."
         ),
     )
+
     company_id = models.ManyToManyField(Company, blank=True, verbose_name=_("Company"))
 
-    objects = HorillaCompanyManager("shift_id__employee_shift__company_id")
+    objects = HorillaCompanyManager()
 
     class Meta:
         """
@@ -632,10 +968,66 @@ class EmployeeShiftSchedule(HorillaModel):
     def __str__(self) -> str:
         return f"{self.shift_id.employee_shift} {self.day}"
 
+    def get_detail_url(self):
+        """
+        Detail view url
+        """
+        url = reverse_lazy("employee-shift-shedule-detail-view", kwargs={"pk": self.pk})
+        return url
+
+    def get_instance_id(self):
+        return self.id
+
+    def get_automatic_check_out_time(self):
+        """
+        Custom column for automatic checkout time
+        """
+        return (
+            f"<div class='oh-timeoff-modal__stat-title'>Automatic Check Out Time</div><div>{self.auto_punch_out_time}</div>"
+            if self.is_auto_punch_out_enabled
+            else ""
+        )
+
+    def get_avatar(self):
+        """
+        Method will retun the api to the avatar or path to the profile image
+        """
+        url = f"https://ui-avatars.com/api/?name={self.day.day}&background=random"
+        return url
+
+    def actions_col(self):
+        """
+        This for actions column in employee shift schedule
+        """
+        return render_template(
+            path="cbv/settings/employee_shift_schedule_action.html",
+            context={"instance": self},
+        )
+
+    def detail_actions_col(self):
+        """
+        This for detail actions column in employee shift schedule
+        """
+        return render_template(
+            path="cbv/settings/employee_shift_schedule_detail_action.html",
+            context={"instance": self},
+        )
+
+    def auto_punch_out_col(self):
+        return _("Yes") if self.is_auto_punch_out_enabled else _("No")
+
     def save(self, *args, **kwargs):
         if self.start_time and self.end_time:
-            self.is_night_shift = self.start_time > self.end_time
+            if self.start_time > self.end_time:
+                self.is_night_shift = True
         super().save(*args, **kwargs)
+
+    def day_col(self):
+        """
+        Custom column for day in employee shift schedule
+        """
+
+        return dict(DAY).get(self.day.day)
 
 
 class RotatingShift(HorillaModel):
@@ -680,6 +1072,33 @@ class RotatingShift(HorillaModel):
 
     def __str__(self) -> str:
         return str(self.name)
+
+    def get_additional_shifts(self):
+        """
+        Returns a list of additional shifts or a message if no additional shifts are available.
+        """
+        additional_shifts = self.additional_shifts()
+        if additional_shifts:
+            additional_shift = "<br>".join([str(shift) for shift in additional_shifts])
+            return additional_shift
+        return "None"
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("rotating-shift-update", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete  url
+        """
+        url = reverse_lazy("generic-delete")
+        return url
+
+    def get_instance_id(self):
+        return self.id
 
     def clean(self):
 
@@ -747,9 +1166,7 @@ class RotatingShiftAssign(HorillaModel):
     rotating_shift_id = models.ForeignKey(
         RotatingShift, on_delete=models.PROTECT, verbose_name=_("Rotating Shift")
     )
-    start_date = models.DateField(
-        default=django.utils.timezone.now, verbose_name=_("Start Date")
-    )
+    start_date = models.DateField(default=timezone.now, verbose_name=_("Start Date"))
     next_change_date = models.DateField(null=True, verbose_name=_("Next Switch"))
     current_shift = models.ForeignKey(
         EmployeeShift,
@@ -804,6 +1221,95 @@ class RotatingShiftAssign(HorillaModel):
     )
     objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")
 
+    def rotating_column(self):
+        """
+        This method for get custom column.
+        """
+
+        return render_template(
+            path="cbv/rotating_shift/rotating_column.html",
+            context={"instance": self},
+        )
+
+    def actions(self):
+        """
+        This method for get custom column.
+        """
+
+        return render_template(
+            path="cbv/rotating_shift/actions_rotaing_shift.html",
+            context={"instance": self},
+        )
+
+    def rotating_detail_actions(self):
+        """
+        This method for get custom column.
+        """
+
+        return render_template(
+            path="cbv/rotating_shift/rotating_shift_detail_actions.html",
+            context={"instance": self},
+        )
+
+    def get_based_on_display(self):
+        """
+        Display work type
+        """
+        return dict(BASED_ON).get(self.based_on)
+
+    def rotating_shift_detail(self):
+        """
+        detail view
+        """
+
+        url = reverse("rotating-shift-detail-view", kwargs={"pk": self.pk})
+
+        return url
+
+    def rotating_shift_individual_detail(self):
+        """
+        individual detail view
+        """
+
+        url = reverse("rotating-shift-individual-detail-view", kwargs={"pk": self.pk})
+
+        return url
+
+    def rotating_subtitle(self):
+        """
+        Detail view subtitle
+        """
+
+        return f"{self.employee_id.get_department()} / {self.employee_id.get_job_position()}"
+
+    def check_active(self):
+        """
+        Check active
+        """
+
+        if self.is_active:
+            return "Is Active"
+        else:
+            return "Archived"
+
+    def detail_edit_url(self):
+        """
+        Detail view edit
+        """
+
+        url = reverse("rotating-shift-assign-update", kwargs={"id": self.pk})
+
+        return url
+
+    def detail_archive_url(self):
+        """
+        Detail view edit
+        """
+
+        url = reverse("rotating-shift-assign-archive", kwargs={"obj_id": self.pk})
+
+        return url
+
     class Meta:
         """
         Meta class to add additional options
@@ -821,8 +1327,117 @@ class RotatingShiftAssign(HorillaModel):
             )
             if siblings.exists() and siblings.first().id != self.id:
                 raise ValidationError(_("Only one active record allowed per employee"))
-        if self.start_date < django.utils.timezone.now().date():
+
+        if self.start_date < timezone.now().date():
             raise ValidationError(_("Date must be greater than or equal to today"))
+
+
+# ---------------------------------------------------------------------------
+# Roster
+# ---------------------------------------------------------------------------
+
+
+class Roster(HorillaModel):
+    """
+    Forward-planning shift roster entry: one employee, one date, one shift.
+    Planners assign shifts in advance; employees see published entries via My Roster.
+    """
+
+    employee = models.ForeignKey(
+        "employee.Employee",
+        on_delete=models.CASCADE,
+        related_name="roster_entries",
+        verbose_name=_("Employee"),
+    )
+    date = models.DateField(verbose_name=_("Date"))
+    shift = models.ForeignKey(
+        "base.EmployeeShift",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="roster_entries",
+        verbose_name=_("Shift"),
+    )
+    department = models.ForeignKey(
+        "base.Department",
+        on_delete=models.CASCADE,
+        related_name="roster_entries",
+        verbose_name=_("Department"),
+    )
+    is_published = models.BooleanField(
+        default=False,
+        verbose_name=_("Published"),
+        help_text=_("Visible to the employee once published."),
+    )
+    is_off = models.BooleanField(
+        default=False,
+        verbose_name=_("Day Off"),
+        help_text=_("Planned weekly rest day."),
+    )
+    notes = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name=_("Notes"),
+    )
+    created_by = models.ForeignKey(
+        "employee.Employee",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_roster_entries",
+        verbose_name=_("Created By"),
+    )
+
+    objects = HorillaCompanyManager("employee__employee_work_info__company_id")
+
+    class Meta:
+        verbose_name = _("Roster Entry")
+        verbose_name_plural = _("Roster Entries")
+        unique_together = [("employee", "date")]
+
+    def __str__(self):
+        shift_label = "OFF" if self.is_off else self.shift or "-"
+        return f"{self.employee} — {self.date} — {shift_label}"
+
+
+class RosterPublishLog(models.Model):
+    """
+    Audit trail for each roster publish action.
+    """
+
+    department = models.ForeignKey(
+        "base.Department",
+        on_delete=models.CASCADE,
+        related_name="roster_publish_logs",
+        verbose_name=_("Department"),
+    )
+    from_date = models.DateField(verbose_name=_("From Date"))
+    to_date = models.DateField(verbose_name=_("To Date"))
+    published_by = models.ForeignKey(
+        "employee.Employee",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="roster_publishes",
+        verbose_name=_("Published By"),
+    )
+    published_on = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name=_("Published On"),
+    )
+    total_employees = models.IntegerField(
+        default=0,
+        verbose_name=_("Total Employees"),
+    )
+
+    objects = models.Manager()
+
+    class Meta:
+        verbose_name = _("Roster Publish Log")
+        verbose_name_plural = _("Roster Publish Logs")
+        ordering = ["-published_on"]
+
+    def __str__(self):
+        return f"{self.department} — {self.from_date} to {self.to_date}"
 
 
 class BaserequestFile(models.Model):
@@ -857,7 +1472,7 @@ class WorkTypeRequest(HorillaModel):
         verbose_name=_("Previous Work Type"),
     )
     requested_date = models.DateField(
-        null=True, default=django.utils.timezone.now, verbose_name=_("Requested Date")
+        null=True, default=timezone.now, verbose_name=_("Requested Date")
     )
     requested_till = models.DateField(
         null=True, blank=True, verbose_name=_("Requested Till")
@@ -892,6 +1507,76 @@ class WorkTypeRequest(HorillaModel):
             "-id",
         ]
 
+    def comment_note(self):
+        """
+        method used for comment note col in the page
+        """
+
+        return render_template(
+            path="cbv/work_type_request/note.html",
+            context={"instance": self},
+        )
+
+    def work_actions(self):
+        """
+        method for rendering actions(edit,duplicate,delete)
+        """
+
+        return render_template(
+            path="cbv/work_type_request/actions.html",
+            context={"instance": self},
+        )
+
+    def confirmation(self):
+        """
+        method for rendering options(approve,reject)
+        """
+
+        return render_template(
+            path="cbv/work_type_request/confirmation.html",
+            context={"instance": self},
+        )
+
+    def detail_confirmation(self):
+        """
+        method for rendering options(approve,reject)
+        """
+
+        return render_template(
+            path="cbv/work_type_request/detail_confirmation.html",
+            context={"instance": self},
+        )
+
+    def detail_view(self):
+        """
+        for detail view of page
+        """
+        url = reverse("work-detail-view", kwargs={"pk": self.pk})
+        return url
+
+    def is_permanent_work_type_display(self):
+        """
+        Method to display "Yes" or "No" based on is_permanent_work_type value
+        """
+        return _("Yes") if self.is_permanent_work_type else _("No")
+
+    def detail_view_actions(self):
+        """
+        method for rendering different options
+        convert,skillzone,reject,mail
+        """
+
+        return render_template(
+            path="cbv/work_type_request/detail_view_actions.html",
+            context={"instance": self},
+        )
+
+    def detail_subtitle(self):
+        """
+        Return subtitle containing both department and job position information.
+        """
+        return f"{self.employee_id.get_department()} / {self.employee_id.get_job_position()}"
+
     def delete(self, *args, **kwargs):
         request = getattr(_thread_locals, "request", None)
         if not self.approved:
@@ -899,7 +1584,7 @@ class WorkTypeRequest(HorillaModel):
         else:
             if request:
                 clear_messages(request)
-                messages.warning(request, "The request entry cannot be deleted.")
+                messages.warning(request, _("The request entry cannot be deleted."))
 
     def is_any_work_type_request_exists(self):
         approved_work_type_requests_range = WorkTypeRequest.objects.filter(
@@ -943,7 +1628,7 @@ class WorkTypeRequest(HorillaModel):
     def clean(self):
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         if not request.user.is_superuser:
-            if self.requested_date < django.utils.timezone.now().date():
+            if self.requested_date < timezone.now().date():
                 raise ValidationError(_("Date must be greater than or equal to today"))
         if self.requested_till and self.requested_till < self.requested_date:
             raise ValidationError(
@@ -1013,7 +1698,7 @@ class ShiftRequest(HorillaModel):
         verbose_name=_("Previous Shift"),
     )
     requested_date = models.DateField(
-        null=True, default=django.utils.timezone.now, verbose_name=_("Requested Date")
+        null=True, default=timezone.now, verbose_name=_("Requested Date")
     )
     reallocate_to = models.ForeignKey(
         "employee.Employee",
@@ -1058,11 +1743,160 @@ class ShiftRequest(HorillaModel):
             "-id",
         ]
 
+    def comment(self):
+        """
+        This method for get custom column for comment.
+        """
+
+        return render_template(
+            path="cbv/shift_request/comment.html",
+            context={"instance": self},
+        )
+
+    # def shift_allocate_actions(self):
+    #     """
+    #     This method for get custom column for allocated actions.
+    #     """
+
+    #     return render_template(
+    #         path="cbv/shift_request/allocated_shift_actions.html",
+    #         context={"instance": self},
+    #     )
+
+    def allocated_confirm_action_col(self):
+        """
+        This method for get custom column for allocated actions.
+        """
+
+        return render_template(
+            path="cbv/shift_request/allocated_confirm_action.html",
+            context={"instance": self},
+        )
+
+    def allocated_detail_confirm_action(self):
+        """
+        Action buttons for the Allocated Shift Request detail modal - same
+        buttons, same order, same per-role conditions as
+        allocated_confirm_action_col's row actions.
+        """
+
+        return render_template(
+            path="cbv/shift_request/allocated_detail_confirm_action.html",
+            context={"instance": self},
+        )
+
+    def user_availability(self):
+        """
+        This method for get custom column for HorillaUser availability.
+        """
+
+        return render_template(
+            path="cbv/shift_request/user_availability.html",
+            context={"instance": self},
+        )
+
+    def shift_details(self):
+        """
+        Detail view
+        """
+
+        url = reverse("shift-detail-view", kwargs={"pk": self.pk})
+
+        return url
+
+    def allocate_shift_details(self):
+        """
+        Allocate detail view
+        """
+
+        url = reverse("allocate-detail-view", kwargs={"pk": self.pk})
+
+        return url
+
+    def is_permanent(self):
+        """
+        Permanent shift
+        """
+        return _("Yes") if self.is_permanent_shift else _("No")
+
+    def shift_actions(self):
+        """
+        This method for get custom column for actions.
+        """
+
+        return render_template(
+            path="cbv/shift_request/actions_shift_requst.html",
+            context={"instance": self},
+        )
+
+    def shift_detail_confirm_action(self):
+        """
+        Action buttons for the Shift Request detail modal - same buttons,
+        same order, same per-role conditions as shift_actions's row
+        actions (Edit, Duplicate, Remove, Approve, Reject).
+        """
+
+        return render_template(
+            path="cbv/shift_request/shift_detail_confirm_action.html",
+            context={"instance": self},
+        )
+
+    def confirmations(self):
+        """
+        This method for get custom column for confirmations.
+        """
+
+        return render_template(
+            path="cbv/shift_request/confirmations.html",
+            context={"instance": self},
+        )
+
+    def detail_confirmations(self):
+
+        return render_template(
+            path="cbv/shift_request/detail_confirmations.html",
+            context={"instance": self},
+        )
+
+    def allocate_confirmations(self):
+        """
+        This method for get custom column for confirmations.
+        """
+
+        return render_template(
+            path="cbv/shift_request/confirm_allocated.html",
+            context={"instance": self},
+        )
+
+    def detail_actions(self):
+        """
+        This method for get custom column for comment.
+        """
+
+        return render_template(
+            path="cbv/shift_request/shift_detail_actions.html",
+            context={"instance": self},
+        )
+
+    def request_status(self):
+        return (
+            _("Rejected")
+            if self.canceled
+            else (_("Approved") if self.approved else _("Requested"))
+        )
+
+    def details_subtitle(self):
+        """
+        Detail view subtitle
+        """
+
+        return f"{self.employee_id.get_department()} / {self.employee_id.get_job_position()}"
+
     def clean(self):
 
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         if not request.user.is_superuser:
-            if not self.pk and self.requested_date < django.utils.timezone.now().date():
+            if not self.pk and self.requested_date < timezone.now().date():
                 raise ValidationError(_("Date must be greater than or equal to today"))
         if self.requested_till and self.requested_till < self.requested_date:
             raise ValidationError(
@@ -1125,7 +1959,7 @@ class ShiftRequest(HorillaModel):
         else:
             if request:
                 clear_messages(request)
-                messages.warning(request, "The request entry cannot be deleted.")
+                messages.warning(request, _("The request entry cannot be deleted."))
 
     def __str__(self) -> str:
         return f"{self.employee_id.employee_first_name} \
@@ -1163,6 +1997,47 @@ class Tags(HorillaModel):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        from base.auth_backends import stamp_company_on_create
+
+        stamp_company_on_create(self)
+        super().save(*args, **kwargs)
+
+    def get_color(self):
+        """
+        This method returns the style string with the tag's color
+        """
+        color = (
+            f"<span style='height: 25px; "
+            f"width: 25px; "
+            f"background-color: {self.color}; "
+            f"border-radius: 50%; "
+            f"display: inline-block;'></span>"
+        )
+        return color
+
+    def get_instance_id(self):
+        """
+        To get instance
+        """
+        return self.id
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("update-helpdesk-tag", kwargs={"pk": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("tag-delete", kwargs={"obj_id": self.pk})
+        # message = "Are you sure you want to delete this tag ?"
+        # return f"'{url}'" + "," + f"'{message}'"
+        return url
 
 
 class HorillaMailTemplate(HorillaModel):
@@ -1226,14 +2101,33 @@ class DynamicEmailConfiguration(HorillaModel):
         help_text=_(
             "By enabling this the display name will take from who triggered the mail"
         ),
+        verbose_name=_("Use dynamic display name"),
     )
 
     timeout = models.SmallIntegerField(
         null=True, verbose_name=_("Email Send Timeout (seconds)")
     )
     company_id = models.OneToOneField(
-        Company, on_delete=models.CASCADE, null=True, blank=True
+        Company,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        verbose_name=_("Company"),
     )
+
+    def highlight_cell(self):
+        if self.is_primary:
+            return 'class="bg-primary-50"'
+
+    def action_col(self):
+        """
+        This method for get custom column.
+        """
+
+        return render_template(
+            path="cbv/settings/mail_server_action.html",
+            context={"instance": self},
+        )
 
     def clean(self):
         if self.use_ssl and self.use_tls:
@@ -1286,13 +2180,22 @@ CONDITION_CHOICE = [
 
 
 class MultipleApprovalCondition(HorillaModel):
+    """
+    Multiple approve conditions
+    """
+
     department = models.ForeignKey(Department, on_delete=models.CASCADE)
     condition_field = models.CharField(
         max_length=255,
         choices=FIELD_CHOICE,
+        verbose_name=_("Condition Field"),
     )
     condition_operator = models.CharField(
-        max_length=255, choices=CONDITION_CHOICE, null=True, blank=True
+        max_length=255,
+        choices=CONDITION_CHOICE,
+        null=True,
+        blank=True,
+        verbose_name=_("Condition Operator"),
     )
     condition_value = models.CharField(
         max_length=100,
@@ -1312,7 +2215,6 @@ class MultipleApprovalCondition(HorillaModel):
         blank=True,
         verbose_name=_("Ending Value"),
     )
-    objects = models.Manager()
     company_id = models.ForeignKey(
         Company,
         null=True,
@@ -1320,9 +2222,77 @@ class MultipleApprovalCondition(HorillaModel):
         on_delete=models.CASCADE,
         verbose_name=_("Company"),
     )
+    objects = HorillaCompanyManager()
 
     def __str__(self) -> str:
         return f"{self.condition_field} {self.condition_operator}"
+
+    def get_condition_field(self):
+        """
+        Display condition field
+        """
+        return dict(FIELD_CHOICE).get(self.condition_field)
+
+    def get_condition_operator(self):
+        """
+        Display condition operator
+        """
+        return dict(CONDITION_CHOICE).get(self.condition_operator)
+
+    def get_condition_value(self):
+        """
+        Condition value column
+        """
+        if self.condition_operator == "range":
+            start_value = self.condition_start_value
+            end_value = self.condition_end_value
+            return start_value + " - " + end_value
+        else:
+            return self.condition_value
+
+    def approval_managers_col(self):
+        """
+        For approval managers column
+        """
+
+        return render_template(
+            path="cbv/multiple_approval_condition/approval_managers.html",
+            context={"instance": self},
+        )
+
+    def detail_actions(self):
+        """
+        For detail action column
+        """
+
+        return render_template(
+            path="cbv/multiple_approval_condition/detail_action.html",
+            context={"instance": self},
+        )
+
+    def actions_col(self):
+        """
+        For actions column
+        """
+
+        return render_template(
+            path="cbv/multiple_approval_condition/actions.html",
+            context={"instance": self},
+        )
+
+    def get_avatar(self):
+        """
+        Method will retun the api to the avatar or path to the profile image
+        """
+        url = f"https://ui-avatars.com/api/?name={self.department}&background=random"
+        return url
+
+    def detail_view(self):
+        """
+        detail view
+        """
+        url = reverse("detail-view-multiple-approval-condition", kwargs={"pk": self.pk})
+        return url
 
     def clean(self, *args, **kwargs):
         if self.condition_value:
@@ -1414,6 +2384,9 @@ class MultipleApprovalCondition(HorillaModel):
         super().save(*args, **kwargs)
 
     def approval_managers(self, *args, **kwargs):
+        """
+        approved managers
+        """
         managers = []
         from employee.models import Employee
 
@@ -1433,13 +2406,17 @@ class MultipleApprovalCondition(HorillaModel):
 
 
 class MultipleApprovalManagers(models.Model):
+    """
+    Multiple approve
+    """
+
     condition_id = models.ForeignKey(
         MultipleApprovalCondition, on_delete=models.CASCADE
     )
     sequence = models.IntegerField(null=False, blank=False)
     employee_id = models.IntegerField(null=True, blank=True)
     reporting_manager = models.CharField(max_length=100, null=True, blank=True)
-    objects = models.Manager()
+    objects = HorillaCompanyManager(related_company_field="condition_id__company_id")
 
     class Meta:
         verbose_name = _("Multiple Approval Managers")
@@ -1454,22 +2431,21 @@ class MultipleApprovalManagers(models.Model):
 
 class DynamicPagination(models.Model):
     """
-    model for storing pagination for employees
+    Per-user, per-company default for the number of records shown per
+    page across list views.
     """
 
-    from django.contrib.auth.models import User
-    from django.core.validators import MinValueValidator
-
-    user_id = models.OneToOneField(
-        User,
+    user_id = models.ForeignKey(
+        HorillaUser,
         on_delete=models.CASCADE,
         blank=True,
         null=True,
         related_name="dynamic_pagination",
         verbose_name=_("User"),
     )
+    company_id = models.ForeignKey("base.Company", on_delete=models.CASCADE, null=True)
     pagination = models.IntegerField(default=50, validators=[MinValueValidator(1)])
-    objects = models.Manager()
+    objects = HorillaCompanyManager()
 
     def save(self, *args, **kwargs):
         request = getattr(_thread_locals, "request", None)
@@ -1477,8 +2453,11 @@ class DynamicPagination(models.Model):
         self.user_id = user
         super().save(*args, **kwargs)
 
+    def company_col(self):
+        return self.company_id.company if self.company_id else "All Company"
+
     def __str__(self):
-        return f"{self.user_id}|{self.pagination}"
+        return f"{self.user_id}|{self.company_id}|{self.pagination}"
 
 
 class Attachment(models.Model):
@@ -1494,11 +2473,21 @@ class Attachment(models.Model):
 
 class AnnouncementExpire(models.Model):
     """
-    This model for setting a expire days for announcement if no expire date for announcement
+    Per-company default for the number of days an announcement stays
+    active when no explicit expire date is set.
     """
 
     days = models.IntegerField(null=True, blank=True, default=30)
-    objects = models.Manager()
+    company_id = models.ForeignKey("base.Company", on_delete=models.CASCADE, null=True)
+    objects = HorillaCompanyManager()
+
+    def company_col(self):
+        return self.company_id.company if self.company_id else "All Company"
+
+    def __str__(self):
+        return (
+            f"Default expire days for {self.company_id or 'All Company'}: {self.days}"
+        )
 
 
 class Announcement(HorillaModel):
@@ -1517,7 +2506,12 @@ class Announcement(HorillaModel):
     )
     expire_date = models.DateField(null=True, blank=True)
     employees = models.ManyToManyField(
-        Employee, related_name="announcement_employees", blank=True
+        Employee,
+        related_name="announcement_employees",
+        blank=True,
+        help_text=_(
+            "If no employee, department or job position is selected, the announcement will be visible to all employees in the selected company."
+        ),
     )
     department = models.ManyToManyField(Department, blank=True)
     job_position = models.ManyToManyField(
@@ -1551,6 +2545,9 @@ class Announcement(HorillaModel):
         return self.announcementview_set.filter(viewed=True)
 
     def viewed_by(self):
+        """
+        Announcement view
+        """
 
         viewed_by = AnnouncementView.objects.filter(
             announcement_id__id=self.id, viewed=True
@@ -1571,6 +2568,18 @@ class Announcement(HorillaModel):
     def __str__(self):
         return self.title
 
+    def announcement_custom_col(self):
+        """
+        custom col for announcement list col
+        """
+
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        return render_template(
+            path="cbv/dashboard/announcement_title.html",
+            context={"instance": self, "current_date": current_date},
+        )
+
 
 class AnnouncementComment(HorillaModel):
     """
@@ -1590,11 +2599,24 @@ class AnnouncementView(models.Model):
     Announcement View Model
     """
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(HorillaUser, on_delete=models.CASCADE)
     announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE)
     viewed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True, null=True)
+
     objects = models.Manager()
+
+    def announcement_viewed_by_col(self):
+        """
+        custom col for announcement list col
+        """
+
+        return render_template(
+            path="cbv/dashboard/announcement_viewed_by.html",
+            context={
+                "instance": self,
+            },
+        )
 
 
 class EmailLog(models.Model):
@@ -1609,10 +2631,41 @@ class EmailLog(models.Model):
     to = models.EmailField()
     status = models.CharField(max_length=6, choices=statuses)
     created_at = models.DateTimeField(auto_now_add=True)
-    objects = models.Manager()
     company_id = models.ForeignKey(
         Company, on_delete=models.CASCADE, null=True, editable=False
     )
+    # Was a plain Manager(), so the company_id below was never filtered on and
+    # the mail-log views -- which match only on recipient address -- could show
+    # one tenant's mail to another. Bodies are redacted on write; see
+    # base/email_redaction.py.
+    objects = HorillaCompanyManager()
+
+    def __str__(self) -> str:
+        return f"{self.subject} {self.to}"
+
+    def status_display(self):
+        status = dict(self.statuses).get(self.status)
+        if self.status == "sent":
+            color_class = "oh-dot--success"
+            link_class = "link-success"
+
+        elif self.status == "failed":
+            color_class = "oh-dot--danger"
+            link_class = "link-danger"
+        return format_html(
+            '<span class="oh-dot oh-dot--small me-1 oh-dot--color {color_class}"></span>'
+            '<span class="{link_class}">{status}</span>',
+            color_class=color_class,
+            status=status,
+            link_class=link_class,
+        )
+
+    def mail_log_detail_view(self):
+        """
+        for detail view of page
+        """
+        url = reverse("individual-mail-log-detail", kwargs={"pk": self.pk})
+        return url
 
 
 class DriverViewed(models.Model):
@@ -1625,7 +2678,7 @@ class DriverViewed(models.Model):
         ("pipeline", "pipeline"),
         ("settings", "settings"),
     ]
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(HorillaUser, on_delete=models.CASCADE)
     viewed = models.CharField(max_length=10, choices=choices)
 
     def user_viewed(self):
@@ -1636,6 +2689,10 @@ class DriverViewed(models.Model):
 
 
 class DashboardEmployeeCharts(HorillaModel):
+    """
+    dashboard employee chart
+    """
+
     from employee.models import Employee
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
@@ -1652,6 +2709,10 @@ class DashboardEmployeeCharts(HorillaModel):
 
 
 class BiometricAttendance(models.Model):
+    """
+    Biometric attendance
+    """
+
     is_installed = models.BooleanField(default=False)
     company_id = models.ForeignKey(
         Company,
@@ -1659,11 +2720,22 @@ class BiometricAttendance(models.Model):
         editable=False,
         on_delete=models.PROTECT,
         related_name="biometric_enabled_company",
+        verbose_name=_("Company"),
     )
-    objects = models.Manager()
+    objects = HorillaCompanyManager()
 
     def __str__(self):
         return f"{self.is_installed}"
+
+    def save(self, *args, **kwargs):
+        if (
+            not self.pk
+            and BiometricAttendance.objects.filter(company_id=self.company_id).exists()
+        ):
+            raise ValidationError(
+                _("Only one BiometricAttendance instance is allowed per company.")
+            )
+        return super().save(*args, **kwargs)
 
 
 def default_additional_data():
@@ -1673,29 +2745,37 @@ def default_additional_data():
 class AttendanceAllowedIP(models.Model):
     """
     Represents client IP addresses that are allowed to mark attendance.
-    Usage:
-        - This model is used to store IP addresses that are permitted to access the attendance system.
-        - It ensures that only authorized IP addresses can mark attendance.
+    Each company has its own record so IP restrictions are company-specific.
     """
 
+    company_id = models.OneToOneField(
+        Company,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="attendance_allowed_ip",
+        verbose_name=_("Company"),
+    )
     is_enabled = models.BooleanField(default=False)
     additional_data = models.JSONField(
         null=True, blank=True, default=default_additional_data
     )
+    objects = HorillaCompanyManager(related_company_field="company_id")
 
     def clean(self):
         """
         Validate that all entries in `allowed_ips` are either valid IP addresses or network prefixes.
         """
-        allowed_ips = self.additional_data.get("allowed_ips", [])
+        allowed_ips = (self.additional_data or {}).get("allowed_ips", [])
         for ip in allowed_ips:
             try:
-                ipaddress.ip_network(ip)
+                ipaddress.ip_network(ip, strict=False)
             except ValueError:
                 raise ValidationError(f"Invalid IP address or network prefix: {ip}")
 
     def __str__(self):
-        return f"AttendanceAllowedIP - {self.is_enabled}"
+        company = self.company_id.company if self.company_id else "Global"
+        return f"AttendanceAllowedIP ({company}) - {'enabled' if self.is_enabled else 'disabled'}"
 
 
 class TrackLateComeEarlyOut(HorillaModel):
@@ -1706,28 +2786,66 @@ class TrackLateComeEarlyOut(HorillaModel):
             "By enabling this, you track the late comes and early outs of employees in their attendance."
         ),
     )
+    company_id = models.ForeignKey(
+        Company,
+        null=True,
+        on_delete=models.CASCADE,
+        verbose_name=_("Company"),
+    )
+    objects = HorillaCompanyManager()
 
     class Meta:
-        verbose_name = _("Track Late Come Early Out")
-        verbose_name_plural = _("Track Late Come Early Outs")
+        verbose_name = _("Track Late Arrival & Early Departure")
+        verbose_name_plural = _("Track Late Arrival & Early Departure")
 
     def __str__(self):
         tracking = _("enabled") if self.is_enable else _("disabled")
         return f"Tracking late come early out {tracking}"
 
     def save(self, *args, **kwargs):
-        if not self.pk and TrackLateComeEarlyOut.objects.exists():
+        if (
+            not self.pk
+            and TrackLateComeEarlyOut.objects.filter(
+                company_id=self.company_id
+            ).exists()
+        ):
             raise ValidationError(
-                _("Only one TrackLateComeEarlyOut instance is allowed.")
+                _("Only one TrackLateComeEarlyOut instance is allowed per company.")
             )
         return super().save(*args, **kwargs)
 
 
 class Holidays(HorillaModel):
+    ASSIGNING_TYPE = [
+        ("department", _("Department")),
+        ("job_position", _("Job Position")),
+        ("employee", _("Employee")),
+    ]
     name = models.CharField(max_length=30, null=False, verbose_name=_("Name"))
     start_date = models.DateField(verbose_name=_("Start Date"))
     end_date = models.DateField(null=True, blank=True, verbose_name=_("End Date"))
     recurring = models.BooleanField(default=False, verbose_name=_("Recurring"))
+    is_specific = models.BooleanField(default=False, verbose_name=_("Is Specific"))
+    assigning_type = models.CharField(
+        choices=ASSIGNING_TYPE,
+        max_length=100,
+        null=True,
+        blank=True,
+        verbose_name=_("Assigning Type"),
+    )
+    department = models.ManyToManyField(
+        Department,
+        blank=True,
+        related_name="holiday_departments",
+        verbose_name=_("Department"),
+    )
+    job_position = models.ManyToManyField(
+        JobPosition,
+        blank=True,
+        related_name="holiday_job_positions",
+        verbose_name=_("Job Position"),
+    )
+    employees = models.ManyToManyField("employee.Employee", blank=True)
     company_id = models.ForeignKey(
         Company,
         null=True,
@@ -1743,19 +2861,94 @@ class Holidays(HorillaModel):
     def __str__(self):
         return self.name
 
-    def today_holidays(today=None) -> models.QuerySet:
+    def detail_view(self):
+        """
+        detail view
+        """
+
+        url = reverse("holiday-detail-view", kwargs={"pk": self.pk})
+        return url
+
+    def detail_view_actions(self):
+        """
+        detail view actions
+        """
+        return render_template(
+            path="cbv/holidays/detail_view_actions.html",
+            context={"instance": self},
+        )
+
+    def get_recurring_status(self):
+        """
+        recurring data
+        """
+        return _("Yes") if self.recurring else _("No")
+
+    def get_is_specific_status(self):
+        return _("Yes") if self.is_specific else _("No")
+
+    def get_assigning_type_label(self):
+        if not self.is_specific or not self.assigning_type:
+            return "-"
+        return dict(self.ASSIGNING_TYPE).get(self.assigning_type, "-")
+
+    def get_department_names(self):
+        depts = self.department.all()
+        return ", ".join(d.department for d in depts) if depts.exists() else "-"
+
+    def get_job_position_names(self):
+        positions = self.job_position.all()
+        return (
+            ", ".join(jp.job_position for jp in positions)
+            if positions.exists()
+            else "-"
+        )
+
+    def get_employee_names(self):
+        emps = self.employees.all()
+        return (
+            ", ".join(f"{e.employee_first_name} {e.employee_last_name}" for e in emps)
+            if emps.exists()
+            else "-"
+        )
+
+    def holidays_actions(self):
+        """
+        method for rendering actions(edit,delete)
+        """
+
+        return render_template(
+            path="cbv/holidays/holidays_actions.html",
+            context={"instance": self},
+        )
+
+    def get_avatar(self):
+        """
+        Method will retun the api to the avatar or path to the profile image
+        """
+        url = f"https://ui-avatars.com/api/?name={self.name}&background=random"
+        return url
+
+    def today_holidays(today=None, employee=None) -> models.QuerySet:
         """
         Retrieve holidays that overlap with the given date (default is today).
 
         Args:
             today (date, optional): The date to check for holidays. Defaults to the current date.
+            employee: When provided, limits results to global holidays and holidays
+                      specific to this employee. When None, returns all holidays.
 
         Returns:
             QuerySet: A queryset of `Holidays` instances where the given date falls between
                     `start_date` and `end_date` (inclusive).
         """
+        from django.db.models import Q
+
         today = today or date.today()
-        return Holidays.objects.filter(start_date__lte=today, end_date__gte=today)
+        qs = Holidays.objects.filter(start_date__lte=today, end_date__gte=today)
+        if employee is not None:
+            qs = qs.filter(Q(is_specific=False) | Q(employees=employee))
+        return qs
 
 
 class CompanyLeaves(HorillaModel):
@@ -1769,18 +2962,88 @@ class CompanyLeaves(HorillaModel):
     based_on_week_day = models.CharField(
         max_length=100, choices=WEEK_DAYS, verbose_name=_("Based On Week Day")
     )
-    company_id = models.ForeignKey(
-        Company, null=True, on_delete=models.PROTECT, verbose_name=_("Company")
-    )
+    company_id = models.ManyToManyField(Company, blank=True, verbose_name=_("Company"))
     objects = HorillaCompanyManager()
 
     class Meta:
         unique_together = ("based_on_week", "based_on_week_day")
-        verbose_name = _("Company Leave")
-        verbose_name_plural = _("Company Leaves")
+        verbose_name = _("Weekly Off Day")
+        verbose_name_plural = _("Weekly Off Days")
 
     def __str__(self):
         return f"{dict(WEEK_DAYS).get(self.based_on_week_day)} | {dict(WEEKS).get(self.based_on_week)}"
+
+    def custom_based_on_week(self):
+        """
+        custom based on col
+        """
+
+        return render_template(
+            path="cbv/company_leaves/on_week.html",
+            context={"instance": self, "weeks": WEEKS},
+        )
+
+    def get_detail_title(self):
+        """
+        for return title
+        """
+
+        title = "Weekly Off Days"
+        return title
+
+    def detail_view_actions(self):
+        """
+        detail view actions
+        """
+        return render_template(
+            path="cbv/company_leaves/detail_view_actions.html",
+            context={"instance": self},
+        )
+
+    def based_on_week_day_col(self):
+        """
+        custom based on week day col
+        """
+
+        return render_template(
+            path="cbv/company_leaves/on_week_day.html",
+            context={"instance": self, "week_days": WEEK_DAYS},
+        )
+
+    def company_leave_actions(self):
+        """
+        custom actions col
+        """
+
+        return render_template(
+            path="cbv/company_leaves/company_leave_actions.html",
+            context={"instance": self, "weeks": WEEKS},
+        )
+
+    def get_company_display(self):
+        """
+        Comma-separated names of the companies this weekly off day applies to.
+        """
+        return ", ".join(str(company) for company in self.company_id.all())
+
+    def detail_view(self):
+        """
+        detail view
+        """
+
+        url = reverse("company-leave-detail-view", kwargs={"pk": self.pk})
+        return url
+
+    def get_avatar(self):
+        """
+        Method will retun the api to the avatar or path to the profile image
+        """
+        if self.based_on_week is not None:
+            url = f"https://ui-avatars.com/api/?name={dict(WEEKS).get(self.based_on_week)}&background=random"
+        else:
+            data = "All"
+            url = f"https://ui-avatars.com/api/?name={data}&background=random"
+        return url
 
 
 class PenaltyAccounts(HorillaModel):
@@ -1793,7 +3056,7 @@ class PenaltyAccounts(HorillaModel):
         on_delete=models.PROTECT,
         related_name="penalty_accounts",
         editable=False,
-        verbose_name="Employee",
+        verbose_name=_("Employee"),
         null=True,
     )
     if apps.is_installed("attendance"):
@@ -1812,11 +3075,42 @@ class PenaltyAccounts(HorillaModel):
             on_delete=models.DO_NOTHING,
             blank=True,
             null=True,
-            verbose_name="Leave type",
+            verbose_name=_("Leave type"),
         )
-        minus_leaves = models.FloatField(default=0.0, null=True)
-        deduct_from_carry_forward = models.BooleanField(default=False)
-    penalty_amount = models.FloatField(default=0.0, null=True)
+        minus_leaves = models.FloatField(
+            default=0.0, null=True, verbose_name=_("Minus Leaves")
+        )
+        deduct_from_carry_forward = models.BooleanField(
+            default=False, verbose_name=_("Deduct from Carry Forward")
+        )
+
+        def get_deduct_from_carry_forward(self):
+            if self.deduct_from_carry_forward:
+                return _("Yes")
+            return _("No")
+
+    penalty_amount = models.FloatField(
+        default=0.0, null=True, verbose_name=_("Penalty Amount")
+    )
+
+    def get_delete_url(self):
+        """
+        To get delete url
+        """
+        url = reverse("delete-penalties", kwargs={"penalty_id": self.pk})
+        return url
+
+    def get_delete_instance(self):
+        """
+        To get instance for delete
+        """
+        return self.pk
+
+    def penalty_type_col(self):
+        if apps.is_installed("attendance"):
+            if self.late_early_id:
+                return "Late come or Early out Penalty"
+            return "Leave Penalty"
 
     def clean(self) -> None:
         super().clean()
@@ -1832,7 +3126,11 @@ class PenaltyAccounts(HorillaModel):
                     )
                 }
             )
-        if not self.minus_leaves and not self.penalty_amount:
+        if (
+            apps.is_installed("leave")
+            and not self.minus_leaves
+            and not self.penalty_amount
+        ):
             raise ValidationError(
                 {
                     "leave_type_id": _(
@@ -1842,8 +3140,10 @@ class PenaltyAccounts(HorillaModel):
             )
 
         if (
-            self.minus_leaves or self.deduct_from_carry_forward
-        ) and not self.leave_type_id:
+            apps.is_installed("leave")
+            and (self.minus_leaves or self.deduct_from_carry_forward)
+            and not self.leave_type_id
+        ):
             raise ValidationError({"leave_type_id": _("Leave type is required")})
         return
 
@@ -1862,4 +3162,119 @@ class NotificationSound(models.Model):
     sound_enabled = models.BooleanField(default=False)
 
 
-User.add_to_class("is_new_employee", models.BooleanField(default=False))
+class IntegrationApps(HorillaModel, NoPermissionModel):
+    app_label = models.CharField(max_length=255)
+    company = models.ForeignKey(
+        "base.Company",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        verbose_name=_("Company"),
+    )
+    is_enabled = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ("app_label", "company")
+
+
+class SetupChecklistDismissal(models.Model):
+    """
+    Per-user, per-company dismissal of the onboarding setup checklist banner.
+    A user who manages multiple companies can dismiss independently for each.
+    """
+
+    user = models.ForeignKey(
+        HorillaUser,
+        on_delete=models.CASCADE,
+        related_name="setup_checklist_dismissals",
+    )
+    company = models.ForeignKey(
+        "base.Company",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="setup_checklist_dismissals",
+    )
+    dismissed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "base"
+        unique_together = [("user", "company")]
+        verbose_name = "Setup Checklist Dismissal"
+        verbose_name_plural = "Setup Checklist Dismissals"
+
+    def __str__(self):
+        return f"{self.user} — {self.company or 'global'}"
+
+
+class DefaultExportPermission(HorillaModel):
+    """
+    Per-company toggle for the "Default Export Access" setting. When
+    enabled for a company, every user of that company may export data
+    from any module; when disabled, export access falls back to the
+    per-module export_<model> permission (superusers are always allowed).
+    """
+
+    is_enabled = models.BooleanField(default=True, blank=True, null=True)
+    company_id = models.ForeignKey(
+        Company,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        verbose_name=_("Company"),
+    )
+    objects = models.Manager()
+
+    class Meta:
+        # Every reader does .filter(company_id=...).first(), so a second row
+        # for the same company silently decides the setting by insertion
+        # order. One row per company, plus one for the NULL "all companies"
+        # scope.
+        #
+        # Two constraints rather than one with nulls_distinct=False: that
+        # flag needs PostgreSQL 15+, and Django SKIPS the constraint
+        # silently on older servers -- so on Postgres 14 it would enforce
+        # nothing while looking correct. A partial unique index works
+        # everywhere.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company_id"],
+                condition=Q(company_id__isnull=False),
+                name="unique_default_export_permission_per_company",
+            ),
+            # Postgres treats every NULL as distinct, so a plain unique index
+            # on company_id does NOT stop a second "all companies" row
+            # (verified: two NULL rows insert happily). Indexing the constant
+            # expression company_id IS NULL gives that partial index a single
+            # possible key, which is what makes it a one-row guard.
+            models.UniqueConstraint(
+                Q(company_id__isnull=True),
+                condition=Q(company_id__isnull=True),
+                name="unique_default_export_permission_all_companies",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Default Export Access for {self.company_id} is {'enabled' if self.is_enabled else 'disabled'}"
+
+
+class CompanyLanguageSetting(HorillaModel):
+    """
+    Per-company list of enabled languages for the navbar language switcher.
+    When a company has one or more languages configured here, only those
+    languages are shown to that company's users; if none are configured,
+    every language defined in settings.LANGUAGES remains available.
+    """
+
+    company_id = models.ForeignKey(
+        Company,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        verbose_name=_("Company"),
+    )
+    enabled_languages = models.JSONField(default=list, blank=True)
+    objects = models.Manager()
+
+
+# User.add_to_class("is_new_employee", models.BooleanField(default=False))

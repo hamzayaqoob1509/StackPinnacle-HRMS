@@ -4,9 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
-
-from employee.models import Employee
-from horilla.models import HorillaModel, upload_path
+from django.utils.translation import gettext_lazy as _
 
 # Create your models here.
 
@@ -19,7 +17,7 @@ class FaceDetection(models.Model):
         null=True,
         blank=True,
     )
-    start = models.BooleanField(default=False)
+    start = models.BooleanField(default=False, verbose_name=_("Start"))
 
     def clean(self):
         if self.company_id is None:
@@ -28,7 +26,7 @@ class FaceDetection(models.Model):
                 qs = qs.exclude(pk=self.pk)
             if qs.exists():
                 raise ValidationError(
-                    "Only one FaceDetection can have a null company_id."
+                    _("Only one FaceDetection can have a null company_id.")
                 )
 
     def save(self, *args, **kwargs):
@@ -47,13 +45,9 @@ class FaceDetection(models.Model):
 
 class EmployeeFaceDetection(models.Model):
     employee_id = models.OneToOneField(
-        Employee, related_name="face_detection", on_delete=models.CASCADE
+        "employee.Employee", related_name="face_detection", on_delete=models.CASCADE
     )
-    image = models.ImageField(
-        null=True,
-        blank=True,
-        upload_to=upload_path,
-    )
+    image = models.ImageField()
 
 
 @receiver(post_delete, sender=EmployeeFaceDetection)

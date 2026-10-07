@@ -36,20 +36,21 @@
                             {{form.icon.errors}}
                         </div>
                     </div>
-                    <div class="col-sm-12 col-md-12 col-lg-6">
-                        <div class="oh-input-group">
-                            <label for="" class="oh-label">{{ form.color.label }}</label>
-                            {{form.color}}
-                            {{form.color.errors}}
-                        </div>
-                    </div>
                     <div class="col-sm-12 col-md-12 col-lg-12">
                         <div class="oh-input-group">
-                            <label for="" class="oh-label">{{ form.payment.label }}</label>
-                            {{form.payment}}
-                            {{form.payment.errors}}
+                            <label for="" class="oh-label">{{ form.payment_type.label }}</label>
+                            {{ form.payment_type }}
+                            {{ form.payment_type.errors }}
                         </div>
                     </div>
+                    <div class="col-sm-12 col-md-12 col-lg-12" id="paymentPercentageContainer" style="display:none;">
+                        <div class="oh-input-group">
+                            <label for="id_payment_percentage" class="oh-label">{{ form.payment_percentage.label }}</label>
+                            {{ form.payment_percentage }}
+                            {{ form.payment_percentage.errors }}
+                        </div>
+                    </div>
+                    <div hidden>{{ form.payment }}</div>
                     <div class="col-sm-12 col-md-6">
                         <div class="oh-input-group oh-label__info justify-content-between">
                             <div class="d-flex align-items-center">
@@ -183,19 +184,6 @@
                     <div class="col-sm-12 col-md-12  col-lg-6">
                         <div class="oh-input-group oh-label__info justify-content-between">
                             <div class="d-flex align-items-center">
-                                <label for="" class="oh-label ">{{ form.require_approval.label }}</label>
-                                <span class=" oh-info me-3"
-                                    title="{% trans 'Do you need approval for leave from the authority?' %}"></span>
-                            </div>
-                            <div class="oh-switch p-3 ">
-                                <input type="checkbox" class="oh-switch__checkbox yesOrNo" id="id_approval" checked>
-                                {{form.require_approval.errors}}
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-sm-12 col-md-12  col-lg-6">
-                        <div class="oh-input-group oh-label__info justify-content-between">
-                            <div class="d-flex align-items-center">
                                 <label for="" class="oh-label">{{ form.require_attachment.label }}</label>
                                 <span class=" oh-info me-3"
                                     title="{% trans 'Do you need to attach a document for leave?' %}"></span>
@@ -203,6 +191,19 @@
                             <div class="oh-switch p-3 ">
                                 <input type="checkbox" class="oh-switch__checkbox yesOrNo" id="id_attachment">
                                 {{form.require_attachment.errors}}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-sm-12 col-md-12  col-lg-6">
+                        <div class="oh-input-group oh-label__info justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <label for="" class="oh-label ">{{ form.require_approval.label }}</label>
+                                <span class=" oh-info me-3"
+                                    title="{% trans 'Do you need approval for leave from the authority?' %}"></span>
+                            </div>
+                            <div class="oh-switch p-3 ">
+                                <input type="checkbox" class="oh-switch__checkbox yesOrNo" id="id_approval" checked>
+                                {{form.require_approval.errors}}
                             </div>
                         </div>
                     </div>
@@ -245,35 +246,20 @@
                             </div>
                         </div>
                     </div>
-                    <div class="col-sm-12 col-md-12 col-lg-6">
-                        <div class="oh-input-group oh-label__info  justify-content-between">
-                            <div class="d-flex align-items-center">
-                                <label for="" class="oh-label">{{ form.is_prorated.label }}</label>
-                                <span class=" oh-info me-3"
-                                    title="{% trans 'Grant a pro-rated balance for the remaining months of the year when an employee completes probation or their contract becomes active. Requires a yearly reset.' %}"></span>
-                            </div>
-                            <div class="oh-switch p-3 ">
-                                {{form.is_prorated}}
-                                {{form.is_prorated.errors}}
-                            </div>
-                        </div>
-                    </div>
-                    {% if perms.leave.add_availableleave %}
-                        <div class="col-sm-12 col-md-12">
-                            <div class="oh-input-group oh-label__info">
-                                <label for="id_employee_id" class="oh-label">{% trans "Assign to Employees" %}</label>
-                                <span class=" oh-info me-3"
-                                    title="{% trans 'Choose employees to assign this leave type' %}"></span>
-                            </div>
-                            {{form.employee_id}}
-                            {{form.employee_id.errors}}
-                        </div>
-                    {% endif %}
                     <div hidden>{{form.require_approval}}</div>
                     <div hidden>{{form.require_attachment}}</div>
                     <div hidden>{{form.exclude_company_leave}}</div>
                     <div hidden>{{form.exclude_holiday}}</div>
 
+                </div>
+
+                <div class="mt-3 pt-3" style="border-top: 1px solid hsl(213deg,22%,90%);">
+                    <div class="oh-input-group oh-label__info">
+                        <span class="oh-info me-2" title="{% trans 'Eligibility conditions' %}"></span>
+                        <p class="oh-label mb-0 text-muted" style="font-size:0.85rem;">
+                            {% trans "Eligibility conditions can be configured after saving the leave type." %}
+                        </p>
+                    </div>
                 </div>
             </div>
 
@@ -288,6 +274,26 @@
 
 <script>
     $(document).ready(function () {
+        // Payment type toggle: show percentage only for 'custom'
+        function togglePaymentPercentage() {
+            if ($("#id_payment_type").val() === "custom") {
+                $("#paymentPercentageContainer").show();
+                $("#id_payment_percentage").prop("required", true);
+            } else {
+                $("#paymentPercentageContainer").hide();
+                $("#id_payment_percentage").prop("required", false).val("");
+            }
+        }
+        togglePaymentPercentage();
+        $("#id_payment_type").on("change", togglePaymentPercentage);
+
+        // Sync legacy payment field with payment_type selection
+        $("#id_payment_type").on("change", function () {
+            var val = $(this).val();
+            if (val === "paid") { $("#id_payment").val("paid"); }
+            else { $("#id_payment").val("unpaid"); }
+        });
+
         var reset = $("#id_reset");
         var reset_based_label = $("label[for='id_reset_based']");
         var reset_based_span = $("#reset_based_id");
@@ -520,29 +526,6 @@
     $(".yesOrNo").change(function () {
         checkYesOrNoFields();
     });
-
-    $(document).ready(function () {
-        // Select All Employees Functionality
-        $("#select-all-employees").change(function () {
-            var isChecked = $(this).prop("checked");
-
-            if ($("#id_employee_id").is("select")) {
-                $("#id_employee_id option").prop("selected", isChecked);
-            } else if ($('#id_employee_id input[type="checkbox"]').length > 0) {
-                $('#id_employee_id input[type="checkbox"]').each(function () {
-                    $(this).prop("checked", false);
-
-                    if (isChecked) {
-                        $(this).prop("checked", true);
-                    }
-                });
-            }
-
-            $("#id_employee_id").trigger("change");
-        });
-    });
-
-
 </script>
 
 {% endblock %}
