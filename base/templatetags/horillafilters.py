@@ -316,15 +316,15 @@ def on_off(value):
 
 @register.filter(name="currency_symbol_position")
 def currency_symbol_position(amount):
+    symbol = None
     if apps.is_installed("payroll"):
-        PayrollSettings = get_horilla_model_class(
-            app_label="payroll", model="payrollsettings"
-        )
-    symbol = PayrollSettings.objects.first()
+        from payroll.context_processors import get_payroll_settings
+
+        symbol = get_payroll_settings()
 
     currency = symbol.currency_symbol if symbol else "$"
 
-    if symbol.position == "postfix":
+    if not symbol or symbol.position == "postfix":
         currency_symbol = f"{amount} {currency}"
     else:
         currency_symbol = f"{currency} {amount}"
