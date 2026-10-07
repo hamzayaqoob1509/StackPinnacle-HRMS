@@ -1,6 +1,8 @@
 import ast
 import calendar
 import contextlib
+import io
+import ipaddress
 import json
 import logging
 import os
@@ -8,9 +10,9 @@ import random
 import re
 from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 import pandas as pd
-import pdfkit
 from django import template
 from django.apps import apps
 from django.conf import settings
@@ -26,6 +28,7 @@ from django.http import HttpResponse
 from django.template.base import Lexer, TokenType
 from django.template.loader import render_to_string
 from django.utils.translation import gettext as _
+from xhtml2pdf import pisa
 
 from horilla.models import has_xss
 
@@ -1334,19 +1337,11 @@ def generate_pdf(template_path, context, path=True, title=None, html=True):
     """
     Render HTML to a PDF response.
 
-    The rendered body is XSS-checked before it reaches pdfkit. wkhtmltopdf
-    executes scripts in the document, and every call site here passes
-    `enable-local-file-access` (see template_pdf's pdf_options, where it is
-    needed to load local CSS and images). pdfkit 1.0.0 has a known,
-    currently-unfixed advisory for exactly that combination -- PYSEC-2026-2860:
-    `from_string` allows script execution and local-file exfiltration -- so a
-    template carrying an injected payload could read files off the server and
-    post them out.
-
-    horilla_automations/signals.py already did this check at its own call site.
-    Four other callers (recruitment, attendance API, employee dashboard,
-    onboarding) did not, so the guard belongs here, where all five route
-    through, rather than repeated at each one.
+    The rendered body is XSS-checked first. PDFs are generated with xhtml2pdf,
+    which does not execute scripts, so this is a second line of defence rather
+    than the only one: it keeps an injected payload out of a document that is
+    then emailed to someone. Every caller routes through here, so the check
+    lives here rather than at each call site.
     """
     title = "Document" if not title else title
 
@@ -1358,7 +1353,7 @@ def generate_pdf(template_path, context, path=True, title=None, html=True):
     if has_xss(html):
         logger.error(
             "generate_pdf: rendered body failed the XSS check; refusing to "
-            "hand it to wkhtmltopdf (title=%s).",
+            "render it (title=%s).",
             title,
         )
         return HttpResponse(
@@ -1687,42 +1682,126 @@ def check_chart_permission(request, charts):
     return [chart for chart in charts if has_chart_access(chart[0])]
 
 
+def pdf_link_callback(uri, rel=None):
+    """
+    Decide what xhtml2pdf may load for an image or stylesheet in a document.
+
+    Media and static URLs become files on disk, so no HTTP request is needed.
+    Other http(s) URLs are fetched, except those naming a loopback, private or
+    link-local address: a document is partly user-authored, and the server
+    must not be made to request its own metadata endpoint or internal
+    services. Anything else (file:, relative paths) is dropped.
+    """
+    for url_prefix, root in (
+        (settings.MEDIA_URL, settings.MEDIA_ROOT),
+        (settings.STATIC_URL, settings.STATIC_ROOT),
+    ):
+        if url_prefix and root and uri.startswith(url_prefix):
+            root = os.path.realpath(str(root))
+            path = os.path.realpath(os.path.join(root, uri[len(url_prefix) :]))
+            if path.startswith(root + os.sep) and os.path.isfile(path):
+                return path
+            return ""
+
+    if uri.startswith("data:"):
+        return uri
+
+    parsed = urlparse(uri)
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        host = parsed.hostname.lower()
+        if host == "localhost" or host.endswith(".localhost"):
+            return ""
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return uri
+        if address.is_global:
+            return uri
+    return ""
+
+
+def html_to_pdf(html):
+    """
+    Render an HTML string to PDF bytes with xhtml2pdf.
+
+    Raises ValueError if nothing could be rendered. xhtml2pdf is pure Python;
+    the wkhtmltopdf binary that pdfkit needed is not installed on the server.
+    """
+    buffer = io.BytesIO()
+    pisa.pisaDocument(
+        io.BytesIO(html.encode("utf-8")),
+        buffer,
+        encoding="utf-8",
+        link_callback=pdf_link_callback,
+    )
+    content = buffer.getvalue()
+    if not content:
+        raise ValueError("xhtml2pdf produced no output")
+    return content
+
+
+# A4 with 10mm margins and a centred "page/pages" footer, as the pdfkit
+# options this replaces had.
+_TEMPLATE_PDF_PAGE = """
+<style>
+    @page {
+        size: a4 portrait;
+        margin: 10mm;
+        margin-bottom: 18mm;
+        @frame footer {
+            -pdf-frame-content: pdf-page-footer;
+            bottom: 6mm;
+            margin-left: 10mm;
+            margin-right: 10mm;
+            height: 8mm;
+        }
+    }
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 11pt; }
+    table { border-collapse: collapse; }
+    img { max-width: 100%; }
+</style>
+<div id="pdf-page-footer" style="text-align: center; font-size: 9pt;">
+    <pdf:pagenumber>/<pdf:pagecount>
+</div>
+"""
+
+
 def template_pdf(template, context={}, html=False, filename="payslip.pdf"):
     """
-    Generate a PDF file from an HTML template and context data.
+    Generate a PDF response from an HTML string.
 
     Args:
-        template_path (str): The path to the HTML template.
-        context (dict): The context data to render the template.
-        html (bool): If True, return raw HTML instead of a PDF.
+        template (str): The HTML to render.
+        filename (str): The name the browser is given for the file.
 
     Returns:
-        HttpResponse: A response with the generated PDF file or raw HTML.
+        HttpResponse: The PDF, or a 500 response if it could not be generated.
     """
     try:
-        bootstrap_css = '<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">'
-        html_content = f"{bootstrap_css}\n{template}"
-
-        pdf_options = {
-            "page-size": "A4",
-            "margin-top": "10mm",
-            "margin-bottom": "10mm",
-            "margin-left": "10mm",
-            "margin-right": "10mm",
-            "encoding": "UTF-8",
-            "enable-local-file-access": None,
-            "dpi": 300,
-            "zoom": 1.3,
-            "footer-center": "[page]/[topage]",
-        }
-
-        pdf = pdfkit.from_string(html_content, False, options=pdf_options)
-
+        pdf = html_to_pdf(f"{_TEMPLATE_PDF_PAGE}\n{template}")
         response = HttpResponse(pdf, content_type="application/pdf")
         response["Content-Disposition"] = f"inline; filename={filename}"
         return response
     except Exception as e:
         return HttpResponse(f"Error generating PDF: {str(e)}", status=500)
+
+
+def pdf_attachment(html, title="Document"):
+    """
+    An email attachment tuple for ``html`` rendered as a PDF, or None.
+
+    None means the PDF could not be generated; the caller sends the email
+    without it rather than attaching an error page named like a PDF.
+    """
+    response = generate_pdf(html, {}, path=False, title=title)
+    if response.status_code != 200:
+        logger.error(
+            "Could not generate the PDF attachment '%s': %s",
+            title,
+            response.content.decode("utf-8", errors="ignore")[:200],
+        )
+        return None
+    return (f"{title}.pdf", response.content, "application/pdf")
 
 
 def generate_otp():

@@ -39,9 +39,9 @@ from django.views.decorators.http import require_http_methods, require_POST
 from base.backends import ConfiguredEmailBackend
 from base.methods import (
     closest_numbers,
-    generate_pdf,
     get_key_instances,
     get_pagination,
+    pdf_attachment,
     sanitize_mail_template_body,
     sortby,
 )
@@ -834,13 +834,9 @@ def email_send(request):
             )
             render_bdy = template_bdy.render(context)
 
-            attachments.append(
-                (
-                    "Document.pdf",
-                    generate_pdf(render_bdy, {}, path=False, title="Document").content,
-                    "application/pdf",
-                )
-            )
+            attachment = pdf_attachment(render_bdy)
+            if attachment:
+                attachments.append(attachment)
 
         # Create / reset portal
         token = secrets.token_hex(15)

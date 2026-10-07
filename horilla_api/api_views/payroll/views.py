@@ -1,4 +1,5 @@
 import gettext
+import json
 from collections import defaultdict
 
 from django.contrib.auth.decorators import permission_required
@@ -10,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from base.backends import ConfiguredEmailBackend
-from base.methods import eval_validate, filtersubordinates
+from base.methods import eval_validate, filtersubordinates, html_to_pdf
 from horilla_api.api_methods.base.methods import reject_reason_from
 from horilla_api.api_methods.base.pagination import HorillaPageNumberPagination
 from payroll.filters import (
@@ -463,6 +464,8 @@ from rest_framework.authentication import SessionAuthentication
 
 # DRF / Simple JWT imports
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer
+from rest_framework.settings import api_settings
 from rest_framework.views import APIView
 
 from horilla_api.authentication import TenantScopedJWTAuthentication
@@ -473,17 +476,31 @@ from payroll.models.tax_models import PayrollSettings
 from payroll.views.component_views import filter_payslip
 from payroll.views.views import equalize_lists_length
 
-try:
-    import pdfkit
 
-    HAVE_PDFKIT = True
-except Exception:
-    HAVE_PDFKIT = False
+
+class PayslipPDFRenderer(BaseRenderer):
+    """
+    Lets ``?format=pdf`` reach PayslipPDFAPIView.
+
+    DRF reads the ``format`` query parameter as a choice of renderer and
+    answers 404 when no renderer has that name, before the view runs. The view
+    builds the PDF itself and returns it as an HttpResponse, so this only has
+    to exist; it renders the view's JSON error responses.
+    """
+
+    media_type = "application/pdf"
+    format = "pdf"
+    charset = None
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if isinstance(data, (bytes, str)):
+            return data
+        return json.dumps(data, default=str).encode("utf-8")
 
 
 class PayslipPDFAPIView(APIView):
     """
-    GET /api/payslip/<payslip_id>/?format=pdf
+    GET /api/payroll/payslip-download/<payslip_id>?format=pdf
     Auth:
       - Accepts SimpleJWT Bearer token (Authorization: Bearer <token>)
       - Also accepts session auth (browser) when available
@@ -491,6 +508,7 @@ class PayslipPDFAPIView(APIView):
 
     authentication_classes = (TenantScopedJWTAuthentication, SessionAuthentication)
     permission_classes = (IsAuthenticated,)
+    renderer_classes = (*api_settings.DEFAULT_RENDERER_CLASSES, PayslipPDFRenderer)
 
     def get(self, request, id, format=None):
         # get payslip or 404
@@ -592,25 +610,13 @@ class PayslipPDFAPIView(APIView):
             "payroll/payslip/payslip_pdf.html", context=data, request=request
         )
 
-        # If client asked for PDF and pdfkit is available -> return PDF
+        # If the client asked for a PDF, return one
         requested_format = request.GET.get("format", "").lower()
         if requested_format == "pdf":
-            if not HAVE_PDFKIT:
-                return Response(
-                    {
-                        "detail": _(
-                            "PDF generation not available on server. Install pdfkit/wkhtmltopdf."
-                        )
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
             try:
-                # optional: configure pdfkit with path if needed
-                pdf_options = {
-                    "enable-local-file-access": None,  # if your template references local CSS
-                }
-                pdf_bytes = pdfkit.from_string(html, False, options=pdf_options)
-                response = HttpResponse(pdf_bytes, content_type="application/pdf")
+                response = HttpResponse(
+                    html_to_pdf(html), content_type="application/pdf"
+                )
                 response["Content-Disposition"] = f'inline; filename="payslip-{id}.pdf"'
                 return response
             except Exception as e:

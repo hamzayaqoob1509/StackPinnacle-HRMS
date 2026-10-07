@@ -1,14 +1,13 @@
 """
-generate_pdf must not hand an injected body to wkhtmltopdf.
+generate_pdf must refuse an injected body.
 
-pdfkit 1.0.0 carries PYSEC-2026-2860 -- `from_string` allows script execution
-and local-file exfiltration -- and there is no upstream fix. Every call site
-passes `enable-local-file-access` (needed for local CSS and images), which is
-the exact configuration the advisory describes.
+PDFs are rendered with xhtml2pdf, which does not execute scripts, so this
+check is a second line of defence: the document is emailed to someone, and an
+injected payload should not travel in it. (It was introduced when rendering
+went through pdfkit/wkhtmltopdf, which did execute scripts with local file
+access; see PYSEC-2026-2860.)
 
-horilla_automations/signals.py already checked its own rendered body before
-calling generate_pdf. Four other callers did not, so the guard lives in
-generate_pdf where all five route through.
+Every caller routes through generate_pdf, so the guard lives there.
 """
 
 from django.test import SimpleTestCase

@@ -372,7 +372,7 @@ def send_mail(request, automation, instance):
     mail sending method
     """
     from base.backends import ConfiguredEmailBackend
-    from base.methods import eval_validate, generate_pdf
+    from base.methods import eval_validate, pdf_attachment
     from employee.models import Employee
     from horilla_automations.methods.methods import (
         get_model_class,
@@ -500,15 +500,9 @@ def send_mail(request, automation, instance):
                             automation.title,
                         )
                         continue
-                    attachments.append(
-                        (
-                            "Document",
-                            generate_pdf(
-                                render_bdy, {}, path=False, title="Document"
-                            ).content,
-                            "application/pdf",
-                        )
-                    )
+                    attachment = pdf_attachment(render_bdy)
+                    if attachment:
+                        attachments.append(attachment)
 
             template_bdy = template.Template(
                 sanitize_mail_template_body(mail_template.body)
