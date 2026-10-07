@@ -46,7 +46,7 @@ from horilla.decorators import (
 from horilla.group_by import group_by_queryset
 from horilla.http.response import HorillaRedirect
 from notifications.signals import notify
-from payroll.context_processors import get_active_employees
+from payroll.context_processors import get_active_employees, get_payroll_settings
 from payroll.filters import ContractFilter, ContractReGroup, PayslipFilter
 from payroll.forms.component_forms import (
     ContractExportFieldForm,
@@ -592,7 +592,7 @@ def view_payslip_pdf(request, payslip_id):
             data["json_data"]["employee"] = payslip.employee_id.id
             data["json_data"]["payslip"] = payslip.id
             data["instance"] = payslip
-            data["currency"] = PayrollSettings.objects.first().currency_symbol
+            data["currency"] = get_payroll_settings(request).currency_symbol
             data["all_deductions"] = []
             for deduction_list in [
                 data["basic_pay_deductions"],
@@ -1548,7 +1548,7 @@ def payslip_pdf(request, id):
                     "employee": payslip.employee_id,
                     "payslip": payslip,
                     "json_data": data.copy(),
-                    "currency": PayrollSettings.objects.first().currency_symbol,
+                    "currency": get_payroll_settings(request).currency_symbol,
                     "all_deductions": [],
                     "all_allowances": data["allowances"].copy(),
                     "host": request.get_host(),

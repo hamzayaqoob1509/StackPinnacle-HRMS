@@ -9,20 +9,36 @@ from payroll.models import tax_models as models
 from payroll.models.models import Deduction
 
 
+def get_payroll_settings(request=None):
+    """
+    Return the PayrollSettings row for the current company scope, never None.
+
+    PayrollSettings.objects is company-scoped, so a user whose scope matches no
+    row (e.g. "All my companies" with no assignments) sees an empty queryset.
+    Creating a row there doesn't help: the new row is just as invisible, so the
+    caller still gets None -- and a fresh row is saved on every request. Fall
+    back to the unscoped table instead; currency display is not tenant data.
+    """
+    settings = (
+        models.PayrollSettings.objects.first()
+        or models.PayrollSettings.objects.entire().order_by("pk").first()
+    )
+    if settings is None:
+        settings = models.PayrollSettings.objects.create(
+            currency_symbol="$",
+            company_id=getattr(request, "selected_company_instance", None),
+        )
+    return settings
+
+
 def default_currency(request):
     """
     This method will return the currency
     """
-    if models.PayrollSettings.objects.first() is None:
-        settings = models.PayrollSettings()
-        settings.currency_symbol = "$"
-        settings.company_id = getattr(request, "selected_company_instance", None)
-        settings.save()
-    symbol = models.PayrollSettings.objects.first().currency_symbol
-    position = models.PayrollSettings.objects.first().position
+    settings = get_payroll_settings(request)
     return {
-        "currency": request.session.get("currency", symbol),
-        "position": request.session.get("position", position),
+        "currency": request.session.get("currency", settings.currency_symbol),
+        "position": request.session.get("position", settings.position),
     }
 
 
