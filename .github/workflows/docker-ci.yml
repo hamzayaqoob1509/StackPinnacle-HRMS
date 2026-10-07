@@ -124,10 +124,9 @@ jobs:
             --exit-code 0 \
             "$IMAGE"
 
-          # ...but only fail the PR on a fixable CRITICAL. The release gate
-          # (docker-publish.yml) blocks HIGH too; blocking it here as well
-          # would stop unrelated PRs on a base-image CVE the author cannot
-          # fix in their own change. Previously this step was
+          # ...but only fail the PR on a fixable CRITICAL. Blocking HIGH here
+          # as well would stop unrelated PRs on a base-image CVE the author
+          # cannot fix in their own change. Previously this step was
           # continue-on-error with --exit-code 0, so it could never fail at all.
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
