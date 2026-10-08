@@ -1556,13 +1556,20 @@ def update_group_permission(
             return JsonResponse({"message": "Name updated", "type": "success"})
         messages.info(request, _("At least 4 characters required"))
         return JsonResponse({})
-    perms = form.cleaned_data.get("permissions")
-    if not perms:
-        instance.permissions.clear()
-        messages.info(request, _("All permission cleared"))
-        return JsonResponse({})
-    messages.error(request, _("Something went wrong"))
-    return JsonResponse({"message": "Something went wrong", "type": "danger"})
+    # The form was rejected: change nothing. An earlier version cleared every
+    # permission of the group here, on the assumption that an invalid form
+    # meant "nothing ticked" -- but one unknown codename in the submission is
+    # enough to invalidate it, and that wiped the whole role. Unticking
+    # everything is a valid form and is handled by form.save() above.
+    logger.warning(
+        "Permissions of group %s not updated; form errors: %s",
+        instance.pk,
+        form.errors.as_json(),
+    )
+    messages.error(
+        request, _("Permissions were not updated. Nothing has been changed.")
+    )
+    return JsonResponse({"message": "Permissions were not updated", "type": "danger"})
 
 
 @login_required

@@ -433,13 +433,21 @@ def _sync_export_permissions():
     Create an `export_<model>` Permission for every model that appears in
     the group/employee permission matrix (mirrors Django's own auto-created
     add/change/delete/view permissions, which don't include "export").
+
+    The matrix is built from settings.APPS, which apps add themselves to in
+    AppConfig.ready(), so it is covered here as well as the fixed list: the
+    matrix shows an Export checkbox for every one of those apps, and a
+    codename that does not exist invalidates the whole submission.
     """
     from django.conf import settings
     from django.contrib.auth.models import Permission
     from django.contrib.contenttypes.models import ContentType
 
     no_permission_models = settings.NO_PERMISSION_MODALS
-    for app_label in _ALL_HRMS_APP_LABELS:
+    app_labels = list(
+        dict.fromkeys([*_ALL_HRMS_APP_LABELS, *getattr(settings, "APPS", [])])
+    )
+    for app_label in app_labels:
         if not _is_app_available(app_label):
             continue
         for content_type in ContentType.objects.filter(app_label=app_label):
