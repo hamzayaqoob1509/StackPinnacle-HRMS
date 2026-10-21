@@ -69,6 +69,7 @@ from payroll.forms import component_forms as forms
 from payroll.methods.deductions import create_deductions, update_compensation_deduction
 from payroll.methods.methods import (
     apply_previous_period_leave_adjustment,
+    attendance_summaries,
     calculate_employer_contribution,
     compute_net_pay,
     compute_salary_on_period,
@@ -1034,12 +1035,7 @@ def generate_payslip(request):
             group_name = form.cleaned_data["group_name"]
             emp_count = employees.count()
 
-            from attendance.views.summary import build_monthly_summary
-
-            att_rows, _total_working, _summary_totals = build_monthly_summary(
-                start_date, end_date, employees
-            )
-            att_summary = {row["employee"].pk: row for row in att_rows}
+            att_summary = attendance_summaries(employees, start_date, end_date)
 
             for employee in employees:
                 contract = Contract.objects.filter(
@@ -1059,7 +1055,7 @@ def generate_payslip(request):
                     employee,
                     start_date,
                     end_date,
-                    month_summary=att_summary.get(employee.pk, dict({})),
+                    month_summary=att_summary.get(employee.pk),
                 )
                 apply_previous_period_leave_adjustment(employee, start_date, payslip)
                 payslips.append(payslip)

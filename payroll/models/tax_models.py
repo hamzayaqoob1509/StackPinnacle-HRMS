@@ -32,6 +32,15 @@ class PayrollSettings(HorillaModel):
     position = models.CharField(
         max_length=15, null=True, choices=choices, default="postfix"
     )
+    deduct_absent_days = models.BooleanField(
+        default=True,
+        verbose_name=_("Deduct absent days in payslips"),
+        help_text=_(
+            "When enabled, Generate Payslip counts working days with no "
+            "attendance as loss of pay. When disabled, only approved unpaid "
+            "leave is deducted."
+        ),
+    )
 
     company_id = models.ForeignKey(Company, null=True, on_delete=models.PROTECT)
     objects = HorillaCompanyManager("company_id")

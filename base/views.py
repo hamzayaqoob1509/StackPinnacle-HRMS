@@ -5923,8 +5923,16 @@ def _system_preferences_context(request):
             company_id=tracking_company
         )
         currency_form = PayrollSettingsForm(instance=currency_instance)
+        absent_setting = (
+            PayrollSettings.objects.entire()
+            .filter(company_id=tracking_company)
+            .order_by("pk")
+            .first()
+        )
+        deduct_absent_days = absent_setting is None or absent_setting.deduct_absent_days
     else:
         currency_form = None
+        deduct_absent_days = True
 
     selected_company_id = request.session.get("selected_company")
 
@@ -6037,6 +6045,7 @@ def _system_preferences_context(request):
         "announcement_expire_settings": announcement_expire_settings,
         "show_expire_company": show_expire_company,
         "currency_form": currency_form,
+        "deduct_absent_days": deduct_absent_days,
         "pagination_settings": pagination_settings,
         "show_pagination_company": show_pagination_company,
         "history_fields_form": history_fields_form,

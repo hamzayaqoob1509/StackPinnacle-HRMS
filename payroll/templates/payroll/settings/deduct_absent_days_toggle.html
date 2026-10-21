@@ -1,0 +1,34 @@
+{% load i18n %}
+<div class="col-span-12 lg:col-span-6" id="setting-deduct-absent-days">
+    <form
+        hx-post="{% url 'toggle-deduct-absent-days' %}"
+        hx-trigger="change"
+        hx-swap="none"
+        hx-on-htmx-after-request="setTimeout(reloadMessage, 70);"
+    >
+        {% csrf_token %}
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <div class="flex space-x-2">
+                    <h3 class="text-sm font-medium">{% trans "Deduct Absent Days in Payslips" %}</h3>
+                    <span
+                        class="oh-info mr-2"
+                        title="{% trans 'When enabled, Generate Payslip counts every working day with no attendance record as loss of pay. When disabled, only approved unpaid leave is deducted. Payslips already generated are not changed.' %}"
+                    ></span>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">
+                    {% trans "Count working days without attendance as loss of pay." %}
+                </p>
+            </div>
+            <label class="toggle-label">
+                <input
+                    type="checkbox"
+                    class="toggle-input"
+                    name="deduct_absent_days"
+                    {% if deduct_absent_days %}checked{% endif %}
+                >
+                <div class="toggle-switch"></div>
+            </label>
+        </div>
+    </form>
+</div>

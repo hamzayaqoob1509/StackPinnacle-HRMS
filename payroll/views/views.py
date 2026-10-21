@@ -482,6 +482,35 @@ def settings(request):
 
 
 @login_required
+@hx_request_required
+@permission_required("payroll.change_payrollsettings")
+@require_http_methods(["POST"])
+def toggle_deduct_absent_days(request):
+    """
+    Turn "Deduct absent days in payslips" on or off for the selected company.
+    Only affects payslips generated afterwards.
+    """
+    enabled = request.POST.get("deduct_absent_days") == "on"
+    company = get_session_company(request)
+    instance = (
+        PayrollSettings.objects.entire()
+        .filter(company_id=company)
+        .order_by("pk")
+        .first()
+    ) or PayrollSettings(company_id=company)
+    instance.deduct_absent_days = enabled
+    instance.save()
+    if enabled:
+        messages.success(request, _("Absent days will be deducted in payslips."))
+    else:
+        messages.success(
+            request,
+            _("Absent days will no longer be deducted in payslips."),
+        )
+    return HttpResponse()
+
+
+@login_required
 @permission_required("payroll.change_payslip")
 def update_payslip_status(request, payslip_id):
     """

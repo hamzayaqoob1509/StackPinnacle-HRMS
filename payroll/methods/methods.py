@@ -655,6 +655,43 @@ def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
     }
 
 
+def deducts_absent_days(employee):
+    """
+    Whether Generate Payslip should count days without attendance as loss of
+    pay for this employee. Uses the employee's company setting, then the
+    all-companies setting; on when neither exists.
+    """
+    from payroll.models.tax_models import PayrollSettings
+
+    settings = PayrollSettings.objects.entire().order_by("pk")
+    company = employee.get_company()
+    setting = settings.filter(company_id=company).first() if company else None
+    if setting is None:
+        setting = settings.filter(company_id__isnull=True).first()
+    return setting.deduct_absent_days if setting else True
+
+
+def attendance_summaries(employees, start_date, end_date):
+    """
+    Attendance summary rows for Generate Payslip, keyed by employee pk.
+
+    Employees whose company has "Deduct absent days in payslips" turned off
+    are left out, so their payslips deduct only approved unpaid leave.
+    """
+    included = employees.filter(
+        pk__in=[employee.pk for employee in employees if deducts_absent_days(employee)]
+    )
+    if not included.exists():
+        return {}
+
+    from attendance.views.summary import build_monthly_summary
+
+    rows, _total_working, _summary_totals = build_monthly_summary(
+        start_date, end_date, included
+    )
+    return {row["employee"].pk: row for row in rows}
+
+
 def compute_salary_on_period(
     employee, start_date, end_date, wage=None, month_summary=None
 ):

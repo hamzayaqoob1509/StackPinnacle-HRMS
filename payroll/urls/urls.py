@@ -57,6 +57,11 @@ urlpatterns = [
     # path("contract-filter/", views.contract_filter, name="contract-filter"),
     path("settings/", views.settings, name="payroll-settings"),
     path(
+        "settings/deduct-absent-days/",
+        views.toggle_deduct_absent_days,
+        name="toggle-deduct-absent-days",
+    ),
+    path(
         "payslip-status-update/<int:payslip_id>/",
         views.update_payslip_status,
         name="payslip-status-update",
