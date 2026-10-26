@@ -68,6 +68,7 @@ from payroll.filters import (
 from payroll.forms import component_forms as forms
 from payroll.methods.deductions import create_deductions, update_compensation_deduction
 from payroll.methods.methods import (
+    PAYROLL_CALC_VERSION,
     apply_previous_period_leave_adjustment,
     attendance_summaries,
     calculate_employer_contribution,
@@ -349,6 +350,10 @@ def payroll_calculation(employee, start_date, end_date, month_summary=None):
     # Read by get_previous_period_leave_adjustment() to recompute this period
     # the same way.
     data_to_json["attendance_summary_used"] = bool(month_summary)
+    # Read by the previous-period leave adjustment: which salary formula made
+    # this payslip and what one unpaid day cost on it.
+    data_to_json["calc_version"] = PAYROLL_CALC_VERSION
+    data_to_json["daily_rate"] = basic_pay_details.get("daily_rate")
     json_data = json.dumps(data_to_json)
 
     payslip_data["json_data"] = json_data
@@ -1041,23 +1046,42 @@ def generate_payslip(request):
                 contract = Contract.objects.filter(
                     employee_id=employee, contract_status="active"
                 ).first()
-                if start_date < contract.contract_start_date:
-                    start_date = contract.contract_start_date
+                # Each employee's own period: a later contract start must not
+                # move the start date for the employees after them.
+                if contract is None:
+                    messages.error(
+                        request, _(f"{employee} has no active contract.")
+                    )
+                    emp_count -= 1
+                    continue
+                employee_start = start_date
+                if employee_start < contract.contract_start_date:
+                    employee_start = contract.contract_start_date
 
-                if end_date < start_date:
+                if end_date < employee_start:
                     messages.error(
                         request, _(f"{employee}'s contract has not started yet.")
                     )
                     emp_count -= 1
                     continue
 
+                month_summary = att_summary.get(employee.pk)
+                if month_summary and employee_start != start_date:
+                    # Summary for the employee's own period, so days before the
+                    # contract started aren't counted as absent.
+                    month_summary = attendance_summaries(
+                        employees.filter(pk=employee.pk), employee_start, end_date
+                    ).get(employee.pk)
+
                 payslip = payroll_calculation(
                     employee,
-                    start_date,
+                    employee_start,
                     end_date,
-                    month_summary=att_summary.get(employee.pk),
+                    month_summary=month_summary,
                 )
-                apply_previous_period_leave_adjustment(employee, start_date, payslip)
+                apply_previous_period_leave_adjustment(
+                    employee, employee_start, payslip
+                )
                 payslips.append(payslip)
                 json_data.append(payslip["json_data"])
 
