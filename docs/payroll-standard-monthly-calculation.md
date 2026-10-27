@@ -123,12 +123,37 @@ Out of scope: daily-wage and hourly contracts keep their current formulas
   the second employee's period.
 - Update `test_compute_salary_on_period.py` expectations for the new rate.
 
+## Local verification (2026-10-27)
+
+- Full test suite on PostgreSQL 15.19 (same as production): 919 tests, the
+  25 new ones pass; the 33 failures are the same as on `main` (notifications,
+  horilla_tour, one leave test, dynamic_fields import).
+- Running app, Generate Payslip for October 2026 with Sat/Sun weekly offs and
+  a holiday on Oct 12 (salary 36,500, daily rate 1,200):
+  - payslip-539 case ("Deduct absent days" off): 30 paid days, 1 LOP,
+    basic 35,300, plus "Leave Adjustment (Sep 2026) - 1.0 day(s)" 1,200 for a
+    September unpaid leave approved after September's payslip
+  - contract starting Oct 20, in the same batch: 12 paid days, basic 13,700;
+    the other employees kept Oct 1
+  - "Deduct absent days" on, 2 absent days: 29 paid days, basic 34,100
+  - payslip page and print view show the same figures, no server errors
+- No migrations, package or static changes (`makemigrations --check` clean).
+  The production rehearsal on a restored dump was skipped.
+
 ## Rollout
 
-1. Rehearse on a restored copy of production: generate October payslips
-   before and after, compare paid days / LOP days per employee id (no names
-   or amounts in the output).
-2. Take a database dump, deploy, run tests on the server.
-3. HR deletes and regenerates October draft payslips (539 and others).
-   Confirmed or paid payslips are not changed.
-4. HR turns the Sat/Sun weekly offs back on; pay should not change.
+No migrations, so deploying is pull + restart (docs/DEPLOY.md steps 1 and 5).
+Take a dump first anyway; production has no scheduled backups.
+
+1. Merge the branch to `main`.
+2. On the server, dump the database (DEPLOY.md step 3, first command only).
+3. Pull and restart (DEPLOY.md steps 1 and 5). Expect `active` twice,
+   `site: 200` and `-- No entries --`.
+4. HR deletes the October draft payslips and generates them again
+   (payslip 539 should show 30 paid days, 1 LOP). Confirmed or paid payslips
+   are not changed.
+5. HR turns the Sat/Sun weekly offs back on and regenerates one draft to see
+   that pay does not change.
+
+Rollback: DEPLOY.md "Rolling back a deploy", no-migrations case. Payslips
+generated after the deploy keep the new figures until regenerated.
