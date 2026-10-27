@@ -116,6 +116,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     # -- 1. Working days (respects CompanyLeaves + public Holidays) ----------
     working_data = get_working_days(from_date, to_date)
     total_working = working_data["total_working_days"]
+    off_dates = working_data["company_leave_dates"]  # combined, used for leave counting
 
     # -- 1b. Public holidays (separate column) --------------------------------
     holiday_dates_set = set(
@@ -279,10 +280,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         _e = min(_lr.end_date or _lr.start_date, to_date)
         for _d in _iter_dates(_s, _e):
             leave_dates_per_emp[_lr.employee_id_id].add(_d)
-            # payment_type (falls back to the legacy payment field). Partial-pay
-            # (custom) leave counts as paid leave here; payroll deducts its
-            # unpaid share separately.
-            if _lr.leave_type_id.get_payment_percentage() > 0:
+            if _lr.leave_type_id.payment == "paid":
                 paid_day_dates_per_emp[_lr.employee_id_id].add(_d)
             else:
                 unpaid_day_dates_per_emp[_lr.employee_id_id].add(_d)
@@ -320,6 +318,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     total_holiday = 0
     total_conflicts = 0
 
+    off_set = frozenset(off_dates)  # company leaves + public holidays
     company_off_dates = {d for d in raw_cl if from_date <= d <= to_date}
     all_dates_in_range = list(_iter_dates(from_date, to_date))
 
@@ -354,12 +353,6 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         _shift_pk = emp_shift_map.get(emp.pk)
         _shift_sched = shift_day_secs.get(_shift_pk, {}) if _shift_pk else {}
         _daily_hrs = daily_manual_map.get(emp.pk, {})  # per-day manual overrides
-        # Holidays for this employee: global ones plus those specific to them
-        _emp_holidays = {
-            d
-            for d in get_holiday_dates(from_date, to_date, emp)
-            if from_date <= d <= to_date
-        }
 
         present = paid_leave = unpaid_leave = week_off = holiday_c = absent = 0.0
         hours_second = 0
@@ -417,7 +410,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             # No resolution — natural computation
             if d in _att_vals:
                 val = _att_vals[d]
-                if d in _emp_holidays:
+                if d in holiday_dates_set:
                     holiday_c += 1.0  # HO — attendance on holiday
                 elif d in _emp_off:
                     week_off += 1.0  # WO — attendance on week-off
@@ -431,17 +424,15 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                 hours_second += (
                     _day_manual if _day_manual is not None else _att_secs.get(d, 0)
                 )
-            # A holiday or week-off inside a leave stays a holiday / week-off
-            # (paid), the same as get_leaves() does for payroll.
-            elif d in _emp_holidays:
-                holiday_c += 1.0
-            elif d in _emp_off:
-                week_off += 1.0
             elif d in _paid_dates:
                 paid_leave += 1.0
             elif d in _unpaid_dates:
                 unpaid_leave += 1.0
-            elif d not in company_off_dates:
+            elif d in holiday_dates_set:
+                holiday_c += 1.0
+            elif d in _emp_off:
+                week_off += 1.0
+            elif d not in off_set:
                 absent += 1.0  # working day with no activity
 
         # Conflict detection (uses raw data, not overrides). Attendance on a
@@ -490,7 +481,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             # hours like a normal working day (regular + capped OT) instead
             # of counting them entirely as holiday/week-off overtime.
             _regularized = _resolutions.get(_d) in ("full_present", "half_present")
-            if _d in _emp_holidays and not _regularized:
+            if _d in holiday_dates_set and not _regularized:
                 ot_holiday_seconds += _wsec
             elif _d in _emp_off and not _regularized:
                 ot_week_off_seconds += _wsec
