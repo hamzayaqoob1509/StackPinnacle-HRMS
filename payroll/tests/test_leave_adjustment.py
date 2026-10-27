@@ -97,6 +97,79 @@ class PreviousPeriodLeaveAdjustmentTests(TestCase):
         self.assertEqual(adjustment["amount"], 400.0)
 
 
+class LeaveAdjustmentAcrossFormulaChangeTests(TestCase):
+    """
+    The adjustment compares unpaid days, so a payslip made with the old
+    salary formula is not charged for the formula change, and late leave on
+    it is charged at the rate that payslip used.
+    """
+
+    def setUp(self):
+        company = make_company("Formula Co")
+        self.employee = make_employee(company=company, email="formula@test.horilla")
+        self.current_start = date(2026, 11, 1)
+
+    def _previous(self, **pay_head_data):
+        payslip = make_payslip(
+            employee=self.employee,
+            start_date=date(2026, 10, 1),
+            end_date=date(2026, 10, 31),
+        )
+        payslip.pay_head_data = {"attendance_summary_used": False, **pay_head_data}
+        payslip.save()
+        return payslip
+
+    def _adjustment(self):
+        return get_previous_period_leave_adjustment(self.employee, self.current_start)
+
+    @patch(COMPUTE, return_value={"loss_of_pay": 1200.0, "unpaid_days": 1, "daily_rate": 1200.0})
+    def test_old_formula_without_late_leave_is_not_charged(self, _compute):
+        # Old summary formula: salary / 31. Same day count today -> nothing.
+        self._previous(loss_of_pay=36500 / 31, unpaid_days=1)
+        self.assertIsNone(self._adjustment())
+
+    @patch(COMPUTE, return_value={"loss_of_pay": 2400.0, "unpaid_days": 2, "daily_rate": 1200.0})
+    def test_late_day_on_old_payslip_uses_its_own_rate(self, _compute):
+        # Old fallback formula: salary / 30 per unpaid day.
+        self._previous(loss_of_pay=36500 / 30, unpaid_days=1)
+        self.assertEqual(
+            self._adjustment(),
+            {"title": "Leave Adjustment (Oct 2026) - 1.0 day(s)", "amount": 1216.67},
+        )
+
+    @patch(COMPUTE, return_value={"loss_of_pay": 1200.0, "unpaid_days": 1, "daily_rate": 1200.0})
+    def test_old_payslip_without_unpaid_days_uses_todays_rate(self, _compute):
+        self._previous(loss_of_pay=0, unpaid_days=0)
+        self.assertEqual(self._adjustment()["amount"], 1200.0)
+
+    @patch(COMPUTE, return_value={"loss_of_pay": 2400.0, "unpaid_days": 2, "daily_rate": 1200.0})
+    def test_new_payslip_uses_its_stored_rate(self, _compute):
+        self._previous(
+            loss_of_pay=1000.0, unpaid_days=1, calc_version=2, daily_rate=1000.0
+        )
+        self.assertEqual(self._adjustment()["amount"], 1000.0)
+
+    @patch(
+        COMPUTE,
+        return_value={
+            "loss_of_pay": 600.0,
+            "unpaid_days": 0,
+            "daily_rate": 1200.0,
+            "custom_leave_breakdown": [
+                {"leave_type": "Half paid", "days": 1, "percentage": 50.0}
+            ],
+        },
+    )
+    def test_late_partial_pay_leave_is_charged_its_unpaid_share(self, _compute):
+        self._previous(
+            loss_of_pay=0, unpaid_days=0, calc_version=2, daily_rate=1200.0
+        )
+        self.assertEqual(
+            self._adjustment(),
+            {"title": "Leave Adjustment (Oct 2026) - 0.5 day(s)", "amount": 600.0},
+        )
+
+
 class ApplyPreviousPeriodLeaveAdjustmentTests(TestCase):
     def _payslip_dict(self):
         pay_data = {"post_tax_deductions": [], "total_deductions": 100.0, "net_pay": 900.0}

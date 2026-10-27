@@ -558,101 +558,162 @@ def compute_net_pay(
     return net_pay
 
 
-def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
+# Monthly salaries use one daily rate for every month of every year:
+# salary x 12 / 365. Weekly offs and company holidays are paid days.
+DAYS_PER_YEAR = 365
+
+# Stored on each payslip's pay_head_data. Version 2 is the standard monthly
+# calculation below; payslips without it were made with the older formulas.
+PAYROLL_CALC_VERSION = 2
+
+
+def monthly_daily_rate(wage):
     """
-    Hourly salary computation for period.
-
-    Args:
-        employee (obj): Employee instance
-        wage (float): wage of the employee
-        start_date (obj): start of the pay period
-        end_date (obj): end date of the period
+    Daily rate for a monthly salary: salary x 12 / 365.
     """
-    basic_pay = 0
-    month_data = months_between_range(wage, start_date, end_date)
+    return float(wage or 0) * 12 / DAYS_PER_YEAR
 
-    leave_data = get_leaves(employee, start_date, end_date)
 
-    for data in month_data:
-        basic_pay = basic_pay + (
-            data["working_days_on_period"] * data["per_day_amount"]
-        )
-
-    contract = employee.contract_set.filter(contract_status="active").first()
-    loss_of_pay = 0
+def unpaid_half_leave_days(employee, start_date, end_date):
+    """
+    Days to give back for approved unpaid leave that starts or ends with a
+    half day inside the period (0.5 each). get_leaves() counts those dates
+    as full days.
+    """
+    if not apps.is_installed("leave"):
+        return 0
     date_range = get_date_range(start_date, end_date)
-    # Half-day filter: only truly unpaid leaves (exclude custom payment_type)
+    # Only truly unpaid leave types (custom payment_type is handled apart)
     unpaid_only_q = (
         Q(leave_type_id__payment_type="unpaid")
         | Q(leave_type_id__payment_type__isnull=True, leave_type_id__payment="unpaid")
         | Q(leave_type_id__payment_type="", leave_type_id__payment="unpaid")
     )
-    if apps.is_installed("leave"):
-        start_date_leaves = (
-            employee.leaverequest_set.filter(
-                unpaid_only_q,
-                start_date__in=date_range,
-                status="approved",
-            )
-            .exclude(start_date_breakdown="full_day")
-            .count()
+    start_halves = (
+        employee.leaverequest_set.filter(
+            unpaid_only_q, start_date__in=date_range, status="approved"
         )
-        end_date_leaves = (
-            employee.leaverequest_set.filter(
-                unpaid_only_q,
-                end_date__in=date_range,
-                status="approved",
-            )
-            .exclude(end_date_breakdown="full_day")
-            .exclude(start_date=F("end_date"))
-            .count()
-        )
-    else:
-        start_date_leaves = 0
-        end_date_leaves = 0
-
-    half_day_leaves_between_period_on_start_date = start_date_leaves
-
-    half_day_leaves_between_period_on_end_date = end_date_leaves
-
-    unpaid_half_leaves = (
-        half_day_leaves_between_period_on_start_date
-        + half_day_leaves_between_period_on_end_date
-    ) * 0.5
-
-    contract = employee.contract_set.filter(
-        is_active=True, contract_status="active"
-    ).first()
-    unpaid_leaves = abs(leave_data["unpaid_leaves"] - unpaid_half_leaves)
-    total_working_days = sum(d["working_days_on_period"] for d in month_data)
-    paid_days = total_working_days - unpaid_leaves
-    daily_computed_salary = get_daily_salary(wage=wage, wage_date=start_date)[
-        "day_wage"
-    ]
-    if contract.calculate_daily_leave_amount:
-        loss_of_pay = unpaid_leaves * daily_computed_salary
-    else:
-        fixed_penalty = contract.deduction_for_one_leave_amount
-        loss_of_pay = unpaid_leaves * fixed_penalty
-
-    custom_leave_deduction, custom_leave_breakdown = compute_custom_leave_deduction(
-        leave_data, contract, daily_computed_salary
+        .exclude(start_date_breakdown="full_day")
+        .count()
     )
-    loss_of_pay += custom_leave_deduction
+    end_halves = (
+        employee.leaverequest_set.filter(
+            unpaid_only_q, end_date__in=date_range, status="approved"
+        )
+        .exclude(end_date_breakdown="full_day")
+        .exclude(start_date=F("end_date"))
+        .count()
+    )
+    return (start_halves + end_halves) * 0.5
 
+
+def custom_leave_unpaid_days(custom_leave_breakdown):
+    """
+    Unpaid share of partial-pay (custom) leave, in days: a 50 % leave day
+    counts as half a day.
+    """
+    return sum(
+        entry["days"] * (1.0 - float(entry["percentage"]) / 100.0)
+        for entry in custom_leave_breakdown or []
+    )
+
+
+def monthly_computation(
+    employee, wage, start_date, end_date, month_summary=None, contract=None
+):
+    """
+    Standard salary computation for monthly contracts.
+
+    - Every date from start to end counts, both included.
+    - Weekly offs and company holidays are paid days.
+    - Unpaid days are approved unpaid leave, plus days without attendance when
+      the attendance summary is used ("Deduct absent days in payslips").
+    - Daily rate = salary x 12 / 365.
+    - Each calendar month in the period earns the salary minus the rate for
+      every day of that month outside the period (a contract that starts
+      mid-month), never below 0. A full month with no unpaid days earns
+      exactly the salary.
+    - Loss of pay = unpaid days x daily rate (or the contract's fixed amount
+      per leave), plus the unpaid share of partial-pay leave.
+
+    Args:
+        employee (obj): Employee instance
+        wage (float): monthly salary
+        start_date (obj): start of the pay period
+        end_date (obj): end date of the period
+        month_summary (dict): attendance summary row, when absent days are
+            deducted
+        contract (obj): the active contract; looked up when not given
+    """
+    if contract is None:
+        contract = employee.contract_set.filter(contract_status="active").first()
+    month_data = months_between_range(wage, start_date, end_date)
+    leave_data = get_leaves(employee, start_date, end_date)
+    period_days = get_total_days(start_date, end_date)
+    daily_rate = monthly_daily_rate(wage)
+
+    if month_summary:
+        unpaid_days = month_summary.get("unpaid_leave", 0) + month_summary.get(
+            "absent", 0
+        )
+        if month_summary.get("unresolved_conflicts", 0):
+            unpaid_days = period_days
+    else:
+        unpaid_days = max(
+            0,
+            leave_data["unpaid_leaves"]
+            - unpaid_half_leave_days(employee, start_date, end_date),
+        )
+    unpaid_days = min(unpaid_days, period_days)
+
+    earned = 0.0
+    for month in month_data:
+        in_period = get_total_days(
+            date.fromisoformat(month["start_date"]),
+            date.fromisoformat(month["end_date"]),
+        )
+        outside_period = month["days"] - in_period
+        earned += max(0.0, float(wage or 0) - outside_period * daily_rate)
+
+    lop_day_rate = (
+        daily_rate
+        if contract.calculate_daily_leave_amount
+        else float(contract.deduction_for_one_leave_amount or 0)
+    )
+    loss_of_pay = unpaid_days * lop_day_rate
+    custom_leave_deduction, custom_leave_breakdown = compute_custom_leave_deduction(
+        leave_data, contract, daily_rate
+    )
+    loss_of_pay = min(loss_of_pay + custom_leave_deduction, earned)
+
+    basic_pay = earned
     if contract.deduct_leave_from_basic_pay:
-        basic_pay = basic_pay - loss_of_pay
-    return {
+        basic_pay = earned - loss_of_pay
+
+    data = {
         "basic_pay": basic_pay,
         "loss_of_pay": loss_of_pay,
         "custom_leave_deduction": custom_leave_deduction,
         "custom_leave_breakdown": custom_leave_breakdown,
         "month_data": month_data,
-        "unpaid_days": unpaid_leaves,
-        "paid_days": paid_days,
+        "unpaid_days": unpaid_days,
+        "paid_days": float(period_days - unpaid_days),
         "partial_pay_days": leave_data.get("partial_pay_days", 0),
+        "daily_rate": lop_day_rate,
         "contract": contract,
     }
+    if month_summary:
+        for key in (
+            "present",
+            "paid_leave",
+            "unpaid_leave",
+            "absent",
+            "week_off",
+            "holiday",
+            "total_working",
+        ):
+            data[key] = month_summary.get(key, 0)
+    return data
 
 
 def deducts_absent_days(employee):
@@ -779,6 +840,7 @@ def compute_salary_on_period(
 
             data = {
                 "basic_pay": basic_pay,
+                "daily_rate": wage,
                 "loss_of_pay": loss_of_pay,
                 "custom_leave_deduction": custom_leave_deduction,
                 "custom_leave_breakdown": custom_leave_breakdown,
@@ -798,6 +860,11 @@ def compute_salary_on_period(
         else:
             # No attendance summary supplied — fall back to working-days-based computation
             data = daily_computation(employee, wage, start_date, end_date)
+            data["daily_rate"] = (
+                wage
+                if contract.calculate_daily_leave_amount
+                else contract.deduction_for_one_leave_amount
+            )
             data["month_data"] = months_between_range(wage, start_date, end_date)
             data.setdefault("present", 0)
             data.setdefault("paid_leave", 0)
@@ -808,66 +875,26 @@ def compute_salary_on_period(
             data.setdefault("total_working", 0)
             data["contract"] = contract
     else:
-        if month_summary:
-            total_days = (
-                month_summary.get("week_off", 0)
-                + month_summary.get("holiday", 0)
-                + month_summary.get("absent", 0)
-                + month_summary.get("present", 0)
-                + month_summary.get("paid_leave", 0)
-                + month_summary.get("unpaid_leave", 0)
-            )
-            unpaid_days = month_summary.get("unpaid_leave", 0) + month_summary.get(
-                "absent", 0
-            )
-            if month_summary.get("unresolved_conflicts", 0):
-                unpaid_days = total_days
-            per_day_amount = wage / total_days if total_days and wage else 0.0
-            loss_of_pay = unpaid_days * per_day_amount
-
-            leave_data = get_leaves(employee, start_date, end_date)
-            daily_computed_salary = get_daily_salary(wage=wage, wage_date=start_date)[
-                "day_wage"
-            ]
-            custom_leave_deduction, custom_leave_breakdown = (
-                compute_custom_leave_deduction(
-                    leave_data, contract, daily_computed_salary
-                )
-            )
-            loss_of_pay += custom_leave_deduction
-
-            basic_pay = wage
-            if contract.deduct_leave_from_basic_pay:
-                basic_pay = wage - loss_of_pay
-
-            data = {
-                "basic_pay": basic_pay,
-                "loss_of_pay": loss_of_pay,
-                "custom_leave_deduction": custom_leave_deduction,
-                "custom_leave_breakdown": custom_leave_breakdown,
-                "month_data": months_between_range(wage, start_date, end_date),
-                "unpaid_days": unpaid_days,
-                "paid_days": float(total_days - unpaid_days),
-                "partial_pay_days": leave_data.get("partial_pay_days", 0),
-                "present": month_summary.get("present", 0),
-                "paid_leave": month_summary.get("paid_leave", 0),
-                "unpaid_leave": month_summary.get("unpaid_leave", 0),
-                "absent": month_summary.get("absent", 0),
-                "week_off": month_summary.get("week_off", 0),
-                "holiday": month_summary.get("holiday", 0),
-                "total_working": month_summary.get("total_working", 0),
-                "contract": contract,
-            }
-        else:
-            # No attendance summary supplied — fall back to months_between_range-based computation
-            data = monthly_computation(employee, wage, start_date, end_date)
-            data.setdefault("present", 0)
-            data.setdefault("paid_leave", 0)
-            data.setdefault("unpaid_leave", 0)
-            data.setdefault("absent", 0)
-            data.setdefault("week_off", 0)
-            data.setdefault("holiday", 0)
-            data.setdefault("total_working", 0)
+        # Monthly salary: one standard calculation whether or not the
+        # attendance summary (absent days) is used.
+        data = monthly_computation(
+            employee,
+            wage,
+            start_date,
+            end_date,
+            month_summary=month_summary,
+            contract=contract,
+        )
+        for key in (
+            "present",
+            "paid_leave",
+            "unpaid_leave",
+            "absent",
+            "week_off",
+            "holiday",
+            "total_working",
+        ):
+            data.setdefault(key, 0)
     data["contract_wage"] = wage
     data["contract"] = contract
     return data
@@ -914,8 +941,12 @@ def get_previous_period_leave_adjustment(employee, current_start_date):
             (row for row in rows if row["employee"].pk == employee.pk), None
         )
 
-    stored_loss_of_pay = pay_head_data.get("loss_of_pay", 0) or 0
-    stored_unpaid_days = pay_head_data.get("unpaid_days", 0) or 0
+    # Compare unpaid days, not amounts: a change in the salary formula
+    # between the two runs must never show up as a deduction.
+    stored_unpaid_days = float(pay_head_data.get("unpaid_days", 0) or 0)
+    stored_days = stored_unpaid_days + custom_leave_unpaid_days(
+        pay_head_data.get("custom_leave_breakdown")
+    )
 
     current_data = compute_salary_on_period(
         employee,
@@ -926,19 +957,48 @@ def get_previous_period_leave_adjustment(employee, current_start_date):
     if not current_data:
         return None
 
-    current_loss_of_pay = current_data.get("loss_of_pay", 0) or 0
-    current_unpaid_days = current_data.get("unpaid_days", 0) or 0
+    current_days = float(current_data.get("unpaid_days", 0) or 0) + (
+        custom_leave_unpaid_days(current_data.get("custom_leave_breakdown"))
+    )
+    extra_days = round(current_days - stored_days, 2)
+    if extra_days <= 0:
+        return None
 
-    adjustment = round(current_loss_of_pay - stored_loss_of_pay, 2)
+    rate = previous_payslip_day_rate(pay_head_data, current_data)
+    adjustment = round(extra_days * rate, 2) if rate else 0
     if adjustment <= 0:
         return None
 
-    extra_days = round(current_unpaid_days - stored_unpaid_days, 1)
     month_label = prev_payslip.start_date.strftime("%b %Y")
-    days_text = f" - {extra_days} day(s)" if extra_days > 0 else ""
-    label = f"Leave Adjustment ({month_label}){days_text}"
+    label = f"Leave Adjustment ({month_label}) - {extra_days} day(s)"
 
     return {"title": label, "amount": adjustment}
+
+
+def previous_payslip_day_rate(pay_head_data, current_data):
+    """
+    The amount the previous payslip charged per unpaid day, so late leave is
+    charged the way that payslip would have charged it.
+
+    - Payslips made with the standard calculation store it (daily_rate).
+    - Older payslips with unpaid days: their own loss of pay per unpaid day.
+    - Older payslips with no unpaid days saved no rate: use today's rate for
+      the contract (salary x 12 / 365 for monthly salaries).
+    """
+    if pay_head_data.get("calc_version", 0) >= PAYROLL_CALC_VERSION:
+        stored_rate = pay_head_data.get("daily_rate")
+        if stored_rate is not None:
+            return float(stored_rate)
+
+    stored_unpaid_days = float(pay_head_data.get("unpaid_days", 0) or 0)
+    if stored_unpaid_days > 0:
+        leave_loss = float(pay_head_data.get("loss_of_pay", 0) or 0) - float(
+            pay_head_data.get("custom_leave_deduction", 0) or 0
+        )
+        if leave_loss > 0:
+            return leave_loss / stored_unpaid_days
+
+    return float(current_data.get("daily_rate") or 0)
 
 
 def apply_previous_period_leave_adjustment(employee, start_date, payslip):

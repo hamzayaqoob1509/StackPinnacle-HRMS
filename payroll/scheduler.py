@@ -10,7 +10,11 @@ from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 
 from horilla.scheduling import register_job
-from payroll.methods.methods import calculate_employer_contribution, save_payslip
+from payroll.methods.methods import (
+    attendance_summaries,
+    calculate_employer_contribution,
+    save_payslip,
+)
 from payroll.views.component_views import payroll_calculation
 
 from .models.models import Contract, Payslip
@@ -70,7 +74,14 @@ def generate_payslip(date, companies, all):
         # A contract starting mid-period shortens only that employee's payslip,
         # so the adjusted start must stay local to this iteration.
         start_date = max(period_start, contract.contract_start_date)
-        payslip_data = payroll_calculation(employee, start_date, period_end)
+        # Same rule as Generate Payslip: days without attendance are deducted
+        # only when the company's "Deduct absent days in payslips" is on.
+        month_summary = attendance_summaries(
+            Employee.objects.filter(pk=employee.pk), start_date, period_end
+        ).get(employee.pk)
+        payslip_data = payroll_calculation(
+            employee, start_date, period_end, month_summary=month_summary
+        )
         payslip_data["payslip"] = payslip
         data = {}
         data["employee"] = employee
