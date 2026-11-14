@@ -748,6 +748,11 @@ class LeaveRequestApproveAPIView(APIView):
         available_leave.save()
 
     def leave_multiple_approve(self, request, leave_request, available_leave):
+        """
+        Returns ``(error, next_step)``: an error message when this user may not
+        approve yet, otherwise the chain step now waiting (None once the
+        request is fully approved).
+        """
         if request.user.is_superuser:
             LeaveRequestConditionApproval.objects.filter(
                 leave_request_id=leave_request
@@ -756,23 +761,25 @@ class LeaveRequestApproveAPIView(APIView):
             leave_request.status = "approved"
             leave_request.set_approved_by(request.user.employee_get)
             leave_request.save()
-        else:
-            conditional_requests = leave_request.multiple_approvals()
-            approver = [
-                manager
-                for manager in conditional_requests["managers"]
-                if manager.employee_user_id == request.user
-            ]
-            condition_approval = LeaveRequestConditionApproval.objects.filter(
-                manager_id=approver[0], leave_request_id=leave_request
-            ).first()
-            condition_approval.is_approved = True
-            condition_approval.save()
-            if approver[0] == conditional_requests["managers"][-1]:
-                self.leave_approve_calculation(leave_request, available_leave)
-                leave_request.status = "approved"
-                leave_request.set_approved_by(request.user.employee_get)
-                leave_request.save()
+            return None, None
+        approver = request.user.employee_get
+        conditional_requests = leave_request.multiple_approvals()
+        step_approved, next_step = leave_request.approve_condition_step(approver)
+        if not step_approved:
+            if approver not in conditional_requests["managers"]:
+                return _("You are not an approver for this leave request."), None
+            return (
+                _("{} needs to approve this request first.").format(
+                    next_step.manager_id if next_step else ""
+                ),
+                None,
+            )
+        if next_step is None:
+            self.leave_approve_calculation(leave_request, available_leave)
+            leave_request.status = "approved"
+            leave_request.set_approved_by(approver)
+            leave_request.save()
+        return None, next_step
 
     @approver_permission_required(
         LeaveRequest,
@@ -790,7 +797,25 @@ class LeaveRequestApproveAPIView(APIView):
                 leave_request.set_approved_by(request.user.employee_get)
                 leave_request.save()
             else:
-                self.leave_multiple_approve(request, leave_request, available_leave)
+                error, next_step = self.leave_multiple_approve(
+                    request, leave_request, available_leave
+                )
+                if error:
+                    # Same shape as the serializer's own validation errors.
+                    return Response({"non_field_errors": [str(error)]}, status=400)
+                if next_step is not None:
+                    # Step recorded; the request waits on the next approver.
+                    with contextlib.suppress(Exception):
+                        notify.send(
+                            request.user.employee_get,
+                            recipient=next_step.manager_id.employee_user_id,
+                            verb=gettext_noop(
+                                "You have a new leave request to validate."
+                            ),
+                            icon="people-circle",
+                            redirect=f"/leave/request-view?id={leave_request.id}",
+                        )
+                    return Response(status=200)
             with contextlib.suppress(Exception):
                 notify.send(
                     request.user.employee_get,
@@ -813,10 +838,12 @@ class LeaveRequestRejectAPIView(APIView):
         except LeaveRequest.DoesNotExist as e:
             raise serializers.ValidationError(e)
 
-    def leave_calculation(self, leave_request, employee_id):
-        leave_type_id = leave_request.leave_type_id
+    def leave_calculation(self, leave_request):
+        # The balance belongs to the employee who asked for the leave, not
+        # to whoever is rejecting it.
         available_leave = AvailableLeave.objects.get(
-            leave_type_id=leave_type_id, employee_id=employee_id
+            leave_type_id=leave_request.leave_type_id,
+            employee_id=leave_request.employee_id,
         )
         available_leave.available_days += leave_request.approved_available_days
         available_leave.carryforward_days += leave_request.approved_carryforward_days
@@ -833,14 +860,15 @@ class LeaveRequestRejectAPIView(APIView):
     )
     def put(self, request, pk):
         leave_request = self.get_leave_request(pk)
-        employee_id = request.user.employee_get
         if leave_request.status != "rejected":
             reason = reject_reason_from(request)
             if reason:
                 # The field the web reject form fills; saved by
                 # leave_calculation below.
                 leave_request.reject_reason = reason
-            self.leave_calculation(leave_request, employee_id)
+            if leave_request.multiple_approvals() and not request.user.is_superuser:
+                leave_request.reject_condition_step(request.user.employee_get)
+            self.leave_calculation(leave_request)
             with contextlib.suppress(Exception):
                 notify.send(
                     request.user.employee_get,
@@ -1029,11 +1057,37 @@ class LeaveRequestBulkApproveDeleteAPIview(APIView):
             total_available_leave = (
                 available_leave.available_days + available_leave.carryforward_days
             )
-            if total_available_leave >= leave_request.requested_days:
-                self.leave_approve_calculation(leave_request, available_leave)
-                leave_request.status = "approved"
-                leave_request.set_approved_by(request.user.employee_get)
-                leave_request.save()
+            if total_available_leave < leave_request.requested_days:
+                continue
+            if leave_request.multiple_approvals() and not request.user.is_superuser:
+                # Bulk approval goes through the chain like a single approval:
+                # it records this approver's step, in turn, and only finishes
+                # the request when that was the last step.
+                step_approved, next_step = leave_request.approve_condition_step(
+                    request.user.employee_get
+                )
+                if not step_approved:
+                    continue
+                if next_step is not None:
+                    with contextlib.suppress(Exception):
+                        notify.send(
+                            request.user.employee_get,
+                            recipient=next_step.manager_id.employee_user_id,
+                            verb=gettext_noop(
+                                "You have a new leave request to validate."
+                            ),
+                            icon="people-circle",
+                            redirect=f"/leave/request-view?id={leave_request.id}",
+                        )
+                    continue
+            elif leave_request.multiple_approvals():
+                LeaveRequestConditionApproval.objects.filter(
+                    leave_request_id=leave_request
+                ).update(is_approved=True)
+            self.leave_approve_calculation(leave_request, available_leave)
+            leave_request.status = "approved"
+            leave_request.set_approved_by(request.user.employee_get)
+            leave_request.save()
         return Response(status=200)
 
     @manager_permission_required("leave.delete_leaverequest")
