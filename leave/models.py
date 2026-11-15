@@ -2029,9 +2029,9 @@ class LeaveRequest(HorillaModel):
             return self._multiple_approvals_cache
 
         approvals = list(
-            LeaveRequestConditionApproval.objects.filter(
-                leave_request_id=self
-            ).select_related("manager_id")
+            LeaveRequestConditionApproval.objects.filter(leave_request_id=self)
+            .select_related("manager_id")
+            .order_by("sequence")
         )
         if not approvals:
             self._multiple_approvals_cache = False
@@ -2051,6 +2051,55 @@ class LeaveRequest(HorillaModel):
         }
         self._multiple_approvals_cache = result
         return result
+
+    def approve_condition_step(self, employee):
+        """
+        Record ``employee``'s approval on this request's multiple-approval chain.
+
+        Steps are approved in sequence: ``employee`` must own the first step
+        still waiting, so a later approver cannot finish the chain before the
+        earlier ones have signed off. If the same person also owns the steps
+        straight after theirs, those are approved with it.
+
+        Returns ``(approved, next_step)``. ``approved`` is False when it is not
+        ``employee``'s turn. ``next_step`` is the step now waiting, or None
+        once every step is approved.
+        """
+        pending = list(
+            LeaveRequestConditionApproval.objects.filter(
+                leave_request_id=self, is_approved=False
+            )
+            .select_related("manager_id")
+            .order_by("sequence")
+        )
+        if not pending or employee is None or pending[0].manager_id_id != employee.pk:
+            return False, (pending[0] if pending else None)
+        mine = []
+        for step in pending:
+            if step.manager_id_id != employee.pk:
+                break
+            mine.append(step.pk)
+        LeaveRequestConditionApproval.objects.filter(pk__in=mine).update(
+            is_approved=True, is_rejected=False
+        )
+        self.__dict__.pop("_multiple_approvals_cache", None)
+        remaining = pending[len(mine) :]
+        return True, (remaining[0] if remaining else None)
+
+    def reject_condition_step(self, employee):
+        """
+        Mark ``employee``'s steps in the approval chain as rejected.
+
+        Someone allowed to reject without being in the chain (an HR user with
+        the permission, or the reporting manager) has no step to mark; that is
+        not an error, the request is still rejected.
+        """
+        if employee is None:
+            return
+        LeaveRequestConditionApproval.objects.filter(
+            leave_request_id=self, manager_id=employee
+        ).update(is_approved=False, is_rejected=True)
+        self.__dict__.pop("_multiple_approvals_cache", None)
 
     def is_approved(self):
         request = getattr(horilla_middlewares._thread_locals, "request", None)

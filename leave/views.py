@@ -386,9 +386,11 @@ def get_employee_leave_types(request):
 
 
 def multiple_approvals_check(id):
-    approvals = LeaveRequestConditionApproval.objects.filter(
-        leave_request_id=id
-    ).select_related("manager_id")
+    approvals = (
+        LeaveRequestConditionApproval.objects.filter(leave_request_id=id)
+        .select_related("manager_id")
+        .order_by("sequence")
+    )
     requested_query = approvals.filter(is_approved=False).order_by("sequence")
     approved_query = approvals.filter(is_approved=True).order_by("sequence")
     managers = []
@@ -1109,6 +1111,7 @@ def leave_request_approve(request, id, emp_id=None):
     send_notification = False
     approved = False
     error_message = ""
+    success_message = str(_("Leave request approved successfully.."))
     if leave_request.status != "approved":
         if total_available_leave >= leave_request.requested_days:
             if leave_request.requested_days > available_leave.carryforward_days:
@@ -1141,48 +1144,49 @@ def leave_request_approve(request, id, emp_id=None):
                     send_notification = True
                     approved = True
                 else:
+                    approver = request.user.employee_get
                     conditional_requests = leave_request.multiple_approvals()
-                    approver = next(
-                        (
-                            manager
-                            for manager in conditional_requests["managers"]
-                            if manager == request.user.employee_get
-                        ),
-                        None,
+                    step_approved, next_step = leave_request.approve_condition_step(
+                        approver
                     )
-                    condition_approval = LeaveRequestConditionApproval.objects.filter(
-                        manager_id=approver, leave_request_id=leave_request
-                    ).first()
-                    if condition_approval is None:
-                        error_message = str(
-                            _("You are not an approver for this leave request.")
-                        )
+                    if not step_approved:
+                        if approver not in conditional_requests["managers"]:
+                            error_message = str(
+                                _("You are not an approver for this leave request.")
+                            )
+                        else:
+                            error_message = str(
+                                _("{} needs to approve this request first.")
+                            ).format(
+                                next_step.manager_id.get_full_name()
+                                if next_step
+                                else ""
+                            )
                         messages.error(request, error_message)
-                    else:
-                        condition_approval.is_approved = True
-                        managers = []
-                        for manager in conditional_requests["managers"]:
-                            managers.append(manager.employee_user_id)
-                        if len(managers) > condition_approval.sequence:
-                            with contextlib.suppress(Exception):
-                                notify.send(
-                                    request.user.employee_get,
-                                    recipient=managers[condition_approval.sequence],
-                                    verb=gettext_noop(
-                                        "You have a new leave request to validate."
-                                    ),
-                                    icon="people-circle",
-                                    redirect=f"/leave/request-view?id={leave_request.id}",
-                                )
-                        condition_approval.save()
+                    elif next_step is not None:
+                        # Only this step is done; the request is still pending.
                         approved = True
-                        if approver == conditional_requests["managers"][-1]:
-                            leave_request.set_approved_by(request.user.employee_get)
-                            leave_request.save()
-                            available_leave.save()
-                            send_notification = True
+                        success_message = str(
+                            _("Your approval is saved. Waiting for {} to approve.")
+                        ).format(next_step.manager_id.get_full_name())
+                        with contextlib.suppress(Exception):
+                            notify.send(
+                                approver,
+                                recipient=next_step.manager_id.employee_user_id,
+                                verb=gettext_noop(
+                                    "You have a new leave request to validate."
+                                ),
+                                icon="people-circle",
+                                redirect=f"/leave/request-view?id={leave_request.id}",
+                            )
+                    else:
+                        approved = True
+                        leave_request.set_approved_by(approver)
+                        leave_request.save()
+                        available_leave.save()
+                        send_notification = True
             if approved:
-                messages.success(request, _("Leave request approved successfully.."))
+                messages.success(request, success_message)
                 if send_notification:
                     with contextlib.suppress(Exception):
                         notify.send(
@@ -1211,7 +1215,7 @@ def leave_request_approve(request, id, emp_id=None):
         if approved:
             trigger_data["horillaMessage"] = {
                 "level": "success",
-                "text": str(_("Leave request approved successfully..")),
+                "text": success_message,
             }
         elif error_message:
             trigger_data["horillaMessage"] = {
@@ -1333,18 +1337,7 @@ def leave_request_cancel(request, id, emp_id=None):
                 leave_request.leave_clashes_count = 0
 
                 if leave_request.multiple_approvals() and not request.user.is_superuser:
-                    conditional_requests = leave_request.multiple_approvals()
-                    approver = [
-                        manager
-                        for manager in conditional_requests["managers"]
-                        if manager.employee_user_id == request.user
-                    ]
-                    condition_approval = LeaveRequestConditionApproval.objects.filter(
-                        manager_id=approver[0], leave_request_id=leave_request
-                    ).first()
-                    condition_approval.is_approved = False
-                    condition_approval.is_rejected = True
-                    condition_approval.save()
+                    leave_request.reject_condition_step(request.user.employee_get)
 
                 leave_request.reject_reason = form.cleaned_data["reason"]
                 leave_request.save()
