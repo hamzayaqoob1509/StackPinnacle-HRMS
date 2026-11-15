@@ -1111,6 +1111,7 @@ def leave_request_approve(request, id, emp_id=None):
     send_notification = False
     approved = False
     error_message = ""
+    success_message = str(_("Leave request approved successfully.."))
     if leave_request.status != "approved":
         if total_available_leave >= leave_request.requested_days:
             if leave_request.requested_days > available_leave.carryforward_days:
@@ -1156,10 +1157,18 @@ def leave_request_approve(request, id, emp_id=None):
                         else:
                             error_message = str(
                                 _("{} needs to approve this request first.")
-                            ).format(next_step.manager_id if next_step else "")
+                            ).format(
+                                next_step.manager_id.get_full_name()
+                                if next_step
+                                else ""
+                            )
                         messages.error(request, error_message)
                     elif next_step is not None:
+                        # Only this step is done; the request is still pending.
                         approved = True
+                        success_message = str(
+                            _("Your approval is saved. Waiting for {} to approve.")
+                        ).format(next_step.manager_id.get_full_name())
                         with contextlib.suppress(Exception):
                             notify.send(
                                 approver,
@@ -1177,7 +1186,7 @@ def leave_request_approve(request, id, emp_id=None):
                         available_leave.save()
                         send_notification = True
             if approved:
-                messages.success(request, _("Leave request approved successfully.."))
+                messages.success(request, success_message)
                 if send_notification:
                     with contextlib.suppress(Exception):
                         notify.send(
@@ -1206,7 +1215,7 @@ def leave_request_approve(request, id, emp_id=None):
         if approved:
             trigger_data["horillaMessage"] = {
                 "level": "success",
-                "text": str(_("Leave request approved successfully..")),
+                "text": success_message,
             }
         elif error_message:
             trigger_data["horillaMessage"] = {

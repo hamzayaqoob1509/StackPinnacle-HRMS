@@ -12,6 +12,7 @@ balance of the person rejecting instead of the employee's.
 """
 
 import datetime
+import json
 
 from django.contrib.auth.models import Permission
 from django.test import TestCase
@@ -173,6 +174,33 @@ class ApprovalChainTests(TestCase):
         self.client.get(WEB_APPROVE.format(self.leave_request.pk))
         self.assertEqual(self._reload().status, "approved")
         self.assertEqual(self._available(), 10 - self.days)
+
+    def _hx_message(self, user):
+        self.client.force_login(user)
+        response = self.client.get(
+            WEB_APPROVE.format(self.leave_request.pk), HTTP_HX_REQUEST="true"
+        )
+        return json.loads(response["HX-Trigger"])["horillaMessage"]
+
+    def test_web_partial_approval_says_it_is_waiting(self):
+        """The first approver must not be told the leave is approved."""
+        message = self._hx_message(self.first_user)
+        self.assertEqual(message["level"], "success")
+        self.assertEqual(
+            message["text"],
+            "Your approval is saved. Waiting for "
+            f"{self.last.get_full_name()} to approve.",
+        )
+        message = self._hx_message(self.last_user)
+        self.assertEqual(message["text"], "Leave request approved successfully..")
+
+    def test_web_out_of_turn_message_names_the_waiting_approver(self):
+        message = self._hx_message(self.last_user)
+        self.assertEqual(message["level"], "error")
+        self.assertEqual(
+            message["text"],
+            f"{self.first.get_full_name()} needs to approve this request first.",
+        )
 
     def test_web_reject_by_hr_outside_chain_does_not_crash(self):
         self.client.force_login(self.hr_user)

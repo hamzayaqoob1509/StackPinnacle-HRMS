@@ -770,7 +770,7 @@ class LeaveRequestApproveAPIView(APIView):
                 return _("You are not an approver for this leave request."), None
             return (
                 _("{} needs to approve this request first.").format(
-                    next_step.manager_id if next_step else ""
+                    next_step.manager_id.get_full_name() if next_step else ""
                 ),
                 None,
             )
